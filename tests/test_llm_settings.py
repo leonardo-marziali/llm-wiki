@@ -61,9 +61,9 @@ def test_unknown_llm_key_is_error_in_user_config():
 
 def test_unknown_llm_key_is_error_in_wiki(tmp_path):
     root = write_wiki(tmp_path, '[llm]\nmodle = "x"\n')
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="modle"):
         load_config(root)
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="modle"):
         load_llm_settings(root)
 
 
@@ -79,3 +79,15 @@ def test_dump_config_round_trips_llm(tmp_path):
     (tmp_path / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
     assert load_config(tmp_path).llm == cfg.llm
     assert "[llm]" not in dump_config(WikiConfig(**base))
+
+
+def test_non_table_llm_is_error(tmp_path):
+    write_user("llm = 3\n")
+    with pytest.raises(ConfigError, match="config.toml"):
+        load_llm_settings(None)
+    (user_config_file()).unlink()
+    root = write_wiki(tmp_path)
+    text = (root / "wiki.toml").read_text(encoding="utf-8")
+    (root / "wiki.toml").write_text("llm = 3\n" + text, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_llm_settings(root)

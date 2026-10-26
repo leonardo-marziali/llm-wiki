@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 from llm_wiki.config import WIKI_FILE, home_dir, load_config
 from llm_wiki.errors import ConfigError, WikiNotFound
 

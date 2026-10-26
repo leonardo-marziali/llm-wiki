@@ -150,7 +150,7 @@ def _user_overrides() -> LlmOverrides:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"invalid {path}: {e}") from None
     try:
-        return LlmOverrides(**data.get("llm", {}))
+        return LlmOverrides.model_validate(data.get("llm", {}))
     except ValidationError as e:
         raise ConfigError(f"invalid [llm] in {path}: {e}") from None
 
