@@ -191,5 +191,37 @@ def status(
             typer.echo(f"  {ln}")
 
 
+@app.command()
+def doctor(
+    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    no_probe: bool = typer.Option(False, "--no-probe", help="Skip the paid claude -p probes."),
+    fmt: str = typer.Option("text", "--format", help="text or json."),
+) -> None:
+    """Check claude, git and optional tools (exit 1 if a check fails)."""
+    import os
+
+    from llm_wiki import registry
+    from llm_wiki.config import load_llm_settings
+    from llm_wiki.doctor import run_doctor
+    from llm_wiki.errors import WikiNotFound
+
+    if fmt not in ("text", "json"):
+        raise WikiError("--format must be text or json")
+    root = None
+    try:
+        root = registry.resolve(wiki, Path.cwd()).path
+    except WikiNotFound:
+        if wiki is not None:
+            raise
+    checks = run_doctor(load_llm_settings(root), probe=not no_probe, env=os.environ)
+    if fmt == "json":
+        typer.echo(json.dumps([dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2))
+    else:
+        for c in checks:
+            typer.echo(f"{c.status:<4}  {c.name:<16}  {c.detail}")
+    if any(c.status == "fail" for c in checks):
+        raise typer.Exit(1)
+
+
 def main() -> None:
     app()
