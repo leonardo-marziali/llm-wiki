@@ -24,7 +24,7 @@ SOURCELESS_TYPES = {"overview", "glossary", "hub"}
 SYSTEM_FILES = {"index.md", "log.md", "open-questions.md", "_index.md"}
 ID_RE = r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$"
 
-_SHA_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SHA_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class SourceRef(BaseModel):
@@ -37,12 +37,14 @@ class SourceRef(BaseModel):
     def _path_in_raw(cls, v: str) -> str:
         if not v.startswith("raw/"):
             raise ValueError("source path must start with 'raw/'")
+        if ".." in v.split("/"):
+            raise ValueError("source path must not contain '..' segments")
         return v
 
     @field_validator("sha256")
     @classmethod
     def _sha_hex(cls, v: str) -> str:
-        if not _SHA_RE.match(v):
+        if not _SHA_RE.fullmatch(v):
             raise ValueError("sha256 must be 64 hex characters")
         return v
 
@@ -119,7 +121,12 @@ def _format_errors(exc: ValidationError) -> str:
 
 def read_page(root: Path, path: Path) -> Page:
     rel = path.relative_to(root / "wiki").as_posix()
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return Page(path=path, rel=rel, fm=None, body="", error="not valid UTF-8", line_count=0)
+    except OSError as exc:
+        return Page(path=path, rel=rel, fm=None, body="", error=f"unreadable: {exc}", line_count=0)
     line_count = len(text.splitlines())
     fm: Frontmatter | None = None
     error: str | None = None
@@ -140,7 +147,7 @@ def iter_pages(root: Path) -> Iterator[Page]:
     wiki = root / "wiki"
     paths = [
         p for p in wiki.rglob("*.md")
-        if p.name not in SYSTEM_FILES and "_archive" not in p.relative_to(wiki).parts[:-1]
+        if p.is_file() and p.name not in SYSTEM_FILES and "_archive" not in p.relative_to(wiki).parts[:-1]
     ]
     for p in sorted(paths, key=lambda p: p.relative_to(wiki).as_posix()):
         yield read_page(root, p)

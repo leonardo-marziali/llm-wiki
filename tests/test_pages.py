@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -108,3 +109,36 @@ def test_render_frontmatter_roundtrip(tmp_path):
     assert "2026-01-01" in out
     data, _ = split_frontmatter(out + "body\n")
     assert Frontmatter.model_validate(data) == fm
+
+
+def test_non_utf8_file_sets_error_not_raise(tmp_path):
+    p = tmp_path / "wiki" / "a" / "x.md"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"\xff\xfe")
+    page = read_page(tmp_path, p)
+    assert page.fm is None
+    assert page.error and "UTF-8" in page.error
+    assert page.body == "" and page.line_count == 0
+
+
+def test_iter_pages_skips_directories_named_md(tmp_path):
+    (tmp_path / "wiki" / "x.md").mkdir(parents=True)
+    write(tmp_path, "a/y.md", fm_text())
+    assert [p.rel for p in iter_pages(tmp_path)] == ["a/y.md"]
+
+
+@pytest.mark.parametrize("sha", ["a" * 64 + "\n", "A" * 64])
+def test_sha256_rejects_newline_and_uppercase(tmp_path, sha):
+    src = f"sources:\n  - path: raw/a.md\n    sha256: {json.dumps(sha)}\n    locator: L1\n"
+    p = write(tmp_path, "a/x.md", fm_text().removesuffix("---\n") + src + "---\n")
+    page = read_page(tmp_path, p)
+    assert page.fm is None
+    assert page.error and "sha256" in page.error
+
+
+def test_source_path_rejects_dotdot(tmp_path):
+    src = f"sources:\n  - path: raw/../wiki/x.md\n    sha256: {SHA}\n    locator: L1\n"
+    p = write(tmp_path, "a/x.md", fm_text().removesuffix("---\n") + src + "---\n")
+    page = read_page(tmp_path, p)
+    assert page.fm is None
+    assert page.error and "path" in page.error
