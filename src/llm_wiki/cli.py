@@ -135,5 +135,56 @@ def lint(
         raise typer.Exit(1)
 
 
+@app.command()
+def status(
+    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    all_wikis: bool = typer.Option(False, "--all", help="One row per known wiki."),
+    fmt: str = typer.Option("text", "--format", help="text or json."),
+) -> None:
+    """Show counts against caps, stale pages, pending sources and recent log."""
+    from llm_wiki import registry
+    from llm_wiki.status import wiki_status
+
+    if all_wikis and wiki is not None:
+        raise WikiError("use either --wiki or --all")
+    if fmt not in ("text", "json"):
+        raise WikiError("--format must be text or json")
+    if all_wikis:
+        rows = []
+        for ref in registry.known_wikis():
+            try:
+                rows.append(dataclasses.asdict(wiki_status(ref)))
+            except WikiError as e:
+                rows.append({"name": ref.name, "path": str(ref.path), "error": str(e)})
+        if fmt == "json":
+            typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            for r in rows:
+                if "error" in r:
+                    typer.echo(f"{r['name']}  {r['path']}  error: {r['error']}")
+                else:
+                    typer.echo(
+                        f"{r['name']}  {r['path']}  sources {r['sources']}/{r['max_sources']}  "
+                        f"pages {r['pages']}/{r['max_pages']}  — {r['description']}"
+                    )
+        return
+    st = wiki_status(registry.resolve(wiki, Path.cwd()))
+    if fmt == "json":
+        typer.echo(json.dumps(dataclasses.asdict(st), ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"{st.name}  {st.path}")
+    if st.description:
+        typer.echo(st.description)
+    typer.echo(f"sources {st.sources}/{st.max_sources}  pages {st.pages}/{st.max_pages}")
+    typer.echo("sections: " + ", ".join(f"{k} {v}" for k, v in st.sections.items()))
+    typer.echo(f"stale: {', '.join(st.stale) if st.stale else 'none'}")
+    typer.echo(f"inbox {st.inbox}  quarantined {st.quarantined}")
+    typer.echo(f"pending: new {st.pending['new']}, changed {st.pending['changed']}, deleted {st.pending['deleted']}")
+    if st.last_log:
+        typer.echo("recent log:")
+        for ln in st.last_log:
+            typer.echo(f"  {ln}")
+
+
 def main() -> None:
     app()
