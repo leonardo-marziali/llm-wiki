@@ -1,5 +1,6 @@
 """Headless `claude -p` runner. The only module that spells CLI flags."""
 
+import dataclasses
 import json
 import os
 import random
@@ -10,9 +11,13 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from llm_wiki.config import LlmSettings, Role
-from llm_wiki.errors import ClaudeError, ClaudeNotInstalled
+from llm_wiki.errors import (
+    ClaudeAuthError, ClaudeBudgetExceeded, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError,
+    ClaudeUsageLimit,
+)
 
 EDIT_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
@@ -40,6 +45,7 @@ class Call:
     json_schema: dict | None = None
     edit: bool = False
     timeout_s: int = 600
+    role: Role | None = None  # names the settings key in budget errors
 
 
 @dataclass(frozen=True)
@@ -60,7 +66,7 @@ def make_call(
     return Call(
         prompt=prompt, system_prompt=system_prompt, model=settings.model(role),
         tools=EDIT_TOOLS if edit else (), budget_usd=settings.budget(role), cwd=cwd,
-        json_schema=json_schema, edit=edit, timeout_s=900 if edit else 300,
+        json_schema=json_schema, edit=edit, timeout_s=900 if edit else 300, role=role,
     )
 
 
@@ -91,6 +97,13 @@ def child_env(base: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
+def _num(value, kind, default):
+    try:
+        return kind(value or default)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def parse_output(stdout: str) -> Result:
     try:
         data = json.loads(stdout)
@@ -98,35 +111,139 @@ def parse_output(stdout: str) -> Result:
         raise ClaudeError(f"claude returned non-JSON output: {exc}") from None
     if not isinstance(data, dict):
         raise ClaudeError("claude returned unexpected JSON (not an object)")
+    structured = data.get("structured_output")
     return Result(
-        text=data.get("result") or "",
-        structured=data.get("structured_output"),
-        cost_usd=float(data.get("total_cost_usd") or 0.0),
-        duration_ms=int(data.get("duration_ms") or 0),
-        session_id=data.get("session_id") or "",
+        text=data.get("result") if isinstance(data.get("result"), str) else "",
+        structured=structured if isinstance(structured, dict) else None,
+        cost_usd=_num(data.get("total_cost_usd"), float, 0.0),
+        duration_ms=_num(data.get("duration_ms"), int, 0),
+        session_id=data.get("session_id") if isinstance(data.get("session_id"), str) else "",
         raw=data,
     )
 
 
-def _attempt(call: Call, binary: str, cwd: Path) -> Result:
-    # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv limit.
-    with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as fh:
-        fh.write(call.system_prompt)
+Kind = Literal["ok", "transient", "usage_limit", "auth", "budget", "schema", "fatal"]
+
+_BUDGET = ("budget",)
+_AUTH = ("/login", "not logged in", "invalid api key", "authentication", "oauth token", "401")
+_USAGE = ("usage limit", "limit reached", "limit will reset")
+_TRANSIENT = (
+    "overloaded", "529", "500", "502", "503", "504", "429", "rate limit", "econnreset", "etimedout",
+    "socket hang up", "network",
+)
+
+
+def _json_object(stdout: str) -> dict | None:
     try:
-        proc = subprocess.run(
+        data = json.loads(stdout)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def classify(returncode: int, stdout: str, stderr: str, has_schema: bool = False) -> Kind:
+    data = _json_object(stdout)
+    failed = returncode != 0 or (data is not None and bool(data.get("is_error")))
+    if not failed:
+        if data is None:
+            return "transient"  # exit 0 with empty or non-JSON stdout
+        if has_schema and not isinstance(data.get("structured_output"), dict):
+            return "schema"
+        return "ok"
+    if data is not None:
+        text = f"{stderr} {data.get('result') or ''} {data.get('subtype') or ''}"
+    else:
+        text = f"{stderr} {stdout}"
+    text = text.lower()
+    if data is not None and data.get("subtype") == "error_max_budget_usd":
+        return "budget"
+    for kind, needles in (("budget", _BUDGET), ("auth", _AUTH), ("usage_limit", _USAGE),
+                          ("transient", _TRANSIENT)):
+        if any(n in text for n in needles):
+            return kind
+    return "fatal"
+
+
+def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
+    """One subprocess; None on timeout (subprocess.run has already killed the child)."""
+    # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv limit.
+    fh = tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False)
+    try:
+        with fh:
+            fh.write(call.system_prompt)
+        return subprocess.run(
             build_argv(call, binary, Path(fh.name)), input=call.prompt, capture_output=True,
             text=True, encoding="utf-8", cwd=cwd, env=child_env(os.environ), timeout=call.timeout_s,
         )
-    except FileNotFoundError:
+    except subprocess.TimeoutExpired:
+        return None
+    except (FileNotFoundError, PermissionError) as exc:
+        if not cwd.is_dir():
+            raise ClaudeError(f"working directory does not exist: {cwd}") from None
+        if isinstance(exc, PermissionError):
+            raise ClaudeNotInstalled(f"claude at {binary} is not executable") from None
         raise ClaudeNotInstalled("claude not found on PATH — install Claude Code") from None
     finally:
         Path(fh.name).unlink(missing_ok=True)
-    return parse_output(proc.stdout)
+
+
+def _snippet(stdout: str, stderr: str) -> str:
+    return (stderr.strip() or stdout.strip())[:200]
+
+
+def _message(stdout: str, stderr: str) -> str:
+    data = _json_object(stdout)
+    text = data.get("result") if data and isinstance(data.get("result"), str) else ""
+    return (text.strip() or stderr.strip() or stdout.strip())[:500]
+
+
+def _raise_for(kind: Kind, call: Call, proc) -> None:
+    if kind == "auth":
+        raise ClaudeAuthError("claude is not logged in — run `claude /login`")
+    if kind == "usage_limit":
+        raise ClaudeUsageLimit(f"{_message(proc.stdout, proc.stderr)} — wait and re-run")
+    if kind == "budget":
+        key = f"{call.role}_budget_usd" if call.role else "the budget setting"
+        raise ClaudeBudgetExceeded(
+            f"claude exceeded the ${call.budget_usd:.2f} budget cap — raise {key} and re-run")
+    raise ClaudeError(f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}")
+
+
+def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
+    max_retries = 3
+    transient = 0
+    schema_retried = False
+    while True:
+        proc = _spawn(call, binary, cwd)
+        if proc is None:
+            kind: Kind = "transient"
+            failure = f"claude timed out after {call.timeout_s}s"
+        else:
+            kind = classify(proc.returncode, proc.stdout, proc.stderr, bool(call.json_schema))
+            failure = f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
+            if kind == "ok":
+                return parse_output(proc.stdout)
+        if kind == "transient":
+            if transient >= max_retries:
+                raise ClaudeError(failure)
+            transient += 1
+            sleep(2 ** transient * (0.5 + rand()))
+            continue
+        if kind == "schema":
+            if schema_retried:
+                raise ClaudeSchemaError("claude reply did not match the required JSON schema: "
+                                        "structured_output missing")
+            schema_retried = True
+            call = dataclasses.replace(call, prompt=call.prompt + (
+                "\n\nYour previous reply did not match the required JSON schema: "
+                "structured_output missing. Reply again with only the structured output."))
+            continue
+        _raise_for(kind, call, proc)
 
 
 def run(call: Call, *, binary: str | None = None, sleep=time.sleep, rand=random.random) -> Result:
     binary = binary or claude_binary()
     if call.cwd is not None:
-        return _attempt(call, binary, call.cwd)
+        return _execute(call, binary, call.cwd, sleep, rand)
     with tempfile.TemporaryDirectory(prefix="llm-wiki-") as tmp:  # plan calls see no files
-        return _attempt(call, binary, Path(tmp))
+        return _execute(call, binary, Path(tmp), sleep, rand)

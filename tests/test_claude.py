@@ -5,10 +5,13 @@ import pytest
 from conftest import ok
 
 from llm_wiki.claude import (
-    REQUIRED_FLAGS, build_argv, child_env, claude_binary, make_call, parse_output, run,
+    REQUIRED_FLAGS, build_argv, child_env, claude_binary, classify, make_call, parse_output, run,
 )
 from llm_wiki.config import LlmSettings
-from llm_wiki.errors import ClaudeError, ClaudeNotInstalled, WikiError
+from llm_wiki.errors import (
+    ClaudeAuthError, ClaudeBudgetExceeded, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError,
+    ClaudeUsageLimit, WikiError,
+)
 
 
 def _call(role="plan", **kw):
@@ -83,6 +86,7 @@ def test_plan_call_cwd_is_empty_tempdir(fake_claude):
     run(_call())
     (c,) = fake_claude.calls()
     assert c["cwd"] != str(Path.cwd()) and c["listdir"] == []
+    assert not Path(c["cwd"]).exists()
 
 
 def test_edit_call_cwd_is_given_dir(fake_claude, tmp_path):
@@ -108,3 +112,167 @@ def test_missing_binary_raises_not_installed(monkeypatch, tmp_path):
     with pytest.raises(ClaudeNotInstalled):
         claude_binary()
     assert issubclass(ClaudeNotInstalled, WikiError)  # CLI renders WikiError as exit 2
+
+
+OVERLOADED = {"stdout": "", "stderr": "API Error: 529 overloaded", "exit": 1}
+
+
+def test_transient_then_success(fake_claude):
+    fake_claude.queue(OVERLOADED, {"stdout": ok("fine")})
+    sleeps = []
+    res = run(_call(), sleep=sleeps.append)
+    assert res.text == "fine" and len(fake_claude.calls()) == 2
+    assert len(sleeps) == 1 and 1.0 <= sleeps[0] <= 3.0
+
+
+def test_transient_exhausts_after_three_retries(fake_claude):
+    fake_claude.queue(*[OVERLOADED] * 4)
+    sleeps = []
+    with pytest.raises(ClaudeError, match="529"):
+        run(_call(), sleep=sleeps.append, rand=lambda: 0.5)
+    assert len(fake_claude.calls()) == 4 and sleeps == [2, 4, 8]
+
+
+def test_auth_failure_not_retried(fake_claude):
+    fake_claude.queue({"stdout": "", "stderr": "Not logged in", "exit": 1})
+    with pytest.raises(ClaudeAuthError, match="claude /login"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
+
+
+def test_usage_limit_not_retried_and_message_kept(fake_claude):
+    fake_claude.queue({"stdout": "", "stderr": "Claude AI usage limit reached|1761500000", "exit": 1})
+    with pytest.raises(ClaudeUsageLimit, match=r"1761500000.*wait and re-run"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
+
+
+def test_budget_exceeded(fake_claude):
+    fake_claude.queue({"stdout": {
+        "type": "result", "subtype": "error_max_budget_usd", "is_error": True, "result": "",
+        "total_cost_usd": 1.2, "duration_ms": 1, "session_id": "s"}, "exit": 1})
+    with pytest.raises(ClaudeBudgetExceeded, match=r"\$1\.00.*plan_budget_usd"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
+
+
+def test_budget_without_role_names_generic_setting(fake_claude):
+    import dataclasses
+
+    fake_claude.queue({"stdout": {"subtype": "error_max_budget_usd", "is_error": True}, "exit": 1})
+    with pytest.raises(ClaudeBudgetExceeded, match="the budget setting"):
+        run(dataclasses.replace(_call(), role=None))
+
+
+def test_schema_missing_retried_once_with_error(fake_claude):
+    fake_claude.queue({"stdout": ok(structured=None)}, {"stdout": ok(structured=None)})
+    with pytest.raises(ClaudeSchemaError):
+        run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
+    first, second = fake_claude.calls()
+    assert first["stdin"] == "P"
+    assert second["stdin"].startswith("P\n\nYour previous reply did not match the required JSON schema:")
+    assert second["stdin"].endswith("Reply again with only the structured output.")
+
+
+def test_schema_retry_recovers(fake_claude):
+    fake_claude.queue({"stdout": ok(structured=None)}, {"stdout": ok(structured={"a": 1})})
+    res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
+    assert res.structured == {"a": 1}
+
+
+def test_schema_retry_does_not_consume_transient_slot(fake_claude):
+    fake_claude.queue(
+        OVERLOADED, OVERLOADED, OVERLOADED, {"stdout": ok(structured=None)}, {"stdout": ok(structured={"a": 1})})
+    res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
+    assert res.structured == {"a": 1}
+
+
+def test_unparseable_output_retried_then_error(fake_claude):
+    fake_claude.queue(*[{"stdout": "<html>oops"}] * 4)
+    with pytest.raises(ClaudeError, match="<html>oops"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 4
+
+
+def test_hang_times_out_and_retries(fake_claude):
+    import dataclasses
+    import time
+
+    fake_claude.queue({"sleep": 5}, {"stdout": ok()})
+    t0 = time.monotonic()
+    res = run(dataclasses.replace(_call(), timeout_s=1), sleep=lambda s: None)
+    assert res.text == "done" and len(fake_claude.calls()) == 2
+    assert time.monotonic() - t0 < 4
+
+
+def test_timeout_message_after_retries(fake_claude):
+    import dataclasses
+
+    fake_claude.queue(*[{"sleep": 3}] * 4)
+    with pytest.raises(ClaudeError, match=r"claude timed out after 1s"):
+        run(dataclasses.replace(_call(), timeout_s=1), sleep=lambda s: None)
+
+
+def test_fatal_not_retried(fake_claude):
+    fake_claude.queue({"stdout": "", "stderr": "unknown option --frob", "exit": 1})
+    with pytest.raises(ClaudeError, match="unknown option --frob"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
+
+
+def test_classify_success_beats_text_rules():
+    body = json.dumps(ok("the budget and 401 and network are fine"))
+    assert classify(0, body, "") == "ok"
+    assert classify(0, json.dumps(ok(structured=None)), "", has_schema=True) == "schema"
+    assert classify(0, "", "") == "transient"
+
+
+def test_missing_cwd_is_not_reported_as_missing_binary(fake_claude, tmp_path):
+    fake_claude.queue({"stdout": ok()})
+    gone = tmp_path / "gone"
+    with pytest.raises(ClaudeError, match="gone") as ei:
+        run(_call("edit", cwd=gone))
+    assert not isinstance(ei.value, ClaudeNotInstalled)
+
+
+def test_non_executable_binary_is_clear_error(tmp_path):
+    bin_ = tmp_path / "claude"
+    bin_.write_text("#!/bin/sh\n")
+    bin_.chmod(0o644)
+    with pytest.raises(ClaudeNotInstalled, match="not executable"):
+        run(_call(), binary=str(bin_))
+
+
+def test_system_prompt_file_removed_when_spawn_fails(tmp_path, monkeypatch):
+    import tempfile
+
+    made = []
+    real = tempfile.NamedTemporaryFile
+
+    def spy(*a, **kw):
+        fh = real(*a, **kw)
+        made.append(fh.name)
+        return fh
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", spy)
+    with pytest.raises(ClaudeNotInstalled):
+        run(_call(), binary=str(tmp_path / "nope"))
+    assert made and not any(Path(m).exists() for m in made)
+
+
+def test_parse_output_tolerates_malformed_numbers():
+    res = parse_output(json.dumps({"result": "x", "total_cost_usd": "abc", "duration_ms": [1],
+                                   "structured_output": "str"}))
+    assert (res.cost_usd, res.duration_ms, res.structured) == (0.0, 0, None)
+
+
+def test_env_stripping_holds_through_run(fake_claude, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth")
+    fake_claude.queue({"stdout": ok()})
+    run(_call())
+    env = fake_claude.calls()[0]["env"]
+    assert env["ANTHROPIC_API_KEY"] is None and env["CLAUDECODE"] is None
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth"
+    assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
