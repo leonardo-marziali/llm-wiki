@@ -32,7 +32,7 @@ _KIND_RULE = {
 class InitResult:
     ref: WikiRef
     created: bool
-    host_repo: Path | None = None  # enclosing repo the wiki lives in; None when init made its own
+    host_repo: Path | None = None  # enclosing repo the wiki lives in; None when init made its own repo or only re-registered
 
 
 def slug(text: str) -> str:
@@ -150,6 +150,8 @@ def init_wiki(
     _check_name_free(name, root)
     cfg = WikiConfig(name=name, description=" ".join(description.split()), profile=profile,
                      sections=load_profile(profile))
+    if gitops.inside_git_dir(root):
+        raise WikiError(f"{root} is inside a .git directory")
     host_repo = gitops.enclosing_repo(root)
     if host_repo is None and not gitops.has_identity(root):
         raise GitError("configure git user.name and user.email")

@@ -387,3 +387,12 @@ def test_cli_init_host_repo_message(tmp_path):
     assert r.stdout.strip() == (
         f"created wiki acme at {wiki.resolve()} inside existing git repository {host.resolve()} "
         "(not committed — review and commit it there)")
+
+
+def test_init_inside_git_dir_is_refused(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    subprocess.run(["git", "init", "-q", str(host)], check=True)
+    with pytest.raises(WikiError, match="inside a .git directory"):
+        init_wiki(host / ".git" / "w")
+    assert not (host / ".git" / "w").exists()

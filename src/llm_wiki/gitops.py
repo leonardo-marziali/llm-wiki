@@ -45,6 +45,14 @@ def enclosing_repo(path: Path) -> Path | None:
     return Path(top).resolve() if top else None
 
 
+def inside_git_dir(path: Path) -> bool:
+    """True when ``path`` (which may not exist yet) lies inside a repository's ``.git`` directory."""
+    try:
+        return git(_existing_dir(path), "rev-parse", "--is-inside-git-dir").strip() == "true"
+    except GitError:
+        return False
+
+
 def has_identity(root: Path) -> bool:
     """True when git can build author and committer identities (config or GIT_* env)."""
     cwd = _existing_dir(root)
