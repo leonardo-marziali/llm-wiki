@@ -307,3 +307,72 @@ def test_numbers_inside_larger_tokens_do_not_look_like_status_codes(fake_claude)
     with pytest.raises(ClaudeError, match="1500 tokens"):
         run(_call(), sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
+
+
+def test_edit_call_is_not_auto_retried(fake_claude, tmp_path):
+    assert _call("edit").max_retries == 0 and _call().max_retries == 3
+    fake_claude.queue(OVERLOADED, {"stdout": ok()})
+    with pytest.raises(ClaudeError, match="529"):
+        run(_call("edit", cwd=tmp_path), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
+
+
+def test_cost_sums_failed_transient_attempts(fake_claude):
+    failed = {"stdout": {"is_error": True, "result": "API Error: 529 overloaded", "total_cost_usd": 0.02},
+              "exit": 1}
+    fake_claude.queue(failed, {"stdout": ok(cost=0.01)})
+    res = run(_call(), sleep=lambda s: None)
+    assert res.cost_usd == pytest.approx(0.03)
+
+
+def test_cost_sums_schema_retry(fake_claude):
+    fake_claude.queue({"stdout": ok(structured=None, cost=0.01)},
+                      {"stdout": ok(structured={"a": 1}, cost=0.02)})
+    res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
+    assert res.cost_usd == pytest.approx(0.03)
+
+
+def test_invalid_budget_option_is_fatal_not_budget():
+    assert classify(1, "", "error: option --max-budget-usd: invalid number 'x'") == "fatal"
+    assert classify(1, "", "Exceeded USD budget (1.00)") == "budget"
+    assert classify(1, "", "budget of $1 exceeded") == "budget"
+
+
+def test_unwritable_tempfile_is_claude_error(fake_claude, monkeypatch):
+    import tempfile
+
+    def boom(*a, **kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", boom)
+    with pytest.raises(ClaudeError, match="No space left") as ei:
+        run(_call())
+    assert not isinstance(ei.value, ClaudeNotInstalled)
+    assert fake_claude.calls() == []
+
+
+def test_unwritable_tempdir_is_claude_error(fake_claude, monkeypatch):
+    import tempfile
+
+    def boom(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", boom)
+    with pytest.raises(ClaudeError, match="Permission denied") as ei:
+        run(_call())
+    assert not isinstance(ei.value, ClaudeNotInstalled)
+
+
+def test_missing_env_binary_names_the_path(monkeypatch, tmp_path):
+    missing = tmp_path / "nope"
+    monkeypatch.setenv("LLM_WIKI_CLAUDE", str(missing))
+    with pytest.raises(ClaudeNotInstalled, match=f"LLM_WIKI_CLAUDE points to a missing file: {missing}"):
+        claude_binary()
+    with pytest.raises(ClaudeNotInstalled, match="LLM_WIKI_CLAUDE points to a missing file"):
+        run(_call())
+
+
+def test_autouse_env_never_reaches_real_claude():
+    import os
+
+    assert not Path(os.environ["LLM_WIKI_CLAUDE"]).exists()

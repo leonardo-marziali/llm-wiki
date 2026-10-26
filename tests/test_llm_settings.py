@@ -91,3 +91,19 @@ def test_non_table_llm_is_error(tmp_path):
     (root / "wiki.toml").write_text("llm = 3\n" + text, encoding="utf-8")
     with pytest.raises(ConfigError):
         load_llm_settings(root)
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_non_finite_budget_is_error(value):
+    write_user(f"[llm]\nplan_budget_usd = {value}\n")
+    with pytest.raises(ConfigError, match="plan_budget_usd"):
+        load_llm_settings(None)
+
+
+def test_non_finite_budget_rejected_by_settings():
+    from pydantic import ValidationError
+
+    from llm_wiki.config import LlmSettings
+
+    with pytest.raises(ValidationError):
+        LlmSettings(deep_budget_usd=float("nan"))

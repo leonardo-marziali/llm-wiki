@@ -13,6 +13,8 @@ def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))  # never see a repo above tmp_path
     monkeypatch.setenv("LLM_WIKI_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("LLM_WIKI_PATH", raising=False)
+    # A missing binary by default: no test can reach the real, paid claude. fake_claude overrides it.
+    monkeypatch.setenv("LLM_WIKI_CLAUDE", str(tmp_path / "no-claude"))
 
 
 @pytest.fixture

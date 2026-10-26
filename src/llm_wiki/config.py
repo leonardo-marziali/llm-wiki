@@ -1,6 +1,7 @@
 """wiki.toml model, profiles and deterministic serialisation."""
 
 import json
+import math
 import os
 import tomllib
 from dataclasses import fields, replace
@@ -25,8 +26,8 @@ _BUDGETS = ("plan_budget_usd", "edit_budget_usd", "deep_budget_usd")
 
 
 def _positive(v: float | None) -> float | None:
-    if v is not None and v <= 0:
-        raise ValueError("budget must be greater than 0")
+    if v is not None and not (math.isfinite(v) and v > 0):
+        raise ValueError("budget must be a finite number greater than 0")
     return v
 
 

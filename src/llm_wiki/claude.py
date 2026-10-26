@@ -50,6 +50,7 @@ class Call:
     edit: bool = False
     timeout_s: float = 600
     role: Role | None = None  # names the settings key in budget errors
+    max_retries: int = 3  # transient retries; the one schema retry is separate
 
 
 @dataclass(frozen=True)
@@ -67,15 +68,22 @@ def make_call(
     cwd: Path | None = None, json_schema: dict | None = None,
 ) -> Call:
     edit = role == "edit"
+    # Edit sessions are never re-run: a half-applied edit is ingest's post-check/rollback to handle.
     return Call(
         prompt=prompt, system_prompt=system_prompt, model=settings.model(role),
         tools=EDIT_TOOLS if edit else (), budget_usd=settings.budget(role), cwd=cwd,
         json_schema=json_schema, edit=edit, timeout_s=900 if edit else 300, role=role,
+        max_retries=0 if edit else 3,
     )
 
 
 def claude_binary() -> str:
-    found = os.environ.get("LLM_WIKI_CLAUDE") or shutil.which("claude")
+    override = os.environ.get("LLM_WIKI_CLAUDE")
+    if override:
+        if not Path(override).exists():
+            raise ClaudeNotInstalled(f"LLM_WIKI_CLAUDE points to a missing file: {override}")
+        return override
+    found = shutil.which("claude")
     if not found:
         raise ClaudeNotInstalled("claude not found on PATH — install Claude Code")
     return found
@@ -129,8 +137,9 @@ def parse_output(stdout: str) -> Result:
 Kind = Literal["ok", "transient", "usage_limit", "auth", "budget", "schema", "fatal"]
 
 # Status codes need word boundaries: bare "500" would match inside timestamps and token counts.
+# Bare "budget" would misread usage errors such as "option --max-budget-usd: invalid number".
 _RULES = (
-    ("budget", re.compile(r"budget")),
+    ("budget", re.compile(r"exceeded.{0,40}budget|budget.{0,40}exceeded")),
     ("auth", re.compile(r"/login|not logged in|invalid api key|authentication|oauth token|\b401\b")),
     ("usage_limit", re.compile(r"usage limit|(?<!rate )limit reached|limit will reset")),
     ("transient", re.compile(
@@ -172,10 +181,16 @@ def classify(returncode: int, stdout: str, stderr: str, *, has_schema: bool = Fa
 def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
     """One subprocess; None on timeout (subprocess.run has already killed the child)."""
     # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv limit.
-    fh = tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False)
     try:
-        with fh:
-            fh.write(call.system_prompt)
+        fh = tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False)
+    except OSError as exc:
+        raise ClaudeError(f"cannot create the system prompt temp file: {exc}") from None
+    try:
+        try:
+            with fh:
+                fh.write(call.system_prompt)
+        except OSError as exc:
+            raise ClaudeError(f"cannot write the system prompt temp file: {exc}") from None
         return subprocess.run(
             build_argv(call, binary, Path(fh.name)), input=call.prompt, capture_output=True,
             text=True, encoding="utf-8", cwd=cwd, env=child_env(os.environ), timeout=call.timeout_s,
@@ -187,7 +202,9 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
             raise ClaudeError(f"working directory is not an accessible directory: {cwd}") from None
         if isinstance(exc, PermissionError):
             raise ClaudeNotInstalled(f"claude at {binary} is not executable") from None
-        raise ClaudeNotInstalled("claude not found on PATH — install Claude Code") from None
+        if binary == os.environ.get("LLM_WIKI_CLAUDE"):
+            raise ClaudeNotInstalled(f"LLM_WIKI_CLAUDE points to a missing file: {binary}") from None
+        raise ClaudeNotInstalled(f"claude not found at {binary} — install Claude Code") from None
     finally:
         Path(fh.name).unlink(missing_ok=True)
 
@@ -217,21 +234,23 @@ def _raise_for(kind: Kind, call: Call, proc) -> None:
 
 
 def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
-    max_retries = 3
     transient = 0
     schema_retried = False
+    spent = 0.0  # every attempt bills, not only the one that succeeds
     while True:
         proc = _spawn(call, binary, cwd)
         if proc is None:
             kind: Kind = "transient"
             failure = f"claude timed out after {call.timeout_s}s"
         else:
+            data = _json_object(proc.stdout)
+            spent += _num(data.get("total_cost_usd"), float, 0.0) if data else 0.0
             kind = classify(proc.returncode, proc.stdout, proc.stderr, has_schema=bool(call.json_schema))
             failure = f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
             if kind == "ok":
-                return parse_output(proc.stdout)
+                return dataclasses.replace(parse_output(proc.stdout), cost_usd=spent)
         if kind == "transient":
-            if transient >= max_retries:
+            if transient >= call.max_retries:
                 raise ClaudeError(failure)
             transient += 1
             sleep(2 ** transient * (0.5 + rand()))
@@ -252,5 +271,9 @@ def run(call: Call, *, binary: str | None = None, sleep=time.sleep, rand=random.
     binary = binary or claude_binary()
     if call.cwd is not None:
         return _execute(call, binary, call.cwd, sleep, rand)
-    with tempfile.TemporaryDirectory(prefix="llm-wiki-") as tmp:  # plan calls see no files
-        return _execute(call, binary, Path(tmp), sleep, rand)
+    try:
+        tmp = tempfile.TemporaryDirectory(prefix="llm-wiki-", ignore_cleanup_errors=True)
+    except OSError as exc:
+        raise ClaudeError(f"cannot create a temp directory: {exc}") from None
+    with tmp as path:  # plan calls see no files
+        return _execute(call, binary, Path(path), sleep, rand)
