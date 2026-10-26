@@ -11,6 +11,7 @@ from urllib.parse import unquote
 from rapidfuzz import fuzz
 
 from llm_wiki.config import WikiConfig
+from llm_wiki.errors import WikiError
 from llm_wiki.index import GENERATED_MARK
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, Page, id_for, iter_pages
@@ -31,6 +32,9 @@ _ORPHAN_EXEMPT = {"overview", "glossary", "hub"}
 _SKIP_SECTIONS = {"tl;dr", "related"}
 _MIN_WORDS = 12
 _TITLE_RATIO = 90
+_NOT_UTF8 = "not valid UTF-8"
+# the check a system file feeds; an unreadable file is reported under that code
+_SYSTEM_CODE = {"log.md": "log-format", "index.md": "index-too-long", "_index.md": "not-in-index"}
 
 
 @dataclass
@@ -90,10 +94,20 @@ def _resolve(base_dir: Path, target: str) -> Path:
     return (base_dir / target).resolve()
 
 
-def _in_root(root: Path, target: str) -> Path | None:
-    """Resolve a wiki-root-relative path; None if it escapes the root."""
+def _in_raw(root: Path, target: str) -> Path | None:
+    """Resolve a wiki-root-relative citation; None unless it stays inside ``root/raw``."""
+    if not target.startswith("raw/"):
+        return None
     p = (root / target).resolve()
-    return p if p.is_relative_to(root) else None
+    return p if p.is_relative_to((root / "raw").resolve()) else None
+
+
+def _read(path: Path) -> str | None:
+    """File text, or None if it is not valid UTF-8 or unreadable."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return None
 
 
 def _uncited(body: str) -> list[str]:
@@ -165,8 +179,8 @@ def _index_targets(root: Path, section: str) -> set[str]:
     path = root / "wiki" / section / "_index.md"
     if not path.is_file():
         return set()
-    text = path.read_text(encoding="utf-8")
-    if GENERATED_MARK not in text:
+    text = _read(path)
+    if text is None or GENERATED_MARK not in text:
         return set()
     block = text.split(GENERATED_MARK, 1)[1]
     return {m.group(1) for m in _LINK.finditer(block)}
@@ -245,16 +259,17 @@ def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
 
     for m in _FOOTNOTE.finditer("\n".join(_strip_code(page.body))):
         label, target = m.group(1), m.group(2)
-        if not target.startswith("raw/"):
+        p = _in_raw(root, target)
+        if p is None:
             add("error", "citation-outside-raw", f"footnote [^{label}] cites '{target}' outside raw/")
-            continue
-        p = _in_root(root, target)
-        if p is None or not p.is_file():
+        elif not p.is_file():
             add("error", "citation-missing", f"footnote [^{label}] cites missing '{target}'")
 
     for src in fm.sources:
-        p = _in_root(root, src.path)
-        if p is None or not p.is_file():
+        p = _in_raw(root, src.path)
+        if p is None:
+            add("error", "citation-outside-raw", f"source '{src.path}' resolves outside raw/")
+        elif not p.is_file():
             add("error", "citation-missing", f"source '{src.path}' does not exist")
         entry = ctx["manifest"].entries.get(src.path)
         if entry is None or entry.status == "deleted":
@@ -283,7 +298,8 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
     """Lint the wiki at ``root``.
 
     ``only`` limits per-page checks to those pages (absolute or relative to
-    ``root``); wiki-wide checks always run.
+    ``root``); wiki-wide checks always run. A path that is not a page raises
+    WikiError.
     """
     root = Path(root).resolve()
     wiki = root / "wiki"
@@ -311,8 +327,14 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
     }
     selected = pages
     if only is not None:
-        wanted = {(root / o).resolve() for o in only}
-        selected = [p for p in pages if p.path.resolve() in wanted]
+        by_path = {p.path.resolve(): p for p in pages}
+        selected = []
+        for o in only:
+            page = by_path.get((root / o).resolve())
+            if page is None:
+                raise WikiError(f"not a wiki page: {o}")
+            if page not in selected:
+                selected.append(page)
     for p in selected:
         findings += _page_checks(root, p, ctx)
 
@@ -333,9 +355,14 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
                 findings.append(Finding("warn", "duplicate-title", "wiki/" + b.rel,
                                         f"title '{b.fm.title}' is close to '{a.fm.title}' (wiki/{a.rel})"))
 
+    system_text: dict[Path, str | None] = {}
     for f in _system_files(wiki):
         rel = f.relative_to(root).as_posix()
-        for target in _md_links(f.read_text(encoding="utf-8")):
+        text = system_text[f] = _read(f)
+        if text is None:
+            findings.append(Finding("error", _SYSTEM_CODE.get(f.name, "broken-link"), rel, _NOT_UTF8))
+            continue
+        for target in _md_links(text):
             if not _resolve(f.parent, target).is_file():
                 findings.append(Finding("error", "broken-link", rel, f"link target '{target}' does not exist"))
 
@@ -352,14 +379,16 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
              caps.max_section_pages, caps.warn_section_pages)
 
     index = wiki / "index.md"
-    if index.is_file():
-        n = len(index.read_text(encoding="utf-8").splitlines())
+    index_text = system_text.get(index)
+    if index_text is not None:
+        n = len(index_text.splitlines())
         if n > caps.max_index_lines:
             findings.append(Finding("error", "index-too-long", "wiki/index.md",
                                     f"{n} lines (max {caps.max_index_lines})"))
     log = wiki / "log.md"
-    if log.is_file():
-        for n, line in enumerate(log.read_text(encoding="utf-8").splitlines(), 1):
+    log_text = system_text.get(log)
+    if log_text is not None:
+        for n, line in enumerate(log_text.splitlines(), 1):
             if line.startswith("## ") and not _LOG.match(line):
                 findings.append(Finding("error", "log-format", "wiki/log.md",
                                         f"line {n}: expected '## [YYYY-MM-DD] op | text'"))

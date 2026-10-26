@@ -85,8 +85,9 @@ def lint(
     wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
     strict: bool = typer.Option(False, "--strict", help="Fail on warnings too."),
     fmt: str = typer.Option("text", "--format", help="text or json."),
+    report_file: bool = typer.Option(False, "--report", help="Also write .wiki/reports/lint-<date>.md."),
 ) -> None:
-    """Check the page contract, links, citations and caps; write a report."""
+    """Check the page contract, links, citations and caps."""
     from datetime import date
 
     from llm_wiki import registry
@@ -99,7 +100,6 @@ def lint(
     ref = registry.resolve(wiki, Path.cwd())
     today = date.today()
     report = run_lint(ref.path, load_config(ref.path), today=today)
-    write_report(ref.path, report, today)
     if fmt == "json":
         data = {
             "errors": report.errors,
@@ -111,6 +111,9 @@ def lint(
         for f in report.findings:
             typer.echo(f"{f.severity} {f.code} {f.path}: {f.message}")
         typer.echo(f"{report.errors} errors, {report.warnings} warnings")
+    if report_file:
+        # stderr in json mode keeps stdout parseable
+        typer.echo(f"report: {write_report(ref.path, report, today)}", err=fmt == "json")
     if report.errors or (strict and report.warnings):
         raise typer.Exit(1)
 
