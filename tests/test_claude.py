@@ -209,8 +209,8 @@ def test_timeout_message_after_retries(fake_claude):
     import dataclasses
 
     fake_claude.queue(*[{"sleep": 3}] * 4)
-    with pytest.raises(ClaudeError, match=r"claude timed out after 1s"):
-        run(dataclasses.replace(_call(), timeout_s=1), sleep=lambda s: None)
+    with pytest.raises(ClaudeError, match=r"claude timed out after 0\.3s"):
+        run(dataclasses.replace(_call(), timeout_s=0.3), sleep=lambda s: None)  # float works too
 
 
 def test_fatal_not_retried(fake_claude):
@@ -276,3 +276,27 @@ def test_env_stripping_holds_through_run(fake_claude, monkeypatch):
     assert env["ANTHROPIC_API_KEY"] is None and env["CLAUDECODE"] is None
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth"
     assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+
+
+def test_rate_limit_reached_is_transient_not_usage_limit(fake_claude):
+    assert classify(1, "", "API Error: 429 Rate limit reached") == "transient"
+    fake_claude.queue({"stdout": "", "stderr": "API Error: 429 Rate limit reached", "exit": 1},
+                      {"stdout": ok("fine")})
+    assert run(_call(), sleep=lambda s: None).text == "fine"
+    assert len(fake_claude.calls()) == 2
+
+
+def test_cwd_that_is_a_file_is_clear_error(fake_claude, tmp_path):
+    f = tmp_path / "afile"
+    f.write_text("x")
+    with pytest.raises(ClaudeError, match="afile") as ei:
+        run(_call("edit", cwd=f))
+    assert not isinstance(ei.value, ClaudeNotInstalled)
+
+
+def test_fatal_json_failure_quotes_result_text(fake_claude):
+    fake_claude.queue({"stdout": {"is_error": True, "subtype": "error_during_execution",
+                                  "result": "model exploded", "session_id": "s"}, "exit": 1})
+    with pytest.raises(ClaudeError) as ei:
+        run(_call(), sleep=lambda s: None)
+    assert "model exploded" in str(ei.value) and "session_id" not in str(ei.value)

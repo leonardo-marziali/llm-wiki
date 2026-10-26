@@ -141,7 +141,7 @@ def _json_object(stdout: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def classify(returncode: int, stdout: str, stderr: str, has_schema: bool = False) -> Kind:
+def classify(returncode: int, stdout: str, stderr: str, *, has_schema: bool = False) -> Kind:
     data = _json_object(stdout)
     failed = returncode != 0 or (data is not None and bool(data.get("is_error")))
     if not failed:
@@ -157,7 +157,11 @@ def classify(returncode: int, stdout: str, stderr: str, has_schema: bool = False
     text = text.lower()
     if data is not None and data.get("subtype") == "error_max_budget_usd":
         return "budget"
-    for kind, needles in (("budget", _BUDGET), ("auth", _AUTH), ("usage_limit", _USAGE),
+    if "rate limit" in text:  # "Rate limit reached" (429) is a throttle, not the plan's usage limit
+        usage = _USAGE[:1] + _USAGE[2:]
+    else:
+        usage = _USAGE
+    for kind, needles in (("budget", _BUDGET), ("auth", _AUTH), ("usage_limit", usage),
                           ("transient", _TRANSIENT)):
         if any(n in text for n in needles):
             return kind
@@ -177,9 +181,9 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
         )
     except subprocess.TimeoutExpired:
         return None
-    except (FileNotFoundError, PermissionError) as exc:
-        if not cwd.is_dir():
-            raise ClaudeError(f"working directory does not exist: {cwd}") from None
+    except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
+        if not cwd.is_dir() or not os.access(cwd, os.X_OK):
+            raise ClaudeError(f"working directory is not an accessible directory: {cwd}") from None
         if isinstance(exc, PermissionError):
             raise ClaudeNotInstalled(f"claude at {binary} is not executable") from None
         raise ClaudeNotInstalled("claude not found on PATH — install Claude Code") from None
@@ -188,7 +192,9 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
 
 
 def _snippet(stdout: str, stderr: str) -> str:
-    return (stderr.strip() or stdout.strip())[:200]
+    data = _json_object(stdout)
+    result = data.get("result") if data and isinstance(data.get("result"), str) else ""
+    return (result.strip() or stderr.strip() or stdout.strip())[:200]
 
 
 def _message(stdout: str, stderr: str) -> str:
@@ -219,7 +225,7 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
             kind: Kind = "transient"
             failure = f"claude timed out after {call.timeout_s}s"
         else:
-            kind = classify(proc.returncode, proc.stdout, proc.stderr, bool(call.json_schema))
+            kind = classify(proc.returncode, proc.stdout, proc.stderr, has_schema=bool(call.json_schema))
             failure = f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
             if kind == "ok":
                 return parse_output(proc.stdout)
