@@ -68,7 +68,9 @@ def convert_sheets(
             parts.append(_md_table(rows) + "\n")
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = out_dir / f"{sha}.{_slug(name)}.csv"
+        slug, n = _slug(name), 1
+        while (csv_path := out_dir / f"{sha}.{slug}{'' if n == 1 else f'-{n}'}.csv") in csvs:
+            n += 1
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
             csv.writer(fh).writerows(rows)
         csvs.append(csv_path)

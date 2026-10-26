@@ -148,3 +148,50 @@ def test_near_duplicate_phash(tmp_path, make_png):
     assert images.near_duplicate(hb, {"a": ha}) == "a"
     assert images.near_duplicate(hc, {"a": ha}, max_distance=0) is None
     assert images.triage(a).reason is None
+
+
+@pytest.mark.parametrize("suffix", [".docx", ".pptx", ".xlsx", ".pdf"])
+def test_corrupt_file_refused(root, suffix):
+    p = root / "raw" / f"bad{suffix}"
+    p.write_bytes(bytes(range(256)) * 4)
+    with pytest.raises(RefusedSource, match="could not be read"):
+        convert(root, p, SHA, HARD_CAPS)
+
+
+def test_csv_quoted_newline_survives(root):
+    p = root / "raw" / "q.csv"
+    p.write_text('a,b\n"line1\nline2",x\n', encoding="utf-8")
+    c = convert(root, p, SHA, HARD_CAPS)
+    assert "line1 line2" in out(root, c)
+
+
+def test_sheet_slug_collision_distinct_csvs(root, make_xlsx):
+    rows = [["a", "b"]] + [[str(i), "x"] for i in range(250)]
+    p = make_xlsx(root / "raw" / "w.xlsx", {"A b": rows, "A-b": rows})
+    c = convert(root, p, SHA, HARD_CAPS)
+    csvs = [o for o in c.outputs if o.endswith(".csv")]
+    assert len(csvs) == 2 and len(set(csvs)) == 2
+
+
+def test_xlsx_trailing_empty_trimmed(root, make_xlsx):
+    import openpyxl
+
+    p = make_xlsx(root / "raw" / "t.xlsx", {"s": [["a", "b", "c"]] + [["1", "2", "3"]] * 4})
+    wb = openpyxl.load_workbook(p)
+    wb["s"].cell(row=500, column=40).value = ""
+    wb["s"].cell(row=500, column=40).number_format = "0.00"
+    wb.save(p)
+    c = convert(root, p, SHA, HARD_CAPS)
+    assert c.flags == []
+    assert "| a | b | c |" in out(root, c)
+
+
+def test_split_parts_carry_header_and_part_line(root):
+    p = root / "raw" / "big.md"
+    p.write_text("".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20)))
+    c = convert(root, p, SHA, HARD_CAPS)
+    for n in range(1, c.parts + 1):
+        t = out_part(root, n)
+        assert t.startswith(f"---\nsource: raw/big.md\nsha256: {SHA}\nconverter: text\n")
+        assert f"part: {n}/{c.parts}\n---" in t
+        assert len(t) <= 80_000

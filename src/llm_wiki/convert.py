@@ -2,12 +2,13 @@
 
 import csv
 import importlib.util
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import images, sheets
 from .caps import Caps
-from .errors import RefusedSource, UnsupportedFormat
+from .errors import RefusedSource, UnsupportedFormat, WikiError
 
 SUPPORTED = {
     ".md", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
@@ -35,8 +36,9 @@ class Conversion:
     flags: list[str] = field(default_factory=list)
 
 
-def _header(source: str, sha: str, converter: str) -> str:
-    return f"---\nsource: {source}\nsha256: {sha}\nconverter: {converter}\n---\n\n"
+def _header(source: str, sha: str, converter: str, part: str | None = None) -> str:
+    part_line = f"part: {part}\n" if part else ""
+    return f"---\nsource: {source}\nsha256: {sha}\nconverter: {converter}\n{part_line}---\n\n"
 
 
 def _read_text(path: Path) -> str:
@@ -68,13 +70,26 @@ def _pptx_notes(path: Path) -> str:
     return "\n".join(blocks)
 
 
+def _trim(rows: list[list[str]]) -> list[list[str]]:
+    """Drop trailing all-empty rows and columns (formatted-but-empty cells)."""
+    while rows and not any(c.strip() for c in rows[-1]):
+        rows.pop()
+    width = 0
+    for row in rows:
+        for i in range(len(row) - 1, -1, -1):
+            if row[i].strip():
+                width = max(width, i + 1)
+                break
+    return [r[:width] + [""] * (width - len(r)) for r in rows]
+
+
 def _xlsx_rows(path: Path) -> dict[str, list[list[str]]]:
     from openpyxl import load_workbook
 
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         return {
-            ws.title: [["" if c is None else str(c) for c in row] for row in ws.iter_rows(values_only=True)]
+            ws.title: _trim([["" if c is None else str(c) for c in row] for row in ws.iter_rows(values_only=True)])
             for ws in wb.worksheets
         }
     finally:
@@ -83,7 +98,7 @@ def _xlsx_rows(path: Path) -> dict[str, list[list[str]]]:
 
 def _csv_rows(path: Path) -> dict[str, list[list[str]]]:
     text = _read_text(path)
-    return {path.stem: [list(r) for r in csv.reader(text.splitlines())]}
+    return {path.stem: [list(r) for r in csv.reader(io.StringIO(text, newline=""))]}
 
 
 def _pdf_pages(path: Path) -> int:
@@ -110,15 +125,19 @@ def _pdf(path: Path) -> tuple[str, str, list[str]]:
     attempts = [("markitdown", _markitdown), ("pypdf", _pypdf_text)]
     if importlib.util.find_spec("docling") is not None:
         attempts.append(("docling", _docling_text))
+    failed = 0
     for name, fn in attempts:
         try:
             text = fn(path)
         except Exception:
+            failed += 1
             continue
         if len(text.strip()) > len(best_text.strip()):
             best_name, best_text = name, text
         if len(text.strip()) / pages >= MIN_PDF_CHARS_PER_PAGE:
             return name, text, []
+    if failed == len(attempts):
+        raise RefusedSource(f"{path.name}: could not be read (all PDF extractors failed)")
     flags = ["needs-vision"] if len(best_text.strip()) / pages < MIN_PDF_CHARS_PER_PAGE else []
     return best_name, best_text, flags
 
@@ -187,35 +206,40 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
     flags: list[str] = []
     extra: list[Path] = []
 
-    if suffix in (".md", ".txt"):
-        converter, body = "text", _read_text(raw_path)
-    elif suffix == ".docx":
-        converter, body = "markitdown", _markitdown(raw_path)
-    elif suffix == ".pptx":
-        converter, body = "markitdown+pptx-notes", _markitdown(raw_path)
-        notes = _pptx_notes(raw_path)
-        if notes:
-            notes_path = out_dir / f"{sha}.notes.md"
-            notes_path.write_text(
-                _header(source, sha, converter) + notes, encoding="utf-8"
-            )
-            extra.append(notes_path)
-    elif suffix in (".xlsx", ".csv"):
-        converter = "sheets"
-        rows = _xlsx_rows(raw_path) if suffix == ".xlsx" else _csv_rows(raw_path)
-        body, csvs = sheets.convert_sheets(rows, out_dir, sha)
-        if csvs:
-            flags.append("large-sheet")
-            extra.extend(csvs)
-    elif suffix == ".pdf":
-        converter, body, flags = _pdf(raw_path)
-    else:
-        info = images.triage(raw_path)
-        if info.reason:
-            raise RefusedSource(info.reason)
-        converter = "image"
-        body = f"Image: {info.width}x{info.height} px. Content not extracted; needs vision.\n"
-        flags.append("needs-vision")
+    try:
+        if suffix in (".md", ".txt"):
+            converter, body = "text", _read_text(raw_path)
+        elif suffix == ".docx":
+            converter, body = "markitdown", _markitdown(raw_path)
+        elif suffix == ".pptx":
+            converter, body = "markitdown+pptx-notes", _markitdown(raw_path)
+            notes = _pptx_notes(raw_path)
+            if notes:
+                notes_path = out_dir / f"{sha}.notes.md"
+                notes_path.write_text(
+                    _header(source, sha, converter) + notes, encoding="utf-8"
+                )
+                extra.append(notes_path)
+        elif suffix in (".xlsx", ".csv"):
+            converter = "sheets"
+            rows = _xlsx_rows(raw_path) if suffix == ".xlsx" else _csv_rows(raw_path)
+            body, csvs = sheets.convert_sheets(rows, out_dir, sha)
+            if csvs:
+                flags.append("large-sheet")
+                extra.extend(csvs)
+        elif suffix == ".pdf":
+            converter, body, flags = _pdf(raw_path)
+        else:
+            info = images.triage(raw_path)
+            if info.reason:
+                raise RefusedSource(info.reason)
+            converter = "image"
+            body = f"Image: {info.width}x{info.height} px. Content not extracted; needs vision.\n"
+            flags.append("needs-vision")
+    except WikiError:
+        raise
+    except Exception as exc:
+        raise RefusedSource(f"{raw_path.name}: could not be read ({type(exc).__name__})") from exc
 
     primary = out_dir / f"{sha}.md"
     text = _header(source, sha, converter) + body
@@ -224,11 +248,12 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
 
     parts = 1
     if len(text) > caps.split_chars:
-        chunks = _split(text, caps.split_chars)
+        head = _header(source, sha, converter)
+        chunks = _split(body, max(caps.split_chars - len(head) - 32, 1))
         parts = len(chunks)
         for n, chunk in enumerate(chunks, 1):
             p = out_dir / f"{sha}.p{n}.md"
-            p.write_text(chunk, encoding="utf-8")
+            p.write_text(_header(source, sha, converter, f"{n}/{parts}") + chunk, encoding="utf-8")
             outputs.append(p)
     outputs.extend(extra)
 
