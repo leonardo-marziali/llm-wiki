@@ -39,7 +39,7 @@ class WikiConfig(BaseModel):
                 raise ConfigError(f"unknown cap '{key}' in [caps]")
             hard = getattr(HARD_CAPS, key)
             if value > hard:
-                raise ConfigError(f"cap {key} = {value} exceeds the hard limit {hard}; caps can only be lowered")
+                raise ConfigError(f"cap {key}={value} exceeds hard maximum {hard}")
         overrides = dict(self.caps)
         for key, value in self.caps.items():
             warn = "warn_" + key.removeprefix("max_")
