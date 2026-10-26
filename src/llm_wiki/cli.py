@@ -50,6 +50,23 @@ def _root(
 
 
 @app.command()
+def init(
+    path: Path = typer.Argument(..., help="Directory for the new wiki (or an existing wiki)."),
+    name: str | None = typer.Option(None, "--name", help="Wiki name (default: the slugged directory name)."),
+    profile: str = typer.Option("software", "--profile", help="software or general."),
+    description: str = typer.Option("", "--description", help="One line: what belongs in this wiki."),
+) -> None:
+    """Create a wiki (git repo, schema, skeleton) or register an existing one."""
+    from llm_wiki.init import init_wiki
+
+    if profile not in ("software", "general"):
+        raise WikiError("--profile must be software or general")
+    res = init_wiki(path, name=name, profile=profile, description=description)
+    verb = "created wiki" if res.created else "registered existing wiki"
+    typer.echo(f"{verb} {res.ref.name} at {res.ref.path}")
+
+
+@app.command()
 def search(
     query: str = typer.Argument(..., help="Search terms."),
     wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),

@@ -1,0 +1,4 @@
+.wiki/quarantine/
+.wiki/runs/
+.wiki/tmp/
+.env*
