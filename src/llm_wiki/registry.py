@@ -10,7 +10,7 @@ from typing import Literal
 import platformdirs
 
 from llm_wiki.config import WIKI_FILE, load_config
-from llm_wiki.errors import WikiNotFound
+from llm_wiki.errors import ConfigError, WikiNotFound
 
 NOT_FOUND = "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
 
@@ -28,22 +28,29 @@ def registry_file() -> Path:
     return base / "wikis.toml"
 
 
+def _q(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _read() -> tuple[str | None, dict[str, str]]:
     f = registry_file()
     if not f.exists():
         return None, {}
-    data = tomllib.loads(f.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(f.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        raise ConfigError(f"invalid registry file {f}: {e}") from e
     return data.get("default"), dict(data.get("wikis", {}))
 
 
 def _write(default: str | None, wikis: dict[str, str]) -> None:
     lines = []
     if default is not None:
-        lines.append(f"default = {json.dumps(default)}")
+        lines.append(f"default = {_q(default)}")
         lines.append("")
     lines.append("[wikis]")
     for name in sorted(wikis):
-        lines.append(f"{json.dumps(name)} = {json.dumps(wikis[name])}")
+        lines.append(f"{_q(name)} = {_q(wikis[name])}")
     f = registry_file()
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -68,7 +75,11 @@ def known_wikis() -> list[WikiRef]:
         if p in seen or not (p / WIKI_FILE).is_file():
             continue
         seen.add(p)
-        refs.append(WikiRef(load_config(p).name, p, "env"))
+        try:
+            name = load_config(p).name
+        except ConfigError:
+            continue
+        refs.append(WikiRef(name, p, "env"))
     return refs
 
 
@@ -102,6 +113,6 @@ def resolve(arg: str | None, cwd: Path) -> WikiRef:
         if root is not None:
             return _ref_for_path(root)
         default, wikis = _read()
-        if default in wikis:
+        if default in wikis and (Path(wikis[default]) / WIKI_FILE).is_file():
             return WikiRef(default, Path(wikis[default]), "registry")
     raise WikiNotFound(NOT_FOUND)

@@ -1,9 +1,11 @@
+import os
+import os
 from pathlib import Path
 
 import pytest
 
 from llm_wiki.config import WIKI_FILE, WikiConfig, dump_config, load_profile
-from llm_wiki.errors import WikiNotFound
+from llm_wiki.errors import ConfigError, WikiNotFound
 from llm_wiki.registry import find_root, known_wikis, register, registry_file, resolve
 
 
@@ -61,7 +63,7 @@ def test_resolve_from_cwd_inside_wiki(tmp_path):
 
 def test_env_path_discovery(tmp_path, monkeypatch):
     root = make_wiki(tmp_path / "e", "envy")
-    monkeypatch.setenv("LLM_WIKI_PATH", f"{root}:{tmp_path / 'nope'}")
+    monkeypatch.setenv("LLM_WIKI_PATH", os.pathsep.join([str(root), str(tmp_path / "nope")]))
     refs = known_wikis()
     assert [(r.name, r.origin) for r in refs] == [("envy", "env")]
 
@@ -78,3 +80,76 @@ def test_resolve_nothing_raises_wikinotfound(tmp_path):
     with pytest.raises(WikiNotFound, match="wiki init") as e:
         resolve(None, tmp_path)
     assert str(e.value) == "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
+
+
+def test_broken_env_wiki_is_skipped(tmp_path, monkeypatch):
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / WIKI_FILE).write_text("not = [valid")
+    good = make_wiki(tmp_path / "good", "good")
+    monkeypatch.setenv("LLM_WIKI_PATH", os.pathsep.join([str(bad), str(good)]))
+    assert [r.name for r in known_wikis()] == ["good"]
+    assert resolve("good", tmp_path).path == good
+    with pytest.raises(ConfigError):
+        resolve(str(bad), tmp_path)
+
+
+def test_non_bmp_names_round_trip(tmp_path):
+    root = make_wiki(tmp_path / "wiki-\U0001F600", "smile-\U0001F600")
+    register("smile-\U0001F600", root)
+    assert resolve("smile-\U0001F600", tmp_path).path == root
+
+
+def test_corrupt_registry_raises_config_error():
+    registry_file().parent.mkdir(parents=True)
+    registry_file().write_text("[wikis\n")
+    with pytest.raises(ConfigError, match="wikis.toml"):
+        known_wikis()
+
+
+def test_dead_default_raises_wikinotfound(tmp_path):
+    root = make_wiki(tmp_path / "a", "alpha")
+    register("alpha", root)
+    (root / WIKI_FILE).unlink()
+    with pytest.raises(WikiNotFound, match="wiki init"):
+        resolve(None, tmp_path / "elsewhere")
+
+
+def test_malformed_env_wiki_does_not_break_resolve(tmp_path, monkeypatch):
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / config.WIKI_FILE).write_text("not = [valid", encoding="utf-8")
+    good = make_wiki(tmp_path / "good", "good")
+    other = make_wiki(tmp_path / "other", "other")
+    registry.register("other", other)
+    monkeypatch.setenv("LLM_WIKI_PATH", f"{bad}:{good}")
+    assert registry.resolve(None, good).name == "good"  # by cwd
+    assert registry.resolve(None, tmp_path).name == "other"  # by default
+    assert registry.resolve("other", tmp_path).name == "other"  # by name
+    assert registry.resolve("good", tmp_path).origin == "env"
+
+
+def test_explicit_arg_matching_nothing_raises(tmp_path):
+    root = make_wiki(tmp_path / "a", "alpha")
+    registry.register("alpha", root)
+    with pytest.raises(WikiNotFound, match="wiki init"):
+        registry.resolve("nope", root)
+
+
+def test_corrupt_registry_raises_config_error(tmp_path):
+    registry.registry_file().parent.mkdir(parents=True)
+    registry.registry_file().write_text("[wikis\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="wikis.toml"):
+        registry.known_wikis()
+
+
+def test_registered_wiki_by_cwd_returns_registry_origin(tmp_path):
+    root = make_wiki(tmp_path / "a", "alpha")
+    registry.register("alpha", root)
+    sub = root / "wiki"
+    sub.mkdir()
+    assert registry.resolve(None, sub) == registry.WikiRef("alpha", root, "registry")
+
+
+def test_env_var_unset_by_fixture():
+    assert "LLM_WIKI_PATH" not in os.environ
