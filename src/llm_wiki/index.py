@@ -10,6 +10,14 @@ MAX_TOP_LINES = 99  # index.md must stay under 100 lines
 TRUNCATED = "- … see section indexes"
 
 
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _link_title(text: str) -> str:
+    return _one_line(text).replace("[", r"\[").replace("]", r"\]")
+
+
 def _sort_key(page: Page) -> tuple[bool, str, str]:
     assert page.fm is not None
     return (page.fm.type != "hub", page.fm.title.casefold(), page.rel)
@@ -39,7 +47,7 @@ def _section_lines(pages: list[Page], section: str) -> list[str]:
         fm = p.fm
         assert fm is not None
         link = p.rel.removeprefix(section + "/")
-        lines.append(f"- [{fm.title}]({link}) — {fm.summary} — {fm.status} — {fm.last_verified.isoformat()}")
+        lines.append(f"- [{_link_title(fm.title)}]({link}) — {_one_line(fm.summary)} — {fm.status} — {fm.last_verified.isoformat()}")
     return lines
 
 
@@ -77,11 +85,11 @@ def build_indexes(root: Path, cfg: WikiConfig) -> list[Path]:
         (p for pages in by_section.values() for p in pages if p.fm and p.fm.type == "hub"),
         key=lambda p: (p.fm.title.casefold(), p.rel),  # type: ignore[union-attr]
     )
-    hub_lines = [f"- [{p.fm.title}]({p.rel})" for p in hubs]  # type: ignore[union-attr]
+    hub_lines = [f"- [{_link_title(p.fm.title)}]({p.rel})" for p in hubs]  # type: ignore[union-attr]
     header = _header(top, f"# {cfg.name}\n\n{cfg.description}\n\n")
     budget = MAX_TOP_LINES - header.count("\n") - 1 - len(lines)
     if len(hub_lines) > budget:
-        hub_lines = hub_lines[: max(budget - 1, 0)] + [TRUNCATED]
+        hub_lines = hub_lines[: budget - 1] + [TRUNCATED] if budget >= 1 else []
     if _write_if_changed(top, header, lines + hub_lines):
         changed.append(top)
     return changed

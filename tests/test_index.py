@@ -99,3 +99,42 @@ def test_invalid_pages_skipped(tmp_path):
     assert "bad.md" not in text
     top = (tmp_path / "wiki/index.md").read_text(encoding="utf-8")
     assert "— 1 pages —" in top
+
+
+def test_multiline_summary_and_bracket_title_stay_one_line(tmp_path):
+    text = page("A [b] — c", summary="'line one\n  line two'")
+    write(tmp_path, "conventions/odd.md", text)
+    build_indexes(tmp_path, CFG)
+    out = (tmp_path / "wiki/conventions/_index.md").read_text(encoding="utf-8")
+    lines = out.split(GENERATED_MARK + "\n")[1].splitlines()
+    assert lines == [r"- [A \[b\] — c](odd.md) — line one line two — as-is — 2026-01-01"]
+
+
+def test_top_index_under_100_lines_when_budget_exhausted(tmp_path):
+    cfg = CFG.model_copy(update={
+        "sections": [Section(name=f"s{i:02}", kind="as-is", description="d") for i in range(85)]
+    })
+    write(tmp_path, "s00/h1.md", page("H1", type_="hub"))
+    write(tmp_path, "s00/h2.md", page("H2", type_="hub"))
+    build_indexes(tmp_path, cfg)
+    lines = (tmp_path / "wiki/index.md").read_text(encoding="utf-8").splitlines()
+    assert len(lines) < 100
+
+
+def test_existing_header_without_mark_kept_whole(tmp_path):
+    write(tmp_path, "conventions/a.md", page("A"))
+    idx = tmp_path / "wiki/conventions/_index.md"
+    idx.write_text("# Old\n\nNotes.\n", encoding="utf-8")
+    build_indexes(tmp_path, CFG)
+    text = idx.read_text(encoding="utf-8")
+    assert text.startswith("# Old\n\nNotes.\n\n" + GENERATED_MARK + "\n")
+    assert "- [A](a.md)" in text
+
+
+def test_page_in_unconfigured_dir_ignored(tmp_path):
+    write(tmp_path, "conventions/a.md", page("A"))
+    write(tmp_path, "stray/z.md", page("Stray", type_="hub"))
+    build_indexes(tmp_path, CFG)
+    assert not (tmp_path / "wiki/stray/_index.md").exists()
+    top = (tmp_path / "wiki/index.md").read_text(encoding="utf-8")
+    assert "Stray" not in top and "stray" not in top
