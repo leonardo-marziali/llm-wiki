@@ -29,11 +29,25 @@ def commit_all(root: Path, message: str) -> str:
     return git(root, "rev-parse", "HEAD").strip()
 
 
+def _existing_dir(path: Path) -> Path:
+    cwd = Path(path).resolve()
+    while not cwd.is_dir():  # path may not exist yet
+        cwd = cwd.parent
+    return cwd
+
+
+def enclosing_repo(path: Path) -> Path | None:
+    """Toplevel of the git work tree containing ``path`` (which may not exist yet), else None."""
+    try:
+        top = git(_existing_dir(path), "rev-parse", "--show-toplevel").strip()
+    except GitError:
+        return None
+    return Path(top).resolve() if top else None
+
+
 def has_identity(root: Path) -> bool:
     """True when git can build author and committer identities (config or GIT_* env)."""
-    cwd = Path(root).resolve()
-    while not cwd.is_dir():  # root may not exist yet
-        cwd = cwd.parent
+    cwd = _existing_dir(root)
     try:
         git(cwd, "var", "GIT_AUTHOR_IDENT")
         git(cwd, "var", "GIT_COMMITTER_IDENT")

@@ -336,3 +336,54 @@ def test_init_takes_over_stale_registry_entry(tmp_path):
     res = init_wiki(b, name="demo", today=TODAY)
     assert res.created is True
     assert registry.resolve("demo", tmp_path).path == b.resolve()
+
+
+def _host_repo(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    gitops.init_repo(host)
+    (host / "host.txt").write_text("h", encoding="utf-8")
+    gitops.git(host, "add", "host.txt")
+    return host
+
+
+def test_init_inside_existing_repo_skips_git(tmp_path):
+    host = _host_repo(tmp_path)
+    wiki = host / "docs" / "wiki"
+    result = init_wiki(wiki, today=TODAY)
+    assert result.created
+    assert result.host_repo == host.resolve()
+    assert not (wiki / ".git").exists()
+    assert gitops.git(host, "rev-list", "--all").split() == []
+    assert gitops.git(host, "diff", "--cached", "--name-only").split() == ["host.txt"]
+    assert lint(wiki, load_config(wiki), today=TODAY).errors == 0
+
+
+def test_standalone_init_has_no_host_repo_and_one_commit(tmp_path):
+    root = tmp_path / "w"
+    result = init_wiki(root, today=TODAY)
+    assert result.host_repo is None
+    assert len(gitops.git(root, "rev-list", "--all").split()) == 1
+
+
+def test_init_inside_repo_without_identity_succeeds(tmp_path, monkeypatch):
+    host = _host_repo(tmp_path)
+    monkeypatch.setattr(gitops, "has_identity", lambda root: False)
+    result = init_wiki(host / "wiki", today=TODAY)
+    assert result.created and result.host_repo == host.resolve()
+
+
+def test_enclosing_repo_detection(tmp_path):
+    assert gitops.enclosing_repo(tmp_path / "plain" / "x") is None
+    host = _host_repo(tmp_path)
+    assert gitops.enclosing_repo(host / "a" / "b" / "c") == host.resolve()
+
+
+def test_cli_init_host_repo_message(tmp_path):
+    host = _host_repo(tmp_path)
+    wiki = host / "wiki"
+    r = CliRunner().invoke(app, ["init", str(wiki), "--name", "acme"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.strip() == (
+        f"created wiki acme at {wiki.resolve()} inside existing git repository {host.resolve()} "
+        "(not committed — review and commit it there)")

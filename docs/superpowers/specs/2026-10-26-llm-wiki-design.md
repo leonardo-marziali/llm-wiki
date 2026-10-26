@@ -14,7 +14,7 @@ The user wants a personal, general-purpose **LLM wiki** (Karpathy pattern) with 
 - **Consumers = coding agents.** They read files directly through a pointer and a read-only lookup skill plus `wiki search`. Reads never cost LLM calls.
 - **Write approach C: plan → edit.** A tool-less JSON plan is validated by Python, then an edit session restricted to the planned files.
 - **No third-party vendor integrations.** No Atlassian, MCP or REST exporters. Sources are local files only.
-- **Location-agnostic wikis.** Each wiki is a plain git repo that can live at any path and is versioned wherever the user keeps it. The CLI never assumes a location.
+- **Location-agnostic wikis.** Each wiki is either its own git repo or a folder inside an existing repository (for example an app or project repo); it can live at any path and is versioned wherever the user keeps it. `wiki init` never initialises or commits inside a host repo. The CLI never assumes a location.
 - **The lookup skill is installed globally** (user-level skills). It finds wikis through the registry or an environment variable, not through repo-specific wiring.
 - **The CLI is a normal, publishable Python package:** a wheel with its templates and prompts as package data, a versioned release, and an installed `wiki` entry point. Nothing depends on this source checkout at runtime.
 
@@ -74,7 +74,7 @@ The daily loop is `wiki ingest`; everything else is occasional.
   - `LLM_WIKI_PATH` (an os.pathsep-separated list of wiki dirs) adds wikis with no registration step. This suits setups where wikis are provisioned rather than created.
   - `wiki status --all` lists every known wiki with its path and cap usage.
 
-## 3. Wiki layout (one git repo per wiki)
+## 3. Wiki layout (its own git repo, or a folder inside an existing repo)
 
 ```
 <wiki>/

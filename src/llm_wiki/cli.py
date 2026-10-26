@@ -56,14 +56,17 @@ def init(
     profile: str = typer.Option("software", "--profile", help="software or general."),
     description: str = typer.Option("", "--description", help="One line: what belongs in this wiki."),
 ) -> None:
-    """Create a wiki (git repo, schema, skeleton) or register an existing one."""
+    """Create a wiki (own git repo, or a folder in an existing repo) or register an existing one."""
     from llm_wiki.init import init_wiki
 
     if profile not in ("software", "general"):
         raise WikiError("--profile must be software or general")
     res = init_wiki(path, name=name, profile=profile, description=description)
     verb = "created wiki" if res.created else "registered existing wiki"
-    typer.echo(f"{verb} {res.ref.name} at {res.ref.path}")
+    msg = f"{verb} {res.ref.name} at {res.ref.path}"
+    if res.host_repo is not None:
+        msg += f" inside existing git repository {res.host_repo} (not committed — review and commit it there)"
+    typer.echo(msg)
 
 
 @app.command()

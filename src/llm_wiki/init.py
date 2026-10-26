@@ -1,4 +1,4 @@
-"""`wiki init`: create the wiki skeleton (spec §3), commit it and register it."""
+"""`wiki init`: create the wiki skeleton (spec §3), commit it (unless it sits in a host repo) and register it."""
 
 import re
 import shutil
@@ -32,6 +32,7 @@ _KIND_RULE = {
 class InitResult:
     ref: WikiRef
     created: bool
+    host_repo: Path | None = None  # enclosing repo the wiki lives in; None when init made its own
 
 
 def slug(text: str) -> str:
@@ -149,7 +150,8 @@ def init_wiki(
     _check_name_free(name, root)
     cfg = WikiConfig(name=name, description=" ".join(description.split()), profile=profile,
                      sections=load_profile(profile))
-    if not gitops.has_identity(root):
+    host_repo = gitops.enclosing_repo(root)
+    if host_repo is None and not gitops.has_identity(root):
         raise GitError("configure git user.name and user.email")
     today = today or date.today()
 
@@ -162,10 +164,11 @@ def init_wiki(
             details = "; ".join(f"{f.code} {f.path}: {f.message}" for f in report.findings
                                 if f.severity == "error")
             raise WikiError(f"new wiki fails lint: {details}")
-        gitops.init_repo(root)
-        gitops.commit_all(root, f"chore: init wiki {name}")
+        if host_repo is None:
+            gitops.init_repo(root)
+            gitops.commit_all(root, f"chore: init wiki {name}")
     except BaseException:
         _clean(root, created_dir)
         raise
     register(name, root)
-    return InitResult(WikiRef(name, root, "registry"), created=True)
+    return InitResult(WikiRef(name, root, "registry"), created=True, host_repo=host_repo)
