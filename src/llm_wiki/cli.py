@@ -198,12 +198,10 @@ def doctor(
     fmt: str = typer.Option("text", "--format", help="text or json."),
 ) -> None:
     """Check claude, git and optional tools (exit 1 if a check fails)."""
-    import os
-
     from llm_wiki import registry
-    from llm_wiki.config import load_llm_settings
-    from llm_wiki.doctor import run_doctor
-    from llm_wiki.errors import WikiNotFound
+    from llm_wiki.config import LlmSettings, load_llm_settings
+    from llm_wiki.doctor import Check, run_doctor
+    from llm_wiki.errors import ConfigError, WikiNotFound
 
     if fmt not in ("text", "json"):
         raise WikiError("--format must be text or json")
@@ -213,7 +211,13 @@ def doctor(
     except WikiNotFound:
         if wiki is not None:
             raise
-    checks = run_doctor(load_llm_settings(root), probe=not no_probe, env=os.environ)
+    config_checks: list[Check] = []
+    try:
+        settings = load_llm_settings(root)
+    except ConfigError as e:  # a bad config is one more finding, not a reason to skip the rest
+        config_checks.append(Check("config", "fail", f"{e}; using default llm settings"))
+        settings = LlmSettings()
+    checks = config_checks + run_doctor(settings, probe=not no_probe)
     if fmt == "json":
         typer.echo(json.dumps([dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2))
     else:

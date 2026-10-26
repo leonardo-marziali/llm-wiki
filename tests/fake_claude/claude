@@ -7,7 +7,8 @@ FAKE_CLAUDE_VERSION_SLEEP. Response keys: stdout (dict or str), stderr, exit, sl
 write ({path: text}, relative to cwd; absolute paths are written as given),
 echo_canary (put the canary word from cwd/CLAUDE.md into stdout.structured_output.canary),
 echo_token (put the token from the system prompt file into structured_output.token),
-write_abs_from_prompt (write "ok" to the first absolute path found in stdin).
+write_abs_from_prompt (write "ok" to the first absolute path found in stdin),
+deny_abs_from_prompt (report a Write permission denial for that path without writing it).
 """
 import json
 import os
@@ -65,6 +66,11 @@ if resp.get("write_abs_from_prompt"):
         with open(m.group(0), "w", encoding="utf-8") as fh:
             fh.write("ok")
 out = resp.get("stdout", "")
+if resp.get("deny_abs_from_prompt"):
+    m = re.search(r"/[^\s]+", stdin)
+    denial = {"tool_name": "Write", "tool_use_id": "toolu_fake",
+              "tool_input": {"file_path": m.group(0), "content": "ok"}}
+    out = dict(out, permission_denials=[*out.get("permission_denials", []), denial])
 if resp.get("echo_canary"):
     with open(os.path.join(cwd, "CLAUDE.md"), encoding="utf-8") as fh:
         word = re.search(r"canary word is (\S+?)\.", fh.read()).group(1)

@@ -78,7 +78,9 @@ def test_doctor_nonexistent_claude_path_fails_cleanly(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_WIKI_CLAUDE", str(tmp_path / "nope"))
     res = _doctor()
     assert res.exit_code == 1
-    assert _by_name(res)["claude"]["status"] == "fail"
+    c = _by_name(res)["claude"]
+    assert c["status"] == "fail"
+    assert c["detail"] == f"LLM_WIKI_CLAUDE points to a missing file: {tmp_path / 'nope'}"
 
 
 def test_doctor_warns_on_api_key_env(fake_claude, monkeypatch):
@@ -196,7 +198,7 @@ def test_hidden_flag_not_required_in_help(fake_claude, monkeypatch):
 
 
 def test_text_output_pads_to_widest_name(fake_claude):
-    fake_claude.queue(PROBE_RESP, PROBE_RESP, {"stdout": ok(), "write": {"inside.txt": "ok"}})
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
     lines = runner.invoke(app, ["doctor"]).output.splitlines()
     cols = {len(ln) - len(ln.split(None, 2)[2]) for ln in lines}
     assert len(cols) == 1, lines
@@ -227,16 +229,18 @@ def test_probe_model_usage_limit_fails_cleanly(fake_claude):
 
 
 def test_probes_dedupe_models(fake_claude):
-    fake_claude.queue(PROBE_RESP, PROBE_RESP,
-                      {"stdout": ok(), "write": {"inside.txt": "ok"}})
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
     checks = run_doctor(S, probe=True)
     names = [c.name for c in checks]
     assert names[-3:] == [f"model:{S.model('plan')}", f"model:{S.model('deep')}", "edit-confinement"]
     assert len(fake_claude.calls()) == 3
 
 
+EDIT_OK = {"stdout": ok(), "write": {"inside.txt": "ok"}, "deny_abs_from_prompt": True}
+
+
 def test_edit_probe_ok(fake_claude):
-    fake_claude.queue({"stdout": ok(), "write": {"inside.txt": "ok"}})
+    fake_claude.queue(EDIT_OK)
     assert probe_edit_confinement(S).status == "ok"
     (call,) = fake_claude.calls()
     assert call["argv"][call["argv"].index("--max-budget-usd") + 1] == "0.25"
@@ -290,3 +294,62 @@ def test_probes_skipped_when_version_too_old(fake_claude, monkeypatch):
     checks = run_doctor(S, probe=True)
     assert not [c for c in checks if c.name.startswith("model:")]
     assert fake_claude.calls() == []
+
+
+def test_edit_probe_without_escape_attempt_is_unproven(fake_claude):
+    fake_claude.queue({"stdout": ok(), "write": {"inside.txt": "ok"}})
+    c = probe_edit_confinement(S)
+    assert c.status == "warn" and "confinement unproven" in c.detail
+
+
+def test_edit_probe_denial_of_other_path_is_unproven(fake_claude):
+    other = {"permission_denials": [{"tool_name": "Write", "tool_input": {"file_path": "/elsewhere/x"}}]}
+    fake_claude.queue({"stdout": {**ok(), **other}, "write": {"inside.txt": "ok"}})
+    assert probe_edit_confinement(S).status == "warn"
+
+
+OVERLOADED = {"stdout": "", "stderr": "API Error: 529 overloaded", "exit": 1}
+
+
+def test_probes_are_not_retried(fake_claude):
+    fake_claude.queue(OVERLOADED, PROBE_RESP)
+    assert probe_model("plan", S).status == "fail"
+    assert len(fake_claude.calls()) == 1
+    fake_claude.queue(OVERLOADED, EDIT_OK)
+    assert probe_edit_confinement(S).status == "fail"
+    assert len(fake_claude.calls()) == 2
+
+
+def test_probe_timeout_is_120s(fake_claude, monkeypatch):
+    import llm_wiki.doctor as d
+
+    seen = []
+    monkeypatch.setattr(d, "run", lambda call: seen.append(call) or (_ for _ in ()).throw(
+        d.ClaudeError("x")))
+    probe_model("plan", S)
+    probe_edit_confinement(S)
+    assert [(c.timeout_s, c.max_retries) for c in seen] == [(120, 0), (120, 0)]
+
+
+def test_probe_temp_dir_failure_is_fail_row(fake_claude, monkeypatch):
+    import tempfile
+
+    def boom(*a, **kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", boom)
+    for c in (probe_model("plan", S), probe_edit_confinement(S)):
+        assert c.status == "fail" and "No space left" in c.detail
+    assert fake_claude.calls() == []
+
+
+def test_bad_config_is_fail_row_and_other_checks_run(fake_claude):
+    from llm_wiki.config import user_config_file
+
+    user_config_file().parent.mkdir(parents=True, exist_ok=True)
+    user_config_file().write_text("[llm\n", encoding="utf-8")
+    res = _doctor("--no-probe")
+    assert res.exit_code == 1
+    checks = _by_name(res)
+    assert checks["config"]["status"] == "fail" and "config.toml" in checks["config"]["detail"]
+    assert checks["claude"]["status"] == "ok" and checks["git"]["status"] == "ok"

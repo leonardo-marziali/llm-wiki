@@ -160,10 +160,11 @@ Based on kbpipe `llm/runner.py` (`build_argv`, `child_env`, `classify`, retries,
 
 - The prompt goes in on stdin. The plan call's cwd is an empty directory; the edit session's cwd is the wiki.
 - The child env strips API-key variables and disables auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`). `--bare` is never passed.
-- Error handling: transient errors get 3 jittered retries; usage limits pause with a clear message; auth failures print "run `claude /login`"; schema failures get one retry with the error.
+- Error handling: transient errors get 3 jittered retries; usage limits pause with a clear message; auth failures print "run `claude /login`"; schema failures get one retry with the error. Edit sessions are never retried automatically; ingest's post-check and rollback handle a failed edit. The reported cost is the sum over all attempts.
+- `--system-prompt-file` is accepted but missing from `claude --help`, so `wiki doctor` does not look for it there. Instead, its model probe proves the flag works: the model must echo a token that appears only in the system prompt file.
 - The system prompt is byte-stable (`AGENTS.md` first) so prompt caching works.
 - Default models (`~/.config/llm-wiki/config.toml`, overridable per wiki): `claude-sonnet-5-5` for plan and edit, `claude-opus-5-5` for `consolidate` and `lint --deep`. _(My call.)_
-- Per-call budget caps are configurable; the default is $1 for a plan call and $2 for an edit call.
+- Per-call budget caps are configurable; the default is $1 for a plan call, $2 for an edit call and $3 for a `deep` call.
 
 ## 7. Agent consumption (read side, zero LLM cost from the CLI)
 

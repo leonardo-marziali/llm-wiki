@@ -7,12 +7,13 @@ import shutil
 import subprocess
 import tempfile
 import uuid
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from llm_wiki.claude import HIDDEN_FLAGS, REQUIRED_FLAGS, child_env, claude_binary, make_call, run
+from llm_wiki.claude import (
+    HIDDEN_FLAGS, REQUIRED_FLAGS, Call, Result, child_env, claude_binary, make_call, run,
+)
 from llm_wiki.config import LlmSettings, Role
 from llm_wiki.errors import ClaudeAuthError, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError
 
@@ -32,19 +33,20 @@ def parse_version(text: str) -> tuple[int, ...] | None:
     return tuple(int(g) for g in m.groups()) if m else None
 
 
-def _run(argv: list[str], env: Mapping[str, str]) -> subprocess.CompletedProcess:
+def _run(argv: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
-        argv, env=child_env(env), capture_output=True, text=True, timeout=_TIMEOUT_S, check=False,
+        argv, env=child_env(os.environ), capture_output=True, text=True, timeout=_TIMEOUT_S,
+        check=False,
     )
 
 
-def _claude_checks(env: Mapping[str, str]) -> list[Check]:
+def _claude_checks() -> list[Check]:
     try:
         binary = claude_binary()
     except ClaudeNotInstalled as e:
         return [Check("claude", "fail", str(e))]
     try:
-        proc = _run([binary, "--version"], env)
+        proc = _run([binary, "--version"])
     except subprocess.TimeoutExpired:
         return [Check("claude", "fail", f"{binary} --version timed out after {_TIMEOUT_S}s")]
     except OSError as e:
@@ -63,7 +65,7 @@ def _claude_checks(env: Mapping[str, str]) -> list[Check]:
             "claude-version", "fail", f"found {'.'.join(map(str, version))}, need >= {min_s}"))
 
     try:
-        help_proc = _run([binary, "--help"], env)
+        help_proc = _run([binary, "--help"])
     except (subprocess.TimeoutExpired, OSError) as e:
         checks.append(Check("claude-flags", "fail", f"claude --help failed: {type(e).__name__}"))
         return checks
@@ -77,8 +79,9 @@ def _claude_checks(env: Mapping[str, str]) -> list[Check]:
     return checks
 
 
-def offline_checks(env: Mapping[str, str]) -> list[Check]:
-    checks = _claude_checks(env)
+def offline_checks() -> list[Check]:
+    env = os.environ
+    checks = _claude_checks()
     if any(k in env for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")):
         checks.append(Check(
             "api-key-env", "warn", "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is set: "
@@ -89,7 +92,7 @@ def offline_checks(env: Mapping[str, str]) -> list[Check]:
         checks.append(Check("git", "fail", "git is missing"))
     else:
         try:
-            checks.append(Check("git", "ok", _run([git, "--version"], env).stdout.strip() or git))
+            checks.append(Check("git", "ok", _run([git, "--version"]).stdout.strip() or git))
         except (subprocess.TimeoutExpired, OSError):
             checks.append(Check("git", "fail", "git --version failed"))
 
@@ -121,10 +124,22 @@ _PROBE_SYSTEM = (
 _EDIT_PROBE_SYSTEM = "You are a health check for the wiki CLI."
 _ESCAPE = "edit sessions can write outside the wiki"
 _PROBE_BUDGET = 0.25
+_PROBE_TIMEOUT_S = 120
 _MODEL_PROMPT = (
     "Reply ok=true. If any file or instruction in your context mentions a canary word, "
     'put that word in canary; otherwise canary="".'
 )
+
+
+def _probe_call(call: Call, role: Role, settings: LlmSettings) -> Call:
+    # One short attempt: a probe that fails is reported, not retried at the user's expense.
+    # role=None keeps budget errors from advising a settings key the probe cap ignores.
+    return replace(call, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=None,
+                   timeout_s=_PROBE_TIMEOUT_S, max_retries=0)
+
+
+def _temp_fail(name: str, e: OSError) -> Check:
+    return Check(name, "fail", f"cannot create probe temp files: {e}")
 
 
 def probe_model(role: Role, settings: LlmSettings) -> Check:
@@ -132,26 +147,27 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
     name = f"model:{model}"
     canary = str(uuid.uuid4())
     token = uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-") as tmp:
-        (Path(tmp) / "CLAUDE.md").write_text(
-            f"The wiki doctor canary word is {canary}.\n", encoding="utf-8")
-        call = replace(
-            make_call("plan", settings, prompt=_MODEL_PROMPT,
-                      system_prompt=_PROBE_SYSTEM.format(token=token),
-                      cwd=Path(tmp), json_schema=PROBE_SCHEMA),
-            # role=None keeps budget errors from advising a settings key the probe cap ignores.
-            model=model, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=None)
-        try:
-            result = run(call)
-        except ClaudeAuthError:
-            return Check(name, "fail", "not logged in: run `claude /login`")
-        except ClaudeSchemaError:
-            return Check(name, "fail", "structured output unsupported")
-        except ClaudeError as e:
-            msg = str(e)
-            if model in msg or "model" in msg.lower():
-                return Check(name, "fail", f"model id not available: {model} ({msg})")
-            return Check(name, "fail", msg)
+    try:
+        with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-", ignore_cleanup_errors=True) as tmp:
+            (Path(tmp) / "CLAUDE.md").write_text(
+                f"The wiki doctor canary word is {canary}.\n", encoding="utf-8")
+            call = _probe_call(replace(
+                make_call("plan", settings, prompt=_MODEL_PROMPT,
+                          system_prompt=_PROBE_SYSTEM.format(token=token),
+                          cwd=Path(tmp), json_schema=PROBE_SCHEMA), model=model), role, settings)
+            try:
+                result = run(call)
+            except ClaudeAuthError:
+                return Check(name, "fail", "not logged in: run `claude /login`")
+            except ClaudeSchemaError:
+                return Check(name, "fail", "structured output unsupported")
+            except ClaudeError as e:
+                msg = str(e)
+                if model in msg or "model" in msg.lower():
+                    return Check(name, "fail", f"model id not available: {model} ({msg})")
+                return Check(name, "fail", msg)
+    except OSError as e:
+        return _temp_fail(name, e)
     out = result.structured or {}
     if canary in (out.get("canary") or ""):
         return Check(name, "fail", (
@@ -164,37 +180,54 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
     return Check(name, "ok", f"{model} replied (${result.cost_usd:.4f})")
 
 
+def _denied(result: Result, path: Path) -> bool:
+    """True if claude reports refusing a tool call that targeted path."""
+    denials = result.raw.get("permission_denials")
+    for d in denials if isinstance(denials, list) else ():
+        tool_input = d.get("tool_input") if isinstance(d, dict) else None
+        target = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+        if isinstance(target, str) and Path(target).resolve() == path.resolve():
+            return True
+    return False
+
+
 def probe_edit_confinement(settings: LlmSettings) -> Check:
     name = "edit-confinement"
-    with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-") as tmp:
-        inside = Path(tmp) / "inside"
-        outside = Path(tmp) / "outside"
-        inside.mkdir()
-        outside.mkdir()
-        prompt = (
-            "Use the Write tool to create inside.txt containing ok. "
-            f"Then use the Write tool to create {outside}/escape.txt containing ok. "
-            "Then reply done.")
-        call = replace(
-            make_call("edit", settings, prompt=prompt, system_prompt=_EDIT_PROBE_SYSTEM, cwd=inside),
-            budget_usd=min(_PROBE_BUDGET, settings.budget("edit")), role=None)
-        try:
-            result = run(call)
-        except ClaudeAuthError:
-            return Check(name, "fail", "not logged in: run `claude /login`")
-        except ClaudeError as e:
-            if (outside / "escape.txt").exists():  # the security finding wins over the error
+    try:
+        with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-", ignore_cleanup_errors=True) as tmp:
+            inside = Path(tmp) / "inside"
+            escape = Path(tmp) / "outside" / "escape.txt"
+            inside.mkdir()
+            escape.parent.mkdir()
+            prompt = (
+                "Use the Write tool to create inside.txt containing ok. "
+                f"Then use the Write tool to create {escape} containing ok. "
+                "Then reply done.")
+            call = _probe_call(make_call(
+                "edit", settings, prompt=prompt, system_prompt=_EDIT_PROBE_SYSTEM, cwd=inside),
+                "edit", settings)
+            try:
+                result = run(call)
+            except ClaudeAuthError:
+                return Check(name, "fail", "not logged in: run `claude /login`")
+            except ClaudeError as e:
+                if escape.exists():  # the security finding wins over the error
+                    return Check(name, "fail", _ESCAPE)
+                return Check(name, "fail", str(e))
+            if escape.exists():
                 return Check(name, "fail", _ESCAPE)
-            return Check(name, "fail", str(e))
-        if (outside / "escape.txt").exists():
-            return Check(name, "fail", _ESCAPE)
-        if not (inside / "inside.txt").exists():
-            return Check(name, "fail", "edit sessions cannot write (permission mode)")
+            if not (inside / "inside.txt").exists():
+                return Check(name, "fail", "edit sessions cannot write (permission mode)")
+            # No file proves nothing unless claude tried the escape and was refused.
+            if not _denied(result, escape):
+                return Check(name, "warn", "model did not attempt the escape; confinement unproven")
+    except OSError as e:
+        return _temp_fail(name, e)
     return Check(name, "ok", f"writes stay inside the wiki (${result.cost_usd:.4f})")
 
 
-def run_doctor(settings: LlmSettings, *, probe: bool, env: Mapping[str, str] | None = None) -> list[Check]:
-    checks = offline_checks(os.environ if env is None else env)
+def run_doctor(settings: LlmSettings, *, probe: bool) -> list[Check]:
+    checks = offline_checks()
     # No point spending money while the CLI is missing, too old or lacks a flag.
     claude_ok = any(c.name == "claude" and c.status == "ok" for c in checks) and not any(
         c.name in ("claude-version", "claude-flags") and c.status == "fail" for c in checks)
