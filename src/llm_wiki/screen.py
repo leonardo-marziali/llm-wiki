@@ -110,7 +110,8 @@ INJECTION_RULES: dict[str, list[str]] = {
     "base64_blob": [r"[A-Za-z0-9+/]{400,}={0,2}"],
 }
 _COMPILED = {k: [re.compile(p) for p in ps] for k, ps in INJECTION_RULES.items()}
-_HIDDEN = re.compile("[​-‍⁠‪-‮⁦-⁩\U000e0000-\U000e007f﻿]")
+_B64 = re.compile(INJECTION_RULES["base64_blob"][0])
+_HIDDEN = re.compile("[\u200b-\u200f\u061c\u2060\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f\ufeff]")
 _EXCERPT_MAX = 80
 
 
@@ -139,15 +140,13 @@ def find_injection(text: str) -> list[Hit]:
                 hi = mid - 1
         return lo + 1
 
+    # every excerpt is built from lines with all base64 blobs masked
+    masked = [_B64.sub(lambda m: f"<base64 {len(m.group(0))} chars>", ln) for ln in lines]
     for kind, rxs in _COMPILED.items():
         for rx in rxs:
             for m in rx.finditer(text):
                 n = line_of(m.start())
-                line = lines[n - 1]
-                if kind == "base64_blob":
-                    col = m.start() - starts[n - 1]
-                    line = line[:col] + f"<base64 {len(m.group(0))} chars>" + line[col + len(m.group(0)):]
-                hits.append(Hit(kind, n, _clip(line)))
+                hits.append(Hit(kind, n, _clip(masked[n - 1])))
     hidden: dict[int, list[str]] = {}
     for m in _HIDDEN.finditer(text):
         if m.start() == 0 and m.group(0) == "﻿":
@@ -171,10 +170,10 @@ class ScreenResult:
 
 
 def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
-    tmp_dir.mkdir(parents=True, exist_ok=True)
     src = tmp_dir / f"gitleaks-{uuid.uuid4().hex}.txt"
     report = tmp_dir / f"gitleaks-{uuid.uuid4().hex}.json"
     try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         src.write_text(text, encoding="utf-8")
         proc = subprocess.run(
             [binary, "detect", "--no-git", "--source", str(src), "--report-format", "json",
@@ -189,8 +188,11 @@ def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
     except (OSError, subprocess.SubprocessError, ValueError):
         return ["gitleaks-error"]
     finally:
-        src.unlink(missing_ok=True)
-        report.unlink(missing_ok=True)
+        for f in (src, report):
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                pass
     return sorted({str(f["RuleID"]) for f in findings if isinstance(f, dict) and "RuleID" in f})
 
 
