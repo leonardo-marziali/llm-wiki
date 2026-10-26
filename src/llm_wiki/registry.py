@@ -1,0 +1,107 @@
+"""Wiki registry and resolution of which wiki a command operates on."""
+
+import json
+import os
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import platformdirs
+
+from llm_wiki.config import WIKI_FILE, load_config
+from llm_wiki.errors import WikiNotFound
+
+NOT_FOUND = "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
+
+
+@dataclass(frozen=True)
+class WikiRef:
+    name: str
+    path: Path
+    origin: Literal["registry", "env", "path"]
+
+
+def registry_file() -> Path:
+    home = os.environ.get("LLM_WIKI_HOME")
+    base = Path(home) if home else Path(platformdirs.user_config_dir("llm-wiki"))
+    return base / "wikis.toml"
+
+
+def _read() -> tuple[str | None, dict[str, str]]:
+    f = registry_file()
+    if not f.exists():
+        return None, {}
+    data = tomllib.loads(f.read_text(encoding="utf-8"))
+    return data.get("default"), dict(data.get("wikis", {}))
+
+
+def _write(default: str | None, wikis: dict[str, str]) -> None:
+    lines = []
+    if default is not None:
+        lines.append(f"default = {json.dumps(default)}")
+        lines.append("")
+    lines.append("[wikis]")
+    for name in sorted(wikis):
+        lines.append(f"{json.dumps(name)} = {json.dumps(wikis[name])}")
+    f = registry_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def register(name: str, path: Path, make_default: bool = False) -> None:
+    default, wikis = _read()
+    wikis[name] = str(Path(path).resolve())
+    if make_default or default is None:
+        default = name
+    _write(default, wikis)
+
+
+def known_wikis() -> list[WikiRef]:
+    _, wikis = _read()
+    refs = [WikiRef(n, Path(p), "registry") for n, p in wikis.items()]
+    seen = {r.path for r in refs}
+    for entry in os.environ.get("LLM_WIKI_PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        p = Path(entry).resolve()
+        if p in seen or not (p / WIKI_FILE).is_file():
+            continue
+        seen.add(p)
+        refs.append(WikiRef(load_config(p).name, p, "env"))
+    return refs
+
+
+def find_root(start: Path) -> Path | None:
+    start = Path(start).resolve()
+    for d in (start, *start.parents):
+        if (d / WIKI_FILE).is_file():
+            return d
+    return None
+
+
+def _ref_for_path(root: Path) -> WikiRef:
+    root = root.resolve()
+    for ref in known_wikis():
+        if ref.path == root:
+            return ref
+    return WikiRef(load_config(root).name, root, "path")
+
+
+def resolve(arg: str | None, cwd: Path) -> WikiRef:
+    refs = known_wikis()
+    if arg is not None:
+        for ref in refs:
+            if ref.name == arg:
+                return ref
+        candidate = (Path(cwd) / arg).resolve()
+        if (candidate / WIKI_FILE).is_file():
+            return _ref_for_path(candidate)
+    else:
+        root = find_root(cwd)
+        if root is not None:
+            return _ref_for_path(root)
+        default, wikis = _read()
+        if default in wikis:
+            return WikiRef(default, Path(wikis[default]), "registry")
+    raise WikiNotFound(NOT_FOUND)
