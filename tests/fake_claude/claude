@@ -2,11 +2,15 @@
 """Scripted stand-in for `claude -p`. Stdlib only, so it cannot import llm_wiki.
 
 Env: FAKE_CLAUDE_QUEUE (JSON list of responses, popped per call), FAKE_CLAUDE_LOG (JSONL of
-invocations), FAKE_CLAUDE_VERSION, FAKE_CLAUDE_HELP. Response keys: stdout (dict or str), stderr,
-exit, sleep, write ({path: text}, relative to cwd; absolute paths are written as given).
+invocations), FAKE_CLAUDE_VERSION, FAKE_CLAUDE_HELP, FAKE_CLAUDE_VERSION_EXIT, FAKE_CLAUDE_HELP_EXIT,
+FAKE_CLAUDE_VERSION_SLEEP. Response keys: stdout (dict or str), stderr, exit, sleep,
+write ({path: text}, relative to cwd; absolute paths are written as given),
+echo_canary (put the canary word from cwd/CLAUDE.md into stdout.structured_output.canary),
+write_abs_from_prompt (write "ok" to the first absolute path found in stdin).
 """
 import json
 import os
+import re
 import sys
 import time
 
@@ -18,11 +22,12 @@ STUB_HELP = "--output-format\n--model\n--system-prompt-file\n--tools\n--max-budg
 
 argv = sys.argv[1:]
 if argv == ["--version"]:
+    time.sleep(float(os.environ.get("FAKE_CLAUDE_VERSION_SLEEP", "0")))
     print(os.environ.get("FAKE_CLAUDE_VERSION", "2.1.310 (Claude Code)"))
-    sys.exit(0)
+    sys.exit(int(os.environ.get("FAKE_CLAUDE_VERSION_EXIT", "0")))
 if argv == ["--help"]:
     print(os.environ.get("FAKE_CLAUDE_HELP", STUB_HELP))
-    sys.exit(0)
+    sys.exit(int(os.environ.get("FAKE_CLAUDE_HELP_EXIT", "0")))
 
 stdin = sys.stdin.read()
 system_prompt = None
@@ -53,7 +58,16 @@ for rel, text in resp.get("write", {}).items():
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
+if resp.get("write_abs_from_prompt"):
+    m = re.search(r"/[^\s]+", stdin)
+    if m:
+        with open(m.group(0), "w", encoding="utf-8") as fh:
+            fh.write("ok")
 out = resp.get("stdout", "")
+if resp.get("echo_canary"):
+    with open(os.path.join(cwd, "CLAUDE.md"), encoding="utf-8") as fh:
+        word = re.search(r"canary word is (\S+?)\.", fh.read()).group(1)
+    out = dict(out, structured_output={"ok": True, "canary": word})
 sys.stdout.write(out if isinstance(out, str) else json.dumps(out))
 sys.stderr.write(resp.get("stderr", ""))
 sys.exit(resp.get("exit", 0))

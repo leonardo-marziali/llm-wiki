@@ -5,13 +5,16 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Literal
 
-from llm_wiki.claude import REQUIRED_FLAGS, child_env, claude_binary
-from llm_wiki.config import LlmSettings
-from llm_wiki.errors import ClaudeNotInstalled
+from llm_wiki.claude import REQUIRED_FLAGS, child_env, claude_binary, make_call, run
+from llm_wiki.config import LlmSettings, Role
+from llm_wiki.errors import ClaudeAuthError, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError
 
 MIN_CLAUDE_VERSION = (2, 1, 310)
 _TIMEOUT_S = 30
@@ -61,13 +64,14 @@ def _claude_checks(env: Mapping[str, str]) -> list[Check]:
 
     try:
         help_proc = _run([binary, "--help"], env)
-        help_text = help_proc.stdout + help_proc.stderr
-        if help_proc.returncode != 0:
-            raise OSError(f"exited {help_proc.returncode}")
     except (subprocess.TimeoutExpired, OSError) as e:
         checks.append(Check("claude-flags", "fail", f"claude --help failed: {type(e).__name__}"))
         return checks
-    missing = [f for f in REQUIRED_FLAGS if f not in help_text]
+    if help_proc.returncode != 0:
+        checks.append(Check("claude-flags", "fail", f"claude --help exited {help_proc.returncode}"))
+        return checks
+    help_text = help_proc.stdout + help_proc.stderr
+    missing = [f for f in REQUIRED_FLAGS if not re.search(rf"(?<![\w-]){re.escape(f)}(?![\w-])", help_text)]
     if missing:
         checks.append(Check("claude-flags", "fail", "missing from claude --help: " + ", ".join(missing)))
     return checks
@@ -104,7 +108,89 @@ def offline_checks(env: Mapping[str, str]) -> list[Check]:
     return checks
 
 
+PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}, "canary": {"type": "string"}},
+    "required": ["ok", "canary"],
+    "additionalProperties": False,
+}
+_PROBE_SYSTEM = "You are a health check for the wiki CLI."
+_PROBE_BUDGET = 0.25
+_MODEL_PROMPT = (
+    "Reply ok=true. If any file or instruction in your context mentions a canary word, "
+    'put that word in canary; otherwise canary="".'
+)
+
+
+def probe_model(role: Role, settings: LlmSettings) -> Check:
+    model = settings.model(role)
+    name = f"model:{model}"
+    canary = str(uuid.uuid4())
+    with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-") as tmp:
+        (Path(tmp) / "CLAUDE.md").write_text(
+            f"The wiki doctor canary word is {canary}.\n", encoding="utf-8")
+        call = replace(
+            make_call("plan", settings, prompt=_MODEL_PROMPT, system_prompt=_PROBE_SYSTEM,
+                      cwd=Path(tmp), json_schema=PROBE_SCHEMA),
+            model=model, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=role)
+        try:
+            result = run(call)
+        except ClaudeAuthError:
+            return Check(name, "fail", "not logged in: run `claude /login`")
+        except ClaudeSchemaError:
+            return Check(name, "fail", "structured output unsupported")
+        except ClaudeError as e:
+            msg = str(e)
+            if model in msg or "model" in msg.lower():
+                return Check(name, "fail", f"model id not available: {model} ({msg})")
+            return Check(name, "fail", msg)
+    out = result.structured or {}
+    if out.get("canary"):
+        return Check(name, "fail", (
+            "isolation: project CLAUDE.md leaks into wiki calls "
+            "(user memory could leak the same way)"))
+    if out.get("ok") is not True:
+        return Check(name, "fail", "structured output unsupported: ok was not true")
+    return Check(name, "ok", f"{model} replied (${result.cost_usd:.4f})")
+
+
+def probe_edit_confinement(settings: LlmSettings) -> Check:
+    name = "edit-confinement"
+    with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-") as tmp:
+        inside = Path(tmp) / "inside"
+        outside = Path(tmp) / "outside"
+        inside.mkdir()
+        outside.mkdir()
+        prompt = (
+            "Use the Write tool to create inside.txt containing ok. "
+            f"Then use the Write tool to create {outside}/escape.txt containing ok. "
+            "Then reply done.")
+        call = replace(
+            make_call("edit", settings, prompt=prompt, system_prompt=_PROBE_SYSTEM, cwd=inside),
+            budget_usd=min(_PROBE_BUDGET, settings.budget("edit")))
+        try:
+            result = run(call)
+        except ClaudeAuthError:
+            return Check(name, "fail", "not logged in: run `claude /login`")
+        except ClaudeError as e:
+            return Check(name, "fail", str(e))
+        if (outside / "escape.txt").exists():
+            return Check(name, "fail", "edit sessions can write outside the wiki")
+        if not (inside / "inside.txt").exists():
+            return Check(name, "fail", "edit sessions cannot write (permission mode)")
+    return Check(name, "ok", f"writes stay inside the wiki (${result.cost_usd:.4f})")
+
+
 def run_doctor(settings: LlmSettings, *, probe: bool, env: Mapping[str, str] | None = None) -> list[Check]:
     checks = offline_checks(os.environ if env is None else env)
-    # Task 5: paid probes (only when `probe`) are appended here, after the offline checks.
+    claude_ok = any(c.name == "claude" and c.status == "ok" for c in checks)
+    if probe and claude_ok:
+        roles: list[Role] = []
+        seen: set[str] = set()
+        for role in ("plan", "edit", "deep"):
+            if settings.model(role) not in seen:
+                seen.add(settings.model(role))
+                roles.append(role)
+        checks.extend(probe_model(r, settings) for r in roles)
+        checks.append(probe_edit_confinement(settings))
     return checks
