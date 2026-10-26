@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "llm-wiki",
+  "image": "ghcr.io/leonardo-marziali/claude-devcontainer:latest",
+  "mounts": [
+    "source=claude-config,target=/home/node/.claude,type=volume"
+  ],
+  "initializeCommand": "touch .env",
+  "runArgs": [
+    "--pull=always",
+    "--env-file",
+    "${localWorkspaceFolder}/.env"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "extraKnownMarketplaces": {
+    "agentic-development-kit": {
+      "source": {
+        "source": "github",
+        "repo": "leonardo-marziali/agentic-development-kit"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "git@agentic-development-kit": true,
+    "github@agentic-development-kit": true,
+    "sonar@agentic-development-kit": true,
+    "markdown@agentic-development-kit": true,
+    "prettier@agentic-development-kit": true,
+    "python@agentic-development-kit": true,
+    "github@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true
+  }
+}
