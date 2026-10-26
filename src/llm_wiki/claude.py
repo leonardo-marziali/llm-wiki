@@ -4,6 +4,7 @@ import dataclasses
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -44,7 +45,7 @@ class Call:
     cwd: Path | None = None  # None: a fresh empty temp dir
     json_schema: dict | None = None
     edit: bool = False
-    timeout_s: int = 600
+    timeout_s: float = 600
     role: Role | None = None  # names the settings key in budget errors
 
 
@@ -124,12 +125,14 @@ def parse_output(stdout: str) -> Result:
 
 Kind = Literal["ok", "transient", "usage_limit", "auth", "budget", "schema", "fatal"]
 
-_BUDGET = ("budget",)
-_AUTH = ("/login", "not logged in", "invalid api key", "authentication", "oauth token", "401")
-_USAGE = ("usage limit", "limit reached", "limit will reset")
-_TRANSIENT = (
-    "overloaded", "529", "500", "502", "503", "504", "429", "rate limit", "econnreset", "etimedout",
-    "socket hang up", "network",
+# Status codes need word boundaries: bare "500" would match inside timestamps and token counts.
+_RULES = (
+    ("budget", re.compile(r"budget")),
+    ("auth", re.compile(r"/login|not logged in|invalid api key|authentication|oauth token|\b401\b")),
+    ("usage_limit", re.compile(r"usage limit|(?<!rate )limit reached|limit will reset")),
+    ("transient", re.compile(
+        r"overloaded|\b(?:429|500|502|503|504|529)\b|rate limit|econnreset|etimedout|socket hang up"
+        r"|network")),
 )
 
 
@@ -157,13 +160,8 @@ def classify(returncode: int, stdout: str, stderr: str, *, has_schema: bool = Fa
     text = text.lower()
     if data is not None and data.get("subtype") == "error_max_budget_usd":
         return "budget"
-    if "rate limit" in text:  # "Rate limit reached" (429) is a throttle, not the plan's usage limit
-        usage = _USAGE[:1] + _USAGE[2:]
-    else:
-        usage = _USAGE
-    for kind, needles in (("budget", _BUDGET), ("auth", _AUTH), ("usage_limit", usage),
-                          ("transient", _TRANSIENT)):
-        if any(n in text for n in needles):
+    for kind, pattern in _RULES:
+        if pattern.search(text):
             return kind
     return "fatal"
 

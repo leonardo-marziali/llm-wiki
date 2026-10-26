@@ -300,3 +300,10 @@ def test_fatal_json_failure_quotes_result_text(fake_claude):
     with pytest.raises(ClaudeError) as ei:
         run(_call(), sleep=lambda s: None)
     assert "model exploded" in str(ei.value) and "session_id" not in str(ei.value)
+
+
+def test_numbers_inside_larger_tokens_do_not_look_like_status_codes(fake_claude):
+    fake_claude.queue({"stdout": "", "stderr": "bad request: 1500 tokens exceeds limit 1761500000", "exit": 1})
+    with pytest.raises(ClaudeError, match="1500 tokens"):
+        run(_call(), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 1
