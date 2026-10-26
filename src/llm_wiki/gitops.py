@@ -30,12 +30,13 @@ def commit_all(root: Path, message: str) -> str:
 
 
 def has_identity(root: Path) -> bool:
-    """True when git can build an author identity (config or GIT_AUTHOR_* env)."""
+    """True when git can build author and committer identities (config or GIT_* env)."""
     cwd = Path(root).resolve()
     while not cwd.is_dir():  # root may not exist yet
         cwd = cwd.parent
     try:
         git(cwd, "var", "GIT_AUTHOR_IDENT")
+        git(cwd, "var", "GIT_COMMITTER_IDENT")
     except GitError:
         return False
     return True

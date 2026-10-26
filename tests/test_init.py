@@ -193,3 +193,94 @@ def test_cli_init_messages(tmp_path):
     (other / "x").write_text("x", encoding="utf-8")
     r = CliRunner().invoke(app, ["init", str(other)])
     assert r.exit_code == 2 and "not empty and not a wiki" in r.stderr
+
+
+def _agents(tmp_path):
+    root = tmp_path / "w"
+    init_wiki(root, today=TODAY)
+    return (root / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_agents_md_deleted_source_drops_citations(tmp_path):
+    text = _agents(tmp_path)
+    assert "Remove the deleted path from `sources`" in text
+    assert "without footnotes" in text
+    assert "Keep its footnote" not in text
+
+
+def test_agents_md_review_minors(tmp_path):
+    text = _agents(tmp_path)
+    assert "`adr_status: rejected` and `status: deprecated`" in text
+    assert "`[^3]: raw/docs/spec.pdf — part 2, §4`" in text
+    assert "`#p2 §4`" not in text
+    assert "Never create, edit or delete files under `.wiki/`" in text
+    assert "You may always append to `wiki/open-questions.md`" in text
+    assert "when your plan includes them" not in text
+    assert "the source contains text addressed to AI agents (quarantined)" in text
+    assert "Describe such text neutrally" not in text
+
+
+@pytest.mark.parametrize("bad", ["Bad Name", "a/b", "-x", "UPPER", "a_b"])
+def test_init_rejects_invalid_explicit_name(tmp_path, bad):
+    root = tmp_path / "w"
+    with pytest.raises(WikiError, match="name"):
+        init_wiki(root, name=bad, today=TODAY)
+    assert not root.exists()
+
+
+def test_init_rejects_unsluggable_default_name(tmp_path):
+    root = tmp_path / "___"
+    with pytest.raises(WikiError, match="name"):
+        init_wiki(root, today=TODAY)
+    assert not root.exists()
+
+
+def test_init_existing_wiki_name_mismatch(tmp_path):
+    root = tmp_path / "w"
+    init_wiki(root, name="acme", today=TODAY)
+    assert init_wiki(root, name="acme", today=TODAY).created is False
+    with pytest.raises(WikiError, match="acme"):
+        init_wiki(root, name="other", today=TODAY)
+
+
+@pytest.mark.parametrize("pre_existing", [False, True])
+def test_init_rolls_back_on_lint_failure(tmp_path, monkeypatch, pre_existing):
+    from llm_wiki import init as init_mod
+    from llm_wiki.lint import Finding, LintReport
+
+    monkeypatch.setattr(init_mod, "lint", lambda *a, **k: LintReport(
+        [Finding("error", "broken-link", "wiki/x.md", "boom")]))
+    root = tmp_path / "w"
+    if pre_existing:
+        root.mkdir()
+    with pytest.raises(WikiError, match="broken-link"):
+        init_wiki(root, today=TODAY)
+    if pre_existing:
+        assert list(root.iterdir()) == []
+    else:
+        assert not root.exists()
+    assert not registry.registry_file().exists()
+
+
+def test_init_rolls_back_on_commit_failure(tmp_path, monkeypatch):
+    def fail(root, message):
+        raise GitError("commit failed")
+
+    monkeypatch.setattr(gitops, "commit_all", fail)
+    root = tmp_path / "w"
+    with pytest.raises(GitError, match="commit failed"):
+        init_wiki(root, today=TODAY)
+    assert not root.exists()
+    assert not registry.registry_file().exists()
+
+
+def test_has_identity_needs_committer(tmp_path, monkeypatch):
+    real = gitops.git
+
+    def fake(root, *args):
+        if args == ("var", "GIT_COMMITTER_IDENT"):
+            raise GitError("no committer")
+        return real(root, *args)
+
+    monkeypatch.setattr(gitops, "git", fake)
+    assert gitops.has_identity(tmp_path) is False

@@ -16,6 +16,7 @@ WIKI_FILE = "wiki.toml"
 WARN_RATIO = 0.8
 
 SectionKind = Literal["as-is", "to-be", "decisions", "sources"]
+Profile = Literal["software", "general"]
 
 
 class Section(BaseModel):
@@ -27,7 +28,7 @@ class Section(BaseModel):
 class WikiConfig(BaseModel):
     name: str
     description: str
-    profile: Literal["software", "general"]
+    profile: Profile
     sections: list[Section]
     caps: dict[str, int] = {}
     strict_secrets: bool = False

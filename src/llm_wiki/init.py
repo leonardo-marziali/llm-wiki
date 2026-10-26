@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from importlib import resources
 from pathlib import Path
+from typing import Literal
 
 from llm_wiki import gitops
-from llm_wiki.config import WIKI_FILE, Section, WikiConfig, dump_config, load_config, load_profile
+from llm_wiki.config import WIKI_FILE, Profile, Section, WikiConfig, dump_config, load_config, load_profile
 from llm_wiki.errors import GitError, WikiError
 from llm_wiki.index import build_indexes
 from llm_wiki.lint import lint
@@ -17,12 +18,13 @@ from llm_wiki.pages import Frontmatter, render_frontmatter
 from llm_wiki.registry import WikiRef, register
 
 REVIEW_DAYS = 90
+NAME_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # one kebab-case id segment
 GITKEEPS = ("inbox", "raw", ".wiki/converted", ".wiki/reports")
 _KIND_RULE = {
-    "as-is": "`status: as-is`, `deprecated` or `superseded`; never `to-be`",
+    "as-is": "any status except `to-be`",
     "to-be": "`status: to-be` only",
-    "decisions": "`type: decision` with `adr_status`; `to-be` only with `adr_status: proposed`",
-    "sources": "`type: source-summary`, one `src-<slug>.md` per raw source; never `to-be`",
+    "decisions": "`type: decision` with `adr_status`",
+    "sources": "`src-<slug>.md` summaries, never `to-be`",
 }
 
 
@@ -60,7 +62,7 @@ def sections_table(sections: list[Section]) -> str:
     return "\n".join(rows)
 
 
-def _top_page(page_id: str, title: str, summary: str, body: str, today: date) -> str:
+def _top_page(page_id: Literal["overview", "glossary"], title: str, summary: str, body: str, today: date) -> str:
     fm = Frontmatter(
         id=page_id, title=title, type=page_id, status="as-is", summary=summary,
         confidence="high", review_status="draft",
@@ -116,20 +118,26 @@ def _clean(root: Path, created_dir: bool) -> None:
 def init_wiki(
     path: Path,
     name: str | None = None,
-    profile: str = "software",
+    profile: Profile = "software",
     description: str = "",
     today: date | None = None,
 ) -> InitResult:
     root = Path(path).resolve()
     if (root / WIKI_FILE).is_file():
         cfg = load_config(root)
+        if name is not None and name != cfg.name:
+            raise WikiError(f"{root} is already the wiki '{cfg.name}'; drop --name or pass --name {cfg.name}")
         register(cfg.name, root)
         return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
     if root.exists() and (not root.is_dir() or any(root.iterdir())):
         raise WikiError(f"{root} is not empty and not a wiki")
-    name = name.strip() if name is not None else slug(root.name)
-    if not name:
-        raise WikiError("wiki name is empty: pass --name")
+    if name is None:
+        name = slug(root.name)
+        if not name:
+            raise WikiError(f"cannot derive a wiki name from '{root.name}': pass --name")
+    if not NAME_RE.fullmatch(name):
+        raise WikiError(f"invalid wiki name '{name}': use lowercase letters, digits and single hyphens, "
+                        f"e.g. '{slug(name) or 'my-wiki'}'")
     cfg = WikiConfig(name=name, description=" ".join(description.split()), profile=profile,
                      sections=load_profile(profile))
     if not gitops.has_identity(root):

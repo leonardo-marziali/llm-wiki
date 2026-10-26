@@ -88,3 +88,12 @@ def test_dump_load_roundtrip(tmp_path):
     (out / WIKI_FILE).write_text(dump_config(cfg), encoding="utf-8")
     assert load_config(out) == cfg
     assert dump_config(load_config(out)) == dump_config(cfg)
+
+
+def test_profile_alias():
+    from typing import get_args
+
+    from llm_wiki.config import Profile, WikiConfig
+
+    assert get_args(Profile) == ("software", "general")
+    assert WikiConfig.model_fields["profile"].annotation == Profile
