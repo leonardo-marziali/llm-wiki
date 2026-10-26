@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import platformdirs
 
-from llm_wiki.config import WIKI_FILE, load_config
+from llm_wiki.config import WIKI_FILE, home_dir, load_config
 from llm_wiki.errors import ConfigError, WikiNotFound
 
 NOT_FOUND = "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
@@ -23,9 +22,7 @@ class WikiRef:
 
 
 def registry_file() -> Path:
-    home = os.environ.get("LLM_WIKI_HOME")
-    base = Path(home) if home else Path(platformdirs.user_config_dir("llm-wiki"))
-    return base / "wikis.toml"
+    return home_dir() / "wikis.toml"
 
 
 def _q(value: str) -> str:

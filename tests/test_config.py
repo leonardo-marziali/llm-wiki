@@ -3,7 +3,7 @@ import json
 import pytest
 
 from llm_wiki.caps import HARD_CAPS
-from llm_wiki.config import WIKI_FILE, dump_config, load_config, load_profile
+from llm_wiki.config import WIKI_FILE, WikiConfig, dump_config, load_config, load_profile
 from llm_wiki.errors import ConfigError
 
 
@@ -137,3 +137,21 @@ def test_warn_above_max_is_error(tmp_path, caps):
 def test_warn_equal_to_max_is_ok(tmp_path):
     caps = load_config(write_toml(tmp_path, caps={"max_pages": 100, "warn_pages": 100})).effective_caps()
     assert caps.warn_pages == caps.max_pages == 100
+
+
+def test_derived_warn_never_zero(tmp_path, make_wiki):
+    from datetime import date
+
+    from llm_wiki.lint import lint
+    from llm_wiki.manifest import Manifest
+
+    assert WikiConfig(name="d", description="d", profile="general", sections=[], caps={"max_sources": 1}
+                      ).effective_caps().warn_sources == 1
+    root = make_wiki(tmp_path)
+    m = Manifest.load(root)
+    for e in list(m.entries):
+        m.mark_deleted(e)
+    m.save(root)
+    cfg = load_config(root).model_copy(update={"caps": {"max_sources": 1}})
+    report = lint(root, cfg, today=date(2026, 10, 26))
+    assert "cap-sources-warn" not in {f.code for f in report.findings}
