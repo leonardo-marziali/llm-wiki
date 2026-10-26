@@ -187,8 +187,13 @@ def test_dump_load_roundtrip(tmp_path): ...       # dump_config -> file -> load_
   - `register(name: str, path: Path, make_default: bool = False) -> None`. The first wiki registered becomes the default. Re-registering the same name with a different path updates it.
   - `known_wikis() -> list[WikiRef]`: registry entries first, then `LLM_WIKI_PATH` dirs that contain `wiki.toml`, named by their config `name`. Duplicate paths are deduplicated, and the registry entry wins.
   - `find_root(start: Path) -> Path | None`, which walks up from `start` to the nearest directory containing `wiki.toml`;
-  - `resolve(arg: str | None, cwd: Path) -> WikiRef`. The order is: `arg` as a known name → `arg` as a path containing `wiki.toml` → `find_root(cwd)` → the registry default → `WikiNotFound("no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`")`.
+  - `resolve(arg: str | None, cwd: Path) -> WikiRef`. The order is: `arg` as a known name → `arg` as a path containing `wiki.toml` → `find_root(cwd)` → the registry default → raise `WikiNotFound` with the exact message shown below.
   - Registry format: `default = "<name>"` plus `[wikis] <name> = "<abs path>"`.
+  - Exact `WikiNotFound` message:
+
+    ```text
+    no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`
+    ```
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_register_and_resolve_by_name`
@@ -380,13 +385,26 @@ Secret rules:
 
 Injection kinds. A hit needs the AI address **and** an imperative; plain shell commands are never hits.
 
-| kind              | Trigger                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
-| `addressed_to_ai` | `(?i)\b(?:hey                                                                                          | dear      | attention           | note to                        | instructions? for)\s+(?:the\s+)?(?:ai | assistant                        | llm                        | language model | agent     | claude                                                                             | chatgpt     | copilot)\b`or`(?i)\b(?:ai | assistant | agent | llm | claude)s?\s*[:,]\s*(?:please\s+)?(?:ignore | run | execute | delete | write | send | disregard | forget)\b` |
-| `override`        | `(?i)\b(?:ignore                                                                                       | disregard | forget)\s+(?:all\s+ | any\s+)?(?:the\s+)?(?:previous | prior                                 | above                            | earlier)\s+(?:instructions | prompts        | rules     | messages)\b`, or `(?i)\bnew\s+system\s+prompt\b`, or `(?i)\byou\s+are\s+now\s+(?:a | an          | in)\b`                    |
-| `agent_config`    | `(?i)\b(?:write                                                                                        | modify    | edit                | append                         | overwrite                             | update)\b[^\n]{0,60}(?:\.claude/ | CLAUDE\.md                 | AGENTS\.md     | mcp\.json | settings\.json                                                                     | SKILL\.md)` |
-| `hidden_chars`    | any of U+200B–U+200D, U+2060, U+202A–U+202E, U+2066–U+2069, U+E0000–U+E007F, or U+FEFF not at offset 0 |
-| `base64_blob`     | `[A-Za-z0-9+/]{400,}={0,2}`                                                                            |
+Exact patterns (Python `re`, one kind per entry; `addressed_to_ai`, `override` and `agent_config` each list alternatives, and any alternative matching is a hit):
+
+```python
+INJECTION_RULES = {
+    "addressed_to_ai": [
+        r"(?i)\b(?:hey|dear|attention|note to|instructions? for)\s+(?:the\s+)?(?:ai|assistant|llm|language model|agent|claude|chatgpt|copilot)\b",
+        r"(?i)\b(?:ai|assistant|agent|llm|claude)s?\s*[:,]\s*(?:please\s+)?(?:ignore|run|execute|delete|write|send|disregard|forget)\b",
+    ],
+    "override": [
+        r"(?i)\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts|rules|messages)\b",
+        r"(?i)\bnew\s+system\s+prompt\b",
+        r"(?i)\byou\s+are\s+now\s+(?:a|an|in)\b",
+    ],
+    "agent_config": [
+        r"(?i)\b(?:write|modify|edit|append|overwrite|update)\b[^\n]{0,60}(?:\.claude/|CLAUDE\.md|AGENTS\.md|mcp\.json|settings\.json|SKILL\.md)",
+    ],
+    # hidden_chars: any of U+200B-U+200D, U+2060, U+202A-U+202E, U+2066-U+2069, U+E0000-U+E007F, or U+FEFF not at offset 0
+    "base64_blob": [r"[A-Za-z0-9+/]{400,}={0,2}"],
+}
+```
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_password_redacted_key_kept`: `password: S3cr3t!x` → `password: ‹REDACTED:password›`
@@ -529,7 +547,13 @@ Checks (code → severity):
 | `cap-pages` / `cap-pages-warn`     | error / warn | the same, for valid pages                                                                                                                                                                                            |
 | `cap-section` / `cap-section-warn` | error / warn | the same, per section                                                                                                                                                                                                |
 | `index-too-long`                   | error        | `wiki/index.md` line count > `caps.max_index_lines`                                                                                                                                                                  |
-| `log-format`                       | error        | a `log.md` line starting with `## ` that does not match `^## \[\d{4}-\d{2}-\d{2}\] [a-z-]+ \| .+$`                                                                                                                   |
+| `log-format`                       | error        | a `log.md` line starting with two hashes and a space that fails the `LOG_RE` regex below the table                                                                                                                   |
+
+`LOG_RE` (exact):
+
+```python
+LOG_RE = r"^## \[\d{4}-\d{2}-\d{2}\] [a-z-]+ \| .+$"
+```
 
 - [ ] **Step 1: Write the failing tests**, one per code. Each builds a minimal valid wiki with a conftest `make_wiki(tmp_path, profile="software")` fixture, then breaks one thing and asserts `{f.code for f in lint(...).findings} == {"<code>"}`. The fixture writes `wiki.toml`, sections and indexes through `build_indexes`, and one valid page citing a raw file present in the manifest. `overview.md` links to that page, so it is not an orphan. Name them `test_<code_with_underscores>`. Also include:
   - `test_valid_wiki_has_no_findings`
