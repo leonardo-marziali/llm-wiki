@@ -1,0 +1,39 @@
+[[sections]]
+name = "architecture"
+kind = "as-is"
+description = "System structure, boundaries and data flow"
+
+[[sections]]
+name = "components"
+kind = "as-is"
+description = "One page per component, service or module"
+
+[[sections]]
+name = "conventions"
+kind = "as-is"
+description = "Coding, git, PR, review and Definition-of-Done rules"
+
+[[sections]]
+name = "operations"
+kind = "as-is"
+description = "Deployment, configuration, monitoring and runbooks"
+
+[[sections]]
+name = "concepts"
+kind = "as-is"
+description = "Domain terms and ideas used across the project"
+
+[[sections]]
+name = "requirements"
+kind = "to-be"
+description = "Planned requirements, features and desired changes"
+
+[[sections]]
+name = "decisions"
+kind = "decisions"
+description = "Architecture decision records and their rationale"
+
+[[sections]]
+name = "sources"
+kind = "sources"
+description = "Summaries of the raw source documents"

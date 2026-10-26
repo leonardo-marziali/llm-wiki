@@ -1,0 +1,29 @@
+[[sections]]
+name = "concepts"
+kind = "as-is"
+description = "Core ideas and definitions"
+
+[[sections]]
+name = "topics"
+kind = "as-is"
+description = "Subject areas and what is known about them"
+
+[[sections]]
+name = "howto"
+kind = "as-is"
+description = "Step-by-step guides and procedures"
+
+[[sections]]
+name = "references"
+kind = "as-is"
+description = "Facts, figures and lookup material"
+
+[[sections]]
+name = "proposals"
+kind = "to-be"
+description = "Ideas and plans not yet adopted"
+
+[[sections]]
+name = "sources"
+kind = "sources"
+description = "Summaries of the raw source documents"
