@@ -8,7 +8,9 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+
+from llm_wiki.errors import ConfigError
 
 MANIFEST = ".wiki/manifest.json"
 _CHUNK = 1024 * 1024
@@ -68,8 +70,17 @@ class Manifest:
         f = Path(root) / MANIFEST
         if not f.is_file():
             return cls()
-        data = json.loads(f.read_text(encoding="utf-8"))
-        return cls({k: SourceEntry.model_validate(v) for k, v in data.get("sources", {}).items()})
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("top level must be an object")
+            if data.get("version") != 1:
+                raise ConfigError(f"{MANIFEST}: unsupported version {data.get('version')!r}")
+            return cls({k: SourceEntry.model_validate(v) for k, v in data.get("sources", {}).items()})
+        except ConfigError:
+            raise
+        except (ValueError, ValidationError, AttributeError, OSError) as e:
+            raise ConfigError(f"{MANIFEST} is corrupt: {e}") from None
 
     def scan(self, root: Path) -> ScanResult:
         root = Path(root)
@@ -84,7 +95,7 @@ class Manifest:
             rel = p.relative_to(root).as_posix()
             seen.add(rel)
             entry = self.entries.get(rel)
-            if entry is None:
+            if entry is None or entry.status == "deleted":
                 res.new.append(rel)
             elif entry.sha256 != sha256_file(p):
                 res.changed.append(rel)
@@ -104,6 +115,8 @@ class Manifest:
         self.entries[entry.path] = entry
 
     def mark_deleted(self, path: str) -> None:
+        if path not in self.entries:
+            raise ConfigError(f"{MANIFEST}: no entry for {path}")
         self.entries[path] = self.entries[path].model_copy(update={"status": "deleted"})
 
     def pages_for(self, path: str) -> list[str]:

@@ -2,6 +2,10 @@ import hashlib
 from datetime import date
 from pathlib import Path
 
+import pytest
+
+from llm_wiki.errors import ConfigError
+
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, category_for, sha256_file
 
 
@@ -110,3 +114,33 @@ def test_mark_deleted_keeps_entry(tmp_path):
     m.mark_deleted("raw/a.md")
     assert m.entries["raw/a.md"].status == "deleted"
     assert m.scan(tmp_path).deleted == []
+
+
+def _raw_manifest(root: Path, text: str) -> None:
+    (root / ".wiki").mkdir(exist_ok=True)
+    (root / MANIFEST).write_text(text)
+
+
+@pytest.mark.parametrize("text", [
+    "{not json",
+    "[]",
+    '{"version": 1, "sources": {"raw/a.md": {"path": "raw/a.md"}}}',
+    '{"version": 2, "sources": {}}',
+    '{"sources": {}}',
+])
+def test_load_bad_manifest_raises_config_error(tmp_path, text):
+    _raw_manifest(tmp_path, text)
+    with pytest.raises(ConfigError, match="manifest.json"):
+        Manifest.load(tmp_path)
+
+
+def test_reappearing_deleted_path_is_new(tmp_path):
+    p = _write(tmp_path, "raw/a.md", "a")
+    m = Manifest.load(tmp_path)
+    m.record(_entry("raw/a.md", sha256_file(p), status="deleted"))
+    assert m.scan(tmp_path).new == ["raw/a.md"]
+
+
+def test_mark_deleted_unknown_path_raises(tmp_path):
+    with pytest.raises(ConfigError, match="raw/x.md"):
+        Manifest.load(tmp_path).mark_deleted("raw/x.md")
