@@ -80,5 +80,40 @@ def search(
             )
 
 
+@app.command()
+def lint(
+    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    strict: bool = typer.Option(False, "--strict", help="Fail on warnings too."),
+    fmt: str = typer.Option("text", "--format", help="text or json."),
+) -> None:
+    """Check the page contract, links, citations and caps; write a report."""
+    from datetime import date
+
+    from llm_wiki import registry
+    from llm_wiki.config import load_config
+    from llm_wiki.lint import lint as run_lint
+    from llm_wiki.lint import write_report
+
+    if fmt not in ("text", "json"):
+        raise WikiError("--format must be text or json")
+    ref = registry.resolve(wiki, Path.cwd())
+    today = date.today()
+    report = run_lint(ref.path, load_config(ref.path), today=today)
+    write_report(ref.path, report, today)
+    if fmt == "json":
+        data = {
+            "errors": report.errors,
+            "warnings": report.warnings,
+            "findings": [dataclasses.asdict(f) for f in report.findings],
+        }
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        for f in report.findings:
+            typer.echo(f"{f.severity} {f.code} {f.path}: {f.message}")
+        typer.echo(f"{report.errors} errors, {report.warnings} warnings")
+    if report.errors or (strict and report.warnings):
+        raise typer.Exit(1)
+
+
 def main() -> None:
     app()
