@@ -15,7 +15,7 @@ from llm_wiki.index import build_indexes
 from llm_wiki.lint import lint
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import Frontmatter, render_frontmatter
-from llm_wiki.registry import WikiRef, register
+from llm_wiki.registry import WikiRef, register, registered_path
 
 REVIEW_DAYS = 90
 NAME_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # one kebab-case id segment
@@ -115,6 +115,13 @@ def _clean(root: Path, created_dir: bool) -> None:
             child.unlink(missing_ok=True)
 
 
+def _check_name_free(name: str, root: Path) -> None:
+    """Refuse a name another live wiki is registered under (a stale entry may be taken over)."""
+    other = registered_path(name)
+    if other is not None and other.resolve() != root and (other / WIKI_FILE).is_file():
+        raise WikiError(f"wiki name '{name}' is already registered at {other}; pass --name")
+
+
 def init_wiki(
     path: Path,
     name: str | None = None,
@@ -127,6 +134,7 @@ def init_wiki(
         cfg = load_config(root)
         if name is not None and name != cfg.name:
             raise WikiError(f"{root} is already the wiki '{cfg.name}'; drop --name or pass --name {cfg.name}")
+        _check_name_free(cfg.name, root)
         register(cfg.name, root)
         return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
     if root.exists() and (not root.is_dir() or any(root.iterdir())):
@@ -138,6 +146,7 @@ def init_wiki(
     if not NAME_RE.fullmatch(name):
         raise WikiError(f"invalid wiki name '{name}': use lowercase letters, digits and single hyphens, "
                         f"e.g. '{slug(name) or 'my-wiki'}'")
+    _check_name_free(name, root)
     cfg = WikiConfig(name=name, description=" ".join(description.split()), profile=profile,
                      sections=load_profile(profile))
     if not gitops.has_identity(root):

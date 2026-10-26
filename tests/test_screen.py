@@ -223,3 +223,20 @@ def test_gitleaks_mkdir_failure_reported(monkeypatch, tmp_path):
 def test_more_hidden_chars(ch, code):
     hits = find_injection(f"a{ch}b")
     assert [h.kind for h in hits] == ["hidden_chars"] and code in hits[0].excerpt
+
+
+def test_shell_substitution_is_not_a_secret():
+    for text in (
+        "export DB_PASSWORD=$(vault kv get -field=password secret/db)",
+        "password: ${DB_PASSWORD}",
+        "password=${DB_PASSWORD:-fallback}",
+        "API_TOKEN=$(cat /run/secrets/api_token_file_path)",
+        "Server=x;Pwd=$(get-pw);",
+    ):
+        out, counts = redact(text)
+        assert out == text and not counts, text
+
+
+def test_dollar_prefixed_real_secret_still_redacted():
+    out, counts = redact("password=$ecretPass1")
+    assert counts["password"] == 1

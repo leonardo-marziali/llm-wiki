@@ -64,6 +64,12 @@ def register(name: str, path: Path, make_default: bool = False) -> None:
     _write(default, wikis)
 
 
+def registered_path(name: str) -> Path | None:
+    """The path ``name`` is registered at, or None."""
+    _, wikis = _read()
+    return Path(wikis[name]) if name in wikis else None
+
+
 def known_wikis() -> list[WikiRef]:
     _, wikis = _read()
     refs = [WikiRef(n, Path(p), "registry") for n, p in wikis.items()]

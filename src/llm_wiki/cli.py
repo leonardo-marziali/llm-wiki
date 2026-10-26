@@ -84,6 +84,8 @@ def search(
         raise WikiError("use either --wiki or --all")
     if fmt not in ("text", "json"):
         raise WikiError("--format must be text or json")
+    if top < 1:
+        raise WikiError("--top must be >= 1")
     refs = registry.known_wikis() if all_wikis else [registry.resolve(wiki, Path.cwd())]
     hits = run_search(refs, query, top=top, status=status, section=section)
     if fmt == "json":
@@ -154,8 +156,8 @@ def status(
         for ref in registry.known_wikis():
             try:
                 rows.append(dataclasses.asdict(wiki_status(ref)))
-            except WikiError as e:
-                rows.append({"name": ref.name, "path": str(ref.path), "error": str(e)})
+            except Exception as e:  # one broken wiki must not hide the others
+                rows.append({"name": ref.name, "path": str(ref.path), "error": str(e) or type(e).__name__})
         if fmt == "json":
             typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
         else:

@@ -119,3 +119,12 @@ def test_cli_all_and_wiki_conflict(tmp_path):
     r = CliRunner().invoke(app, ["search", "kafka", "--wiki", str(w), "--all"])
     assert r.exit_code == 2
     assert "use either --wiki or --all" in r.stderr
+
+
+def test_cli_top_must_be_positive(tmp_path):
+    w = make_wiki(tmp_path / "w")
+    put(w, "sys/a.md", "a", "Kafka")
+    for bad in ("0", "-1"):
+        r = CliRunner().invoke(app, ["search", "kafka", "--wiki", str(w), "--top", bad])
+        assert r.exit_code == 2, r.output
+        assert "error: --top must be >= 1" in r.stderr

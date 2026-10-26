@@ -17,8 +17,10 @@ MARK = "‹REDACTED:{kind}›"
 _MARK_PREFIX = "‹REDACTED:"
 
 _PLACEHOLDER = re.compile(
-    r"^(<.*>|\$\{.*\}|\{\{.*\}\}|\*+|x{3,}|\.{3,}|changeme|your[_-]?\w*|null|none|n/?a|example\w*)$", re.I
+    r"^(<.*>|\$[({].*|\{\{.*\}\}|\*+|x{3,}|\.{3,}|changeme|your[_-]?\w*|null|none|n/?a|example\w*)$", re.I
 )
+# `$(cmd)` / `${VAR}` (shell substitution) fetch a secret at run time; they are not one
+_SHELL_SUBST = ("$(", "${")
 _ARN = re.compile(r"arn:aws[\w-]*:secretsmanager:[^\s]*$")
 
 
@@ -75,6 +77,8 @@ def redact(text: str) -> tuple[str, Counter[str]]:
             if _MARK_PREFIX in value:
                 return m.group(0)  # already redacted
             if kind in ("password", "token") and not _looks_secret(value):
+                return m.group(0)
+            if kind == "conn_string_password" and value.startswith(_SHELL_SUBST):
                 return m.group(0)
             if kind == "token" and _ARN.search(m.string, max(0, m.start() - 80), m.start() + 1):
                 return m.group(0)  # `arn:aws:secretsmanager:...:secret:<name>` names a secret, it is not one

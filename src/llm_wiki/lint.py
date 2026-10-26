@@ -27,6 +27,9 @@ _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _FENCE = re.compile(r"^\s*(```|~~~)")
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)")
+# page lint only: a page may legitimately say "update CLAUDE.md when ..."
+_WARN_INJECTION = {"agent_config"}
 _EXTERNAL = ("http:", "https:", "mailto:")
 _ORPHAN_EXEMPT = {"overview", "glossary", "hub"}
 _SKIP_SECTIONS = {"tl;dr", "related"}
@@ -80,7 +83,7 @@ def _md_links(text: str) -> list[str]:
     """Relative ``.md`` link targets with anchors stripped."""
     targets = []
     for line in _strip_code(text):
-        for m in _LINK.finditer(line):
+        for m in _LINK.finditer(_CODE_SPAN.sub("", line)):
             t = m.group(1)
             if t.lower().startswith(_EXTERNAL):
                 continue
@@ -228,8 +231,10 @@ def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
     if sum(counts.values()):
         add("error", "secret-in-page", "possible secret: " + ", ".join(sorted(counts)))
     hits = find_injection(page.body)
-    if hits:
-        add("error", "injection-in-page", "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in hits))
+    for sev, group in (("error", [h for h in hits if h.kind not in _WARN_INJECTION]),
+                       ("warn", [h for h in hits if h.kind in _WARN_INJECTION])):
+        if group:
+            add(sev, "injection-in-page", "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in group))
     if page.error is not None:
         add("error", "frontmatter-invalid", page.error)
         return out

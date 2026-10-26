@@ -92,3 +92,46 @@ def test_no_wiki_resolves_exit_2(tmp_path, monkeypatch):
     res = runner.invoke(app, ["status"])
     assert res.exit_code == 2
     assert res.stderr.startswith("error: no wiki found")
+
+
+def test_status_non_utf8_log_does_not_crash(tmp_path, monkeypatch):
+    init(tmp_path / "demo", "demo")
+    log = tmp_path / "demo" / "wiki" / "log.md"
+    log.write_bytes(log.read_bytes() + b"\xff\n")
+    st = wiki_status(WikiRef("demo", tmp_path / "demo", "path"), today=date(2026, 10, 26))
+    assert st.last_log == ["error: log.md not valid UTF-8"]
+    monkeypatch.chdir(tmp_path / "demo")
+    res = runner.invoke(app, ["status"])
+    assert res.exit_code == 0, res.output
+    assert "error: log.md not valid UTF-8" in res.output
+
+
+def test_status_all_non_utf8_log_keeps_all_rows(tmp_path, monkeypatch):
+    init(tmp_path / "a", "a")
+    init(tmp_path / "b", "b")
+    log = tmp_path / "a" / "wiki" / "log.md"
+    log.write_bytes(log.read_bytes() + b"\xff\n")
+    monkeypatch.chdir(tmp_path)
+    res = runner.invoke(app, ["status", "--all", "--format", "json"])
+    assert res.exit_code == 0, res.output
+    assert {d["name"] for d in json.loads(res.output)} == {"a", "b"}
+
+
+def test_status_all_catches_any_exception_per_wiki(tmp_path, monkeypatch):
+    import llm_wiki.status as status_mod
+
+    init(tmp_path / "good", "good")
+    init(tmp_path / "bad", "bad")
+    real = status_mod.wiki_status
+
+    def flaky(ref, today=None):
+        if ref.name == "bad":
+            raise RuntimeError("boom")
+        return real(ref, today)
+
+    monkeypatch.setattr(status_mod, "wiki_status", flaky)
+    monkeypatch.chdir(tmp_path)
+    res = runner.invoke(app, ["status", "--all"])
+    assert res.exit_code == 0, res.output
+    assert "error: boom" in res.output
+    assert "good" in res.output and "pages 2/500" in res.output

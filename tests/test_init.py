@@ -284,3 +284,55 @@ def test_has_identity_needs_committer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gitops, "git", fake)
     assert gitops.has_identity(tmp_path) is False
+
+
+def test_init_refuses_name_registered_at_other_path(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    init_wiki(a, name="demo", today=TODAY)
+    before = registry.registry_file().read_text(encoding="utf-8")
+    with pytest.raises(WikiError, match=f"wiki name 'demo' is already registered at {re.escape(str(a.resolve()))}; pass --name"):
+        init_wiki(b, name="demo", today=TODAY)
+    assert not b.exists()
+    assert registry.registry_file().read_text(encoding="utf-8") == before
+    assert registry.resolve("demo", tmp_path).path == a.resolve()
+
+
+def test_cli_init_name_collision_exit_2(tmp_path):
+    runner = CliRunner()
+    assert runner.invoke(app, ["init", str(tmp_path / "a"), "--name", "demo"]).exit_code == 0
+    res = runner.invoke(app, ["init", str(tmp_path / "b"), "--name", "demo"])
+    assert res.exit_code == 2
+    assert "error: wiki name 'demo' is already registered at" in res.stderr
+    assert not (tmp_path / "b").exists()
+
+
+def test_init_existing_wiki_refuses_name_registered_elsewhere(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    init_wiki(a, name="demo", today=TODAY)
+    saved = registry.registry_file().read_text(encoding="utf-8")
+    registry.registry_file().unlink()
+    init_wiki(b, name="demo", today=TODAY)  # a second wiki 'demo', created while unregistered
+    registry.registry_file().write_text(saved, encoding="utf-8")
+    with pytest.raises(WikiError, match="wiki name 'demo' is already registered at"):
+        init_wiki(b, today=TODAY)
+    assert registry.registry_file().read_text(encoding="utf-8") == saved
+
+
+def test_init_reregister_same_name_same_path_is_noop(tmp_path):
+    a = tmp_path / "a"
+    init_wiki(a, name="demo", today=TODAY)
+    before = registry.registry_file().read_text(encoding="utf-8")
+    res = init_wiki(a, name="demo", today=TODAY)
+    assert res.created is False
+    assert registry.registry_file().read_text(encoding="utf-8") == before
+
+
+def test_init_takes_over_stale_registry_entry(tmp_path):
+    import shutil
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    init_wiki(a, name="demo", today=TODAY)
+    shutil.rmtree(a)
+    res = init_wiki(b, name="demo", today=TODAY)
+    assert res.created is True
+    assert registry.resolve("demo", tmp_path).path == b.resolve()

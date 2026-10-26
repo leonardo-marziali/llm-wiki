@@ -7,7 +7,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from llm_wiki.caps import HARD_CAPS, Caps
 from llm_wiki.errors import ConfigError
@@ -20,12 +20,16 @@ Profile = Literal["software", "general"]
 
 
 class Section(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     kind: SectionKind
     description: str
 
 
 class WikiConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: str
     profile: Profile
@@ -39,6 +43,8 @@ class WikiConfig(BaseModel):
             if key not in known:
                 raise ConfigError(f"unknown cap '{key}' in [caps]")
             hard = getattr(HARD_CAPS, key)
+            if value < 1:
+                raise ConfigError(f"cap {key}={value} must be at least 1")
             if value > hard:
                 raise ConfigError(f"cap {key}={value} exceeds hard maximum {hard}")
         overrides = dict(self.caps)
@@ -46,7 +52,14 @@ class WikiConfig(BaseModel):
             warn = "warn_" + key.removeprefix("max_")
             if key.startswith("max_") and warn in known and warn not in self.caps:
                 overrides[warn] = int(value * WARN_RATIO)
-        return replace(HARD_CAPS, **overrides)
+        caps = replace(HARD_CAPS, **overrides)
+        for key in (f.name for f in fields(Caps)):  # field order: deterministic message
+            max_key = "max_" + key.removeprefix("warn_")
+            if key.startswith("warn_") and max_key in known:
+                warn_v, max_v = getattr(caps, key), getattr(caps, max_key)
+                if warn_v > max_v:
+                    raise ConfigError(f"cap {key}={warn_v} exceeds {max_key}={max_v}")
+        return caps
 
 
 def load_profile(name: str) -> list[Section]:

@@ -10,6 +10,7 @@ from llm_wiki.pages import iter_pages
 from llm_wiki.registry import WikiRef
 
 LOG_LINES = 5
+LOG_NOT_UTF8 = "error: log.md not valid UTF-8"
 
 
 @dataclass
@@ -59,7 +60,12 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
     log = root / "wiki" / "log.md"
     entries = []
     if log.is_file():
-        entries = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.startswith("## [")]
+        try:
+            entries = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.startswith("## [")]
+        except UnicodeDecodeError:
+            entries = [LOG_NOT_UTF8]
+        except OSError as e:
+            entries = [f"error: log.md unreadable: {e.strerror or e}"]
 
     return WikiStatus(
         name=ref.name,

@@ -49,4 +49,5 @@ def test_e2e_m1(tmp_path, monkeypatch):
     res = runner.invoke(app, ["lint"])
     assert res.exit_code == 0, res.output
     res = runner.invoke(app, ["status"])
+    assert res.exit_code == 0, res.output
     assert "sources 1/100" in res.output and "pages 3/500" in res.output

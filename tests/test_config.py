@@ -97,3 +97,43 @@ def test_profile_alias():
 
     assert get_args(Profile) == ("software", "general")
     assert WikiConfig.model_fields["profile"].annotation == Profile
+
+
+def test_unknown_top_level_key_is_error(tmp_path):
+    with pytest.raises(ConfigError, match="strict_secret"):
+        load_config(write_toml(tmp_path, strict_secret=True))
+
+
+def test_unknown_section_key_is_error(tmp_path):
+    root = write_toml(tmp_path)
+    p = root / WIKI_FILE
+    p.write_text(p.read_text(encoding="utf-8") + 'kidn = "as-is"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="kidn"):
+        load_config(root)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_cap_below_one_is_error(tmp_path, value):
+    with pytest.raises(ConfigError, match="max_pages"):
+        load_config(write_toml(tmp_path, caps={"max_pages": value})).effective_caps()
+
+
+def test_warn_cap_below_one_is_error(tmp_path):
+    with pytest.raises(ConfigError, match="warn_pages"):
+        load_config(write_toml(tmp_path, caps={"warn_pages": 0})).effective_caps()
+
+
+@pytest.mark.parametrize("caps", [
+    {"max_pages": 100, "warn_pages": 200},  # explicit warn above lowered max
+    {"warn_sources": 60, "max_sources": 50},
+    {"max_section_pages": 50, "warn_section_pages": 51},
+])
+def test_warn_above_max_is_error(tmp_path, caps):
+    warn = next(k for k in caps if k.startswith("warn_"))
+    with pytest.raises(ConfigError, match=warn):
+        load_config(write_toml(tmp_path, caps=caps)).effective_caps()
+
+
+def test_warn_equal_to_max_is_ok(tmp_path):
+    caps = load_config(write_toml(tmp_path, caps={"max_pages": 100, "warn_pages": 100})).effective_caps()
+    assert caps.warn_pages == caps.max_pages == 100
