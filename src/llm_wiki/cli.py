@@ -1,6 +1,9 @@
 """Typer CLI entry point (`wiki`)."""
 
+import dataclasses
+import json
 import sys
+from pathlib import Path
 
 import typer
 from typer.core import TyperGroup
@@ -44,6 +47,37 @@ def _root(
     ),
 ) -> None:
     """LLM-maintained wiki: deterministic core."""
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search terms."),
+    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    all_wikis: bool = typer.Option(False, "--all", help="Search every known wiki."),
+    status: str | None = typer.Option(None, "--status", help="Only pages with this status."),
+    section: str | None = typer.Option(None, "--section", help="Only pages in this section."),
+    top: int = typer.Option(8, "--top", help="Maximum number of hits."),
+    fmt: str = typer.Option("text", "--format", help="text or json."),
+) -> None:
+    """Find relevant pages (BM25 over title, summary, tags, id, body)."""
+    from llm_wiki import registry
+    from llm_wiki.search import search as run_search
+
+    if all_wikis and wiki is not None:
+        raise WikiError("use either --wiki or --all")
+    if fmt not in ("text", "json"):
+        raise WikiError("--format must be text or json")
+    refs = registry.known_wikis() if all_wikis else [registry.resolve(wiki, Path.cwd())]
+    hits = run_search(refs, query, top=top, status=status, section=section)
+    if fmt == "json":
+        typer.echo(json.dumps([dataclasses.asdict(h) for h in hits], ensure_ascii=False, indent=2))
+    elif not hits:
+        typer.echo("no matches")
+    else:
+        for h in hits:
+            typer.echo(
+                f"{h.score:.2f}  {h.wiki}:{h.id}  {h.title} — {h.summary} [{h.status}, {h.last_verified}]"
+            )
 
 
 def main() -> None:
