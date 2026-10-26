@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Scripted stand-in for `claude -p`. Stdlib only, so it cannot import llm_wiki.
+
+Env: FAKE_CLAUDE_QUEUE (JSON list of responses, popped per call), FAKE_CLAUDE_LOG (JSONL of
+invocations), FAKE_CLAUDE_VERSION, FAKE_CLAUDE_HELP. Response keys: stdout (dict or str), stderr,
+exit, sleep, write ({path: text}, relative to cwd; absolute paths are written as given).
+"""
+import json
+import os
+import sys
+import time
+
+LOGGED_ENV = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+)
+STUB_HELP = "--output-format\n--model\n--system-prompt-file\n--tools\n--max-budget-usd\n"
+
+argv = sys.argv[1:]
+if argv == ["--version"]:
+    print(os.environ.get("FAKE_CLAUDE_VERSION", "2.1.310 (Claude Code)"))
+    sys.exit(0)
+if argv == ["--help"]:
+    print(os.environ.get("FAKE_CLAUDE_HELP", STUB_HELP))
+    sys.exit(0)
+
+stdin = sys.stdin.read()
+system_prompt = None
+if "--system-prompt-file" in argv:
+    with open(argv[argv.index("--system-prompt-file") + 1], encoding="utf-8") as fh:
+        system_prompt = fh.read()
+cwd = os.getcwd()
+with open(os.environ["FAKE_CLAUDE_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({
+        "argv": argv, "stdin": stdin, "cwd": cwd, "listdir": sorted(os.listdir(cwd)),
+        "env": {k: os.environ.get(k) for k in LOGGED_ENV}, "system_prompt": system_prompt,
+    }) + "\n")
+
+queue_path = os.environ["FAKE_CLAUDE_QUEUE"]
+with open(queue_path, encoding="utf-8") as fh:
+    queue = json.load(fh)
+if not queue:
+    print("fake claude: queue empty", file=sys.stderr)
+    sys.exit(3)
+resp = queue.pop(0)
+with open(queue_path, "w", encoding="utf-8") as fh:
+    json.dump(queue, fh)
+
+if resp.get("sleep"):
+    time.sleep(resp["sleep"])
+for rel, text in resp.get("write", {}).items():
+    path = os.path.join(cwd, rel)  # join keeps an absolute rel as is
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+out = resp.get("stdout", "")
+sys.stdout.write(out if isinstance(out, str) else json.dumps(out))
+sys.stderr.write(resp.get("stderr", ""))
+sys.exit(resp.get("exit", 0))

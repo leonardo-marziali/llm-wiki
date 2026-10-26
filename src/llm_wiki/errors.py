@@ -23,3 +23,27 @@ class RefusedSource(WikiError):
 
 class GitError(WikiError):
     pass
+
+
+class ClaudeError(WikiError):
+    """A `claude -p` call failed."""
+
+
+class ClaudeNotInstalled(ClaudeError):
+    pass
+
+
+class ClaudeAuthError(ClaudeError):
+    pass
+
+
+class ClaudeUsageLimit(ClaudeError):
+    pass
+
+
+class ClaudeBudgetExceeded(ClaudeError):
+    pass
+
+
+class ClaudeSchemaError(ClaudeError):
+    pass

@@ -156,10 +156,10 @@ supersedes: []  superseded_by: null  related: []  tags: []
 ## 6. Claude runner (`claude.py`, the only place CLI flags exist)
 
 Based on kbpipe `llm/runner.py` (`build_argv`, `child_env`, `classify`, retries, usage parsing):
-`claude -p --output-format json [--json-schema S] --model M --system-prompt <compiled> --tools <list> --no-session-persistence --setting-sources "" --strict-mcp-config --max-budget-usd <cap>`.
+`claude -p --output-format json --model M --system-prompt-file <compiled> --tools <list> --no-session-persistence --setting-sources "" --strict-mcp-config --permission-prompts none --max-budget-usd <cap> [--json-schema S] [--permission-mode acceptEdits --restricted]` (the last group only for edit sessions; `--permission-prompts none` denies instead of hanging; `--restricted` confines edits to the cwd).
 
 - The prompt goes in on stdin. The plan call's cwd is an empty directory; the edit session's cwd is the wiki.
-- The child env strips API-key variables and disables auto memory. `--bare` is never passed.
+- The child env strips API-key variables and disables auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`). `--bare` is never passed.
 - Error handling: transient errors get 3 jittered retries; usage limits pause with a clear message; auth failures print "run `claude /login`"; schema failures get one retry with the error.
 - The system prompt is byte-stable (`AGENTS.md` first) so prompt caching works.
 - Default models (`~/.config/llm-wiki/config.toml`, overridable per wiki): `claude-sonnet-5-5` for plan and edit, `claude-opus-5-5` for `consolidate` and `lint --deep`. _(My call.)_

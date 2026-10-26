@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 
@@ -218,3 +221,38 @@ def make_wiki():
         return root
 
     return make
+
+
+def ok(result="done", structured=None, cost=0.01):
+    """A successful `claude -p --output-format json` payload."""
+    return {
+        "type": "result", "subtype": "success", "is_error": False, "result": result,
+        "structured_output": structured, "total_cost_usd": cost, "duration_ms": 5, "session_id": "s1",
+    }
+
+
+class FakeClaude:
+    def __init__(self, root):
+        self.queue_file = root / "queue.json"
+        self.log_file = root / "log.jsonl"
+        self.queue()
+
+    def queue(self, *responses):
+        self.queue_file.write_text(json.dumps(list(responses)), encoding="utf-8")
+
+    def calls(self) -> list[dict]:
+        if not self.log_file.exists():
+            return []
+        return [json.loads(line) for line in self.log_file.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.fixture
+def fake_claude(tmp_path, monkeypatch):
+    from llm_wiki.claude import REQUIRED_FLAGS
+
+    fake = FakeClaude(tmp_path)
+    monkeypatch.setenv("LLM_WIKI_CLAUDE", str(Path(__file__).parent / "fake_claude" / "claude"))
+    monkeypatch.setenv("FAKE_CLAUDE_QUEUE", str(fake.queue_file))
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(fake.log_file))
+    monkeypatch.setenv("FAKE_CLAUDE_HELP", "\n".join(REQUIRED_FLAGS))  # one source of truth
+    return fake
