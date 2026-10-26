@@ -8,7 +8,7 @@ import json
 import re
 import shutil
 import subprocess
-import tempfile
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,12 +52,12 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
     (
         "token",
         re.compile(
-            r"(?i)(\b(?:api[_-]?key|x-api-key|apikey|client[_-]?secret|secret[_-]?key|access[_-]?token|refresh[_-]?token|"
+            r"(?i)((?<![A-Za-z0-9])(?:api[_-]?key|x-api-key|apikey|client[_-]?secret|secret[_-]?key|access[_-]?token|refresh[_-]?token|"
             r"auth[_-]?token|token|secret)\b\s*[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9._\-/+=]{16,})"
         ),
         2,
     ),
-    ("password", re.compile(r"(?i)(\b(?:password|passwd|pwd|pass)\b\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"'<>,;|]{4,})"), 2),
+    ("password", re.compile(r"(?i)((?<![A-Za-z0-9])(?:password|passwd|pwd|pass)\b\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"'<>,;|]{4,})"), 2),
     ("conn_string_password", re.compile(r"(?i)(password|pwd)(=)([^;\s]{4,})"), 3),
 ]
 
@@ -115,6 +115,7 @@ _EXCERPT_MAX = 80
 
 
 def _clip(s: str) -> str:
+    s = _HIDDEN.sub(lambda m: f" U+{ord(m.group(0)):04X} ", s)
     s = " ".join(s.split())
     return s if len(s) <= _EXCERPT_MAX else s[: _EXCERPT_MAX - 1] + "…"
 
@@ -142,7 +143,11 @@ def find_injection(text: str) -> list[Hit]:
         for rx in rxs:
             for m in rx.finditer(text):
                 n = line_of(m.start())
-                hits.append(Hit(kind, n, _clip(lines[n - 1])))
+                line = lines[n - 1]
+                if kind == "base64_blob":
+                    col = m.start() - starts[n - 1]
+                    line = line[:col] + f"<base64 {len(m.group(0))} chars>" + line[col + len(m.group(0)):]
+                hits.append(Hit(kind, n, _clip(line)))
     hidden: dict[int, list[str]] = {}
     for m in _HIDDEN.finditer(text):
         if m.start() == 0 and m.group(0) == "﻿":
@@ -165,28 +170,34 @@ class ScreenResult:
     gitleaks: list[str] = field(default_factory=list)
 
 
-def _run_gitleaks(text: str, binary: str) -> list[str]:
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "source.txt"
-        report = Path(tmp) / "report.json"
+def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    src = tmp_dir / f"gitleaks-{uuid.uuid4().hex}.txt"
+    report = tmp_dir / f"gitleaks-{uuid.uuid4().hex}.json"
+    try:
         src.write_text(text, encoding="utf-8")
-        try:
-            subprocess.run(
-                [binary, "detect", "--no-git", "--source", str(src), "--report-format", "json",
-                 "--report-path", str(report)],
-                capture_output=True, timeout=120, check=False,
-            )
-            findings = json.loads(report.read_text(encoding="utf-8"))
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return []
-    if not isinstance(findings, list):
-        return []
+        proc = subprocess.run(
+            [binary, "detect", "--no-git", "--source", str(src), "--report-format", "json",
+             "--report-path", str(report)],
+            capture_output=True, timeout=120, check=False,
+        )
+        if proc.returncode not in (0, 1):  # 1 = leaks found
+            return ["gitleaks-error"]
+        findings = json.loads(report.read_text(encoding="utf-8"))
+        if not isinstance(findings, list):
+            return ["gitleaks-error"]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ["gitleaks-error"]
+    finally:
+        src.unlink(missing_ok=True)
+        report.unlink(missing_ok=True)
     return sorted({str(f["RuleID"]) for f in findings if isinstance(f, dict) and "RuleID" in f})
 
 
-def screen_text(text: str, gitleaks_path: Path | None = None) -> ScreenResult:
+def screen_text(text: str, gitleaks_path: Path | None = None, tmp_dir: Path | None = None) -> ScreenResult:
+    """Gitleaks runs only when a binary exists AND tmp_dir (inside the wiki root) is given."""
     binary = str(gitleaks_path) if gitleaks_path else shutil.which("gitleaks")
-    leaks = _run_gitleaks(text, binary) if binary else []
+    leaks = _run_gitleaks(text, binary, tmp_dir) if binary and tmp_dir else []
     redacted, counts = redact(text)
     return ScreenResult(redacted, counts, find_injection(redacted), leaks)
 
@@ -199,8 +210,12 @@ def quarantine(root: Path, raw_path: Path, reason: dict) -> Path:
     while dest.exists() or (qdir / f"{dest.name}.reason.json").exists():
         dest = qdir / f"{raw_path.stem}-{n}{raw_path.suffix}"
         n += 1
-    shutil.move(str(raw_path), dest)
-    (qdir / f"{dest.name}.reason.json").write_text(
-        json.dumps(reason, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    payload = json.dumps(reason, indent=2, ensure_ascii=False)  # fail before moving anything
+    reason_path = qdir / f"{dest.name}.reason.json"
+    reason_path.write_text(payload, encoding="utf-8")
+    try:
+        shutil.move(str(raw_path), dest)
+    except OSError:
+        reason_path.unlink(missing_ok=True)
+        raise
     return dest
