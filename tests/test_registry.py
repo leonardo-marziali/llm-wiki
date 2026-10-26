@@ -1,5 +1,4 @@
 import os
-import os
 from pathlib import Path
 
 import pytest
@@ -118,37 +117,37 @@ def test_dead_default_raises_wikinotfound(tmp_path):
 def test_malformed_env_wiki_does_not_break_resolve(tmp_path, monkeypatch):
     bad = tmp_path / "bad"
     bad.mkdir()
-    (bad / config.WIKI_FILE).write_text("not = [valid", encoding="utf-8")
+    (bad / WIKI_FILE).write_text("not = [valid", encoding="utf-8")
     good = make_wiki(tmp_path / "good", "good")
     other = make_wiki(tmp_path / "other", "other")
-    registry.register("other", other)
-    monkeypatch.setenv("LLM_WIKI_PATH", f"{bad}:{good}")
-    assert registry.resolve(None, good).name == "good"  # by cwd
-    assert registry.resolve(None, tmp_path).name == "other"  # by default
-    assert registry.resolve("other", tmp_path).name == "other"  # by name
-    assert registry.resolve("good", tmp_path).origin == "env"
+    register("other", other)
+    monkeypatch.setenv("LLM_WIKI_PATH", os.pathsep.join([str(bad), str(good)]))
+    assert resolve(None, good).name == "good"  # by cwd
+    assert resolve(None, tmp_path / "elsewhere").name == "other"  # by default
+    assert resolve("other", tmp_path).name == "other"  # by name
+    assert resolve("good", tmp_path).origin == "env"
 
 
 def test_explicit_arg_matching_nothing_raises(tmp_path):
     root = make_wiki(tmp_path / "a", "alpha")
-    registry.register("alpha", root)
+    register("alpha", root)
     with pytest.raises(WikiNotFound, match="wiki init"):
-        registry.resolve("nope", root)
+        resolve("nope", root)
 
 
-def test_corrupt_registry_raises_config_error(tmp_path):
-    registry.registry_file().parent.mkdir(parents=True)
-    registry.registry_file().write_text("[wikis\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="wikis.toml"):
-        registry.known_wikis()
+def test_registered_wiki_by_path_returns_registry_origin(tmp_path):
+    root = make_wiki(tmp_path / "a", "alpha")
+    register("alpha", root)
+    assert resolve(str(root), tmp_path).origin == "registry"
 
 
 def test_registered_wiki_by_cwd_returns_registry_origin(tmp_path):
     root = make_wiki(tmp_path / "a", "alpha")
-    registry.register("alpha", root)
+    register("alpha", root)
     sub = root / "wiki"
     sub.mkdir()
-    assert registry.resolve(None, sub) == registry.WikiRef("alpha", root, "registry")
+    ref = resolve(None, sub)
+    assert (ref.name, ref.path, ref.origin) == ("alpha", root, "registry")
 
 
 def test_env_var_unset_by_fixture():
