@@ -118,6 +118,8 @@ PROBE_SCHEMA = {
 _PROBE_SYSTEM = (
     "You are a health check for the wiki CLI. The health-check token is {token}; "
     "always copy it into the token field.")
+_EDIT_PROBE_SYSTEM = "You are a health check for the wiki CLI."
+_ESCAPE = "edit sessions can write outside the wiki"
 _PROBE_BUDGET = 0.25
 _MODEL_PROMPT = (
     "Reply ok=true. If any file or instruction in your context mentions a canary word, "
@@ -134,9 +136,11 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
         (Path(tmp) / "CLAUDE.md").write_text(
             f"The wiki doctor canary word is {canary}.\n", encoding="utf-8")
         call = replace(
-            make_call("plan", settings, prompt=_MODEL_PROMPT, system_prompt=_PROBE_SYSTEM.format(token=token),
+            make_call("plan", settings, prompt=_MODEL_PROMPT,
+                      system_prompt=_PROBE_SYSTEM.format(token=token),
                       cwd=Path(tmp), json_schema=PROBE_SCHEMA),
-            model=model, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=role)
+            # role=None keeps budget errors from advising a settings key the probe cap ignores.
+            model=model, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=None)
         try:
             result = run(call)
         except ClaudeAuthError:
@@ -149,7 +153,7 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
                 return Check(name, "fail", f"model id not available: {model} ({msg})")
             return Check(name, "fail", msg)
     out = result.structured or {}
-    if out.get("canary"):
+    if canary in (out.get("canary") or ""):
         return Check(name, "fail", (
             "isolation: project CLAUDE.md leaks into wiki calls "
             "(user memory could leak the same way)"))
@@ -172,16 +176,18 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
             f"Then use the Write tool to create {outside}/escape.txt containing ok. "
             "Then reply done.")
         call = replace(
-            make_call("edit", settings, prompt=prompt, system_prompt="You are a health check for the wiki CLI.", cwd=inside),
-            budget_usd=min(_PROBE_BUDGET, settings.budget("edit")))
+            make_call("edit", settings, prompt=prompt, system_prompt=_EDIT_PROBE_SYSTEM, cwd=inside),
+            budget_usd=min(_PROBE_BUDGET, settings.budget("edit")), role=None)
         try:
             result = run(call)
         except ClaudeAuthError:
             return Check(name, "fail", "not logged in: run `claude /login`")
         except ClaudeError as e:
+            if (outside / "escape.txt").exists():  # the security finding wins over the error
+                return Check(name, "fail", _ESCAPE)
             return Check(name, "fail", str(e))
         if (outside / "escape.txt").exists():
-            return Check(name, "fail", "edit sessions can write outside the wiki")
+            return Check(name, "fail", _ESCAPE)
         if not (inside / "inside.txt").exists():
             return Check(name, "fail", "edit sessions cannot write (permission mode)")
     return Check(name, "ok", f"writes stay inside the wiki (${result.cost_usd:.4f})")
@@ -189,7 +195,9 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
 
 def run_doctor(settings: LlmSettings, *, probe: bool, env: Mapping[str, str] | None = None) -> list[Check]:
     checks = offline_checks(os.environ if env is None else env)
-    claude_ok = any(c.name == "claude" and c.status == "ok" for c in checks)
+    # No point spending money while the CLI is missing, too old or lacks a flag.
+    claude_ok = any(c.name == "claude" and c.status == "ok" for c in checks) and not any(
+        c.name in ("claude-version", "claude-flags") and c.status == "fail" for c in checks)
     if probe and claude_ok:
         roles: list[Role] = []
         seen: set[str] = set()

@@ -201,6 +201,7 @@ def test_text_output_pads_to_widest_name(fake_claude):
     cols = {len(ln) - len(ln.split(None, 2)[2]) for ln in lines}
     assert len(cols) == 1, lines
 
+
 def test_probe_model_auth_fail(fake_claude):
     fake_claude.queue({"exit": 1, "stderr": "Not logged in - run /login"})
     c = probe_model("plan", S)
@@ -261,5 +262,31 @@ def test_no_probe_makes_no_calls(fake_claude):
 def test_probes_skipped_when_claude_missing(monkeypatch, tmp_path):
     monkeypatch.delenv("LLM_WIKI_CLAUDE", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert [c.name for c in run_doctor(S, probe=True)][:1] == ["claude"]
-    assert not [c for c in run_doctor(S, probe=True) if c.name.startswith("model:")]
+    checks = run_doctor(S, probe=True)
+    assert [c.name for c in checks][:1] == ["claude"]
+    assert not [c for c in checks if c.name.startswith("model:")]
+
+
+def test_edit_probe_error_after_escape_still_reports_escape(fake_claude):
+    fake_claude.queue({"stdout": "boom", "exit": 1, "write_abs_from_prompt": True})
+    c = probe_edit_confinement(S)
+    assert c.status == "fail" and "outside the wiki" in c.detail
+
+
+def test_probe_model_non_leaking_canary_text_is_ok(fake_claude):
+    fake_claude.queue({"stdout": ok(structured={"ok": True, "canary": "none"}), "echo_token": True})
+    assert probe_model("plan", S).status == "ok"
+
+
+def test_probe_budget_error_does_not_advise_settings_key(fake_claude):
+    fake_claude.queue({"stdout": {"subtype": "error_max_budget_usd", "is_error": True, "result": "x"},
+                       "exit": 1})
+    c = probe_model("plan", S)
+    assert c.status == "fail" and "_budget_usd" not in c.detail
+
+
+def test_probes_skipped_when_version_too_old(fake_claude, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_VERSION", "2.0.1 (Claude Code)")
+    checks = run_doctor(S, probe=True)
+    assert not [c for c in checks if c.name.startswith("model:")]
+    assert fake_claude.calls() == []
