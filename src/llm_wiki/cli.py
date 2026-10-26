@@ -217,8 +217,9 @@ def doctor(
     if fmt == "json":
         typer.echo(json.dumps([dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2))
     else:
+        width = max([16, *(len(c.name) for c in checks)])
         for c in checks:
-            typer.echo(f"{c.status:<4}  {c.name:<16}  {c.detail}")
+            typer.echo(f"{c.status:<4}  {c.name:<{width}}  {c.detail}")
     if any(c.status == "fail" for c in checks):
         raise typer.Exit(1)
 

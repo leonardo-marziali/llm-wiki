@@ -29,6 +29,9 @@ REQUIRED_FLAGS = (
     "--json-schema", "--permission-mode", "--restricted",
 )
 
+# Accepted by claude 2.1.310 but absent from --help; doctor's model probe proves it is honoured.
+HIDDEN_FLAGS = ("--system-prompt-file",)
+
 # Never forwarded: API keys would bill the API instead of the subscription, and the nested-session
 # markers make the child believe it runs inside another Claude Code. CLAUDE_CODE_OAUTH_TOKEN is the
 # subscription login and stays.

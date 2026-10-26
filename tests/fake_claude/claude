@@ -6,6 +6,7 @@ invocations), FAKE_CLAUDE_VERSION, FAKE_CLAUDE_HELP, FAKE_CLAUDE_VERSION_EXIT, F
 FAKE_CLAUDE_VERSION_SLEEP. Response keys: stdout (dict or str), stderr, exit, sleep,
 write ({path: text}, relative to cwd; absolute paths are written as given),
 echo_canary (put the canary word from cwd/CLAUDE.md into stdout.structured_output.canary),
+echo_token (put the token from the system prompt file into structured_output.token),
 write_abs_from_prompt (write "ok" to the first absolute path found in stdin).
 """
 import json
@@ -67,7 +68,10 @@ out = resp.get("stdout", "")
 if resp.get("echo_canary"):
     with open(os.path.join(cwd, "CLAUDE.md"), encoding="utf-8") as fh:
         word = re.search(r"canary word is (\S+?)\.", fh.read()).group(1)
-    out = dict(out, structured_output={"ok": True, "canary": word})
+    out = dict(out, structured_output=dict(out.get("structured_output") or {}, canary=word))
+if resp.get("echo_token"):
+    word = re.search(r"token is (\S+?)[;.\s]", system_prompt).group(1)
+    out = dict(out, structured_output=dict(out.get("structured_output") or {}, token=word))
 sys.stdout.write(out if isinstance(out, str) else json.dumps(out))
 sys.stderr.write(resp.get("stderr", ""))
 sys.exit(resp.get("exit", 0))

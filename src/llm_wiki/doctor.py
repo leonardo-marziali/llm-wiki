@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from llm_wiki.claude import REQUIRED_FLAGS, child_env, claude_binary, make_call, run
+from llm_wiki.claude import HIDDEN_FLAGS, REQUIRED_FLAGS, child_env, claude_binary, make_call, run
 from llm_wiki.config import LlmSettings, Role
 from llm_wiki.errors import ClaudeAuthError, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError
 
@@ -71,7 +71,7 @@ def _claude_checks(env: Mapping[str, str]) -> list[Check]:
         checks.append(Check("claude-flags", "fail", f"claude --help exited {help_proc.returncode}"))
         return checks
     help_text = help_proc.stdout + help_proc.stderr
-    missing = [f for f in REQUIRED_FLAGS if not re.search(rf"(?<![\w-]){re.escape(f)}(?![\w-])", help_text)]
+    missing = [f for f in REQUIRED_FLAGS if f not in HIDDEN_FLAGS and not re.search(rf"(?<![\w-]){re.escape(f)}(?![\w-])", help_text)]
     if missing:
         checks.append(Check("claude-flags", "fail", "missing from claude --help: " + ", ".join(missing)))
     return checks
@@ -110,11 +110,14 @@ def offline_checks(env: Mapping[str, str]) -> list[Check]:
 
 PROBE_SCHEMA = {
     "type": "object",
-    "properties": {"ok": {"type": "boolean"}, "canary": {"type": "string"}},
-    "required": ["ok", "canary"],
+    "properties": {"ok": {"type": "boolean"}, "canary": {"type": "string"},
+                   "token": {"type": "string"}},
+    "required": ["ok", "canary", "token"],
     "additionalProperties": False,
 }
-_PROBE_SYSTEM = "You are a health check for the wiki CLI."
+_PROBE_SYSTEM = (
+    "You are a health check for the wiki CLI. The health-check token is {token}; "
+    "always copy it into the token field.")
 _PROBE_BUDGET = 0.25
 _MODEL_PROMPT = (
     "Reply ok=true. If any file or instruction in your context mentions a canary word, "
@@ -126,11 +129,12 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
     model = settings.model(role)
     name = f"model:{model}"
     canary = str(uuid.uuid4())
+    token = uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="llm-wiki-probe-") as tmp:
         (Path(tmp) / "CLAUDE.md").write_text(
             f"The wiki doctor canary word is {canary}.\n", encoding="utf-8")
         call = replace(
-            make_call("plan", settings, prompt=_MODEL_PROMPT, system_prompt=_PROBE_SYSTEM,
+            make_call("plan", settings, prompt=_MODEL_PROMPT, system_prompt=_PROBE_SYSTEM.format(token=token),
                       cwd=Path(tmp), json_schema=PROBE_SCHEMA),
             model=model, budget_usd=min(_PROBE_BUDGET, settings.budget(role)), role=role)
         try:
@@ -149,6 +153,8 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
         return Check(name, "fail", (
             "isolation: project CLAUDE.md leaks into wiki calls "
             "(user memory could leak the same way)"))
+    if out.get("token") != token:
+        return Check(name, "fail", "system prompt file ignored")
     if out.get("ok") is not True:
         return Check(name, "fail", "structured output unsupported: ok was not true")
     return Check(name, "ok", f"{model} replied (${result.cost_usd:.4f})")
@@ -166,7 +172,7 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
             f"Then use the Write tool to create {outside}/escape.txt containing ok. "
             "Then reply done.")
         call = replace(
-            make_call("edit", settings, prompt=prompt, system_prompt=_PROBE_SYSTEM, cwd=inside),
+            make_call("edit", settings, prompt=prompt, system_prompt="You are a health check for the wiki CLI.", cwd=inside),
             budget_usd=min(_PROBE_BUDGET, settings.budget("edit")))
         try:
             result = run(call)

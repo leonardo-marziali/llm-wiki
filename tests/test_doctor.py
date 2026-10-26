@@ -163,10 +163,11 @@ def test_flags_match_whole_tokens(fake_claude, monkeypatch):
 
 S = LlmSettings()
 PROBE_OK = ok(structured={"ok": True, "canary": ""})
+PROBE_RESP = {"stdout": PROBE_OK, "echo_token": True}
 
 
 def test_probe_model_ok(fake_claude):
-    fake_claude.queue({"stdout": PROBE_OK})
+    fake_claude.queue(PROBE_RESP)
     c = probe_model("plan", S)
     assert c.status == "ok" and c.name == f"model:{S.model('plan')}"
     (call,) = fake_claude.calls()
@@ -177,10 +178,28 @@ def test_probe_model_ok(fake_claude):
 
 
 def test_probe_model_detects_canary_leak(fake_claude):
-    fake_claude.queue({"stdout": PROBE_OK, "echo_canary": True})
+    fake_claude.queue({**PROBE_RESP, "echo_canary": True})
     c = probe_model("plan", S)
     assert c.status == "fail" and "isolation" in c.detail
 
+
+def test_probe_model_detects_ignored_system_prompt(fake_claude):
+    fake_claude.queue({"stdout": PROBE_OK})  # no token echoed
+    c = probe_model("plan", S)
+    assert c.status == "fail" and "system prompt file ignored" in c.detail
+
+
+def test_hidden_flag_not_required_in_help(fake_claude, monkeypatch):
+    from llm_wiki.claude import HIDDEN_FLAGS
+    monkeypatch.setenv("FAKE_CLAUDE_HELP", "\n".join(f for f in REQUIRED_FLAGS if f not in HIDDEN_FLAGS))
+    assert "claude-flags" not in _by_name(_doctor("--no-probe"))
+
+
+def test_text_output_pads_to_widest_name(fake_claude):
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, {"stdout": ok(), "write": {"inside.txt": "ok"}})
+    lines = runner.invoke(app, ["doctor"]).output.splitlines()
+    cols = {len(ln) - len(ln.split(None, 2)[2]) for ln in lines}
+    assert len(cols) == 1, lines
 
 def test_probe_model_auth_fail(fake_claude):
     fake_claude.queue({"exit": 1, "stderr": "Not logged in - run /login"})
@@ -207,7 +226,7 @@ def test_probe_model_usage_limit_fails_cleanly(fake_claude):
 
 
 def test_probes_dedupe_models(fake_claude):
-    fake_claude.queue({"stdout": PROBE_OK}, {"stdout": PROBE_OK},
+    fake_claude.queue(PROBE_RESP, PROBE_RESP,
                       {"stdout": ok(), "write": {"inside.txt": "ok"}})
     checks = run_doctor(S, probe=True)
     names = [c.name for c in checks]
