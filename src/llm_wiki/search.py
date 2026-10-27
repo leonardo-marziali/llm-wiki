@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from llm_wiki.pages import iter_pages
+from llm_wiki.pages import Page, iter_pages
 from llm_wiki.registry import WikiRef
 
 K1 = 1.2
@@ -53,35 +53,49 @@ def search(
     docs: list[tuple[SearchHit, Counter, int]] = []
     for ref in refs:
         for page in iter_pages(ref.path):
-            fm = page.fm
-            if fm is None:
-                continue
-            if status is not None and fm.status != status:
-                continue
-            parts = page.rel.split("/")
-            if section is not None and not (len(parts) > 1 and parts[0] == section):
-                continue
-            tokens = _virtual_doc(fm, page.body)
-            hit = SearchHit(
-                wiki=ref.name,
-                path=str(page.path),
-                id=fm.id,
-                title=fm.title,
-                summary=fm.summary,
-                status=fm.status,
-                last_verified=fm.last_verified.isoformat(),
-                score=0.0,
-            )
-            docs.append((hit, Counter(tokens), len(tokens)))
+            if _matches(page, status, section):
+                assert page.fm is not None
+                tokens = _virtual_doc(page.fm, page.body)
+                docs.append((_hit(ref, page), Counter(tokens), len(tokens)))
     if not docs or not q_terms:
         return []
+    return _rank(docs, q_terms)[:top]
+
+
+def _matches(page: Page, status: str | None, section: str | None) -> bool:
+    """A valid page that passes the --status and --section filters."""
+    if page.fm is None or (status is not None and page.fm.status != status):
+        return False
+    parts = page.rel.split("/")
+    return section is None or (len(parts) > 1 and parts[0] == section)
+
+
+def _hit(ref: WikiRef, page: Page) -> SearchHit:
+    fm = page.fm
+    assert fm is not None
+    return SearchHit(
+        wiki=ref.name,
+        path=str(page.path),
+        id=fm.id,
+        title=fm.title,
+        summary=fm.summary,
+        status=fm.status,
+        last_verified=fm.last_verified.isoformat(),
+        score=0.0,
+    )
+
+
+def _rank(
+    docs: list[tuple[SearchHit, Counter, int]], q_terms: set[str]
+) -> list[SearchHit]:
+    """BM25-score the docs; hits with a positive score, best first."""
     n = len(docs)
     avgdl = sum(d[2] for d in docs) / n or 1.0
     idf = {}
     for term in q_terms:
         df = sum(1 for _, tf, _ in docs if term in tf)
         idf[term] = math.log(1 + (n - df + 0.5) / (df + 0.5))
-    hits = []
+    hits: list[SearchHit] = []
     for hit, tf, dl in docs:
         score = 0.0
         for term in q_terms:
@@ -92,4 +106,4 @@ def search(
             hit.score = score
             hits.append(hit)
     hits.sort(key=lambda h: (-h.score, h.id))
-    return hits[:top]
+    return hits

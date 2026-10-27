@@ -5,8 +5,14 @@ from pathlib import Path
 import pytest
 
 from llm_wiki.errors import ConfigError
-
-from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, category_for, sha256_file
+from llm_wiki.manifest import (
+    MANIFEST,
+    Manifest,
+    SourceEntry,
+    SourceStatus,
+    category_for,
+    sha256_file,
+)
 
 
 def _write(root: Path, rel: str, text: str) -> Path:
@@ -16,7 +22,7 @@ def _write(root: Path, rel: str, text: str) -> Path:
     return p
 
 
-def _entry(path: str, sha: str, status="ingested", **kw) -> SourceEntry:
+def _entry(path: str, sha: str, status: SourceStatus = "ingested", **kw) -> SourceEntry:
     return SourceEntry(
         path=path,
         sha256=sha,
@@ -143,7 +149,7 @@ def _raw_manifest(root: Path, text: str) -> None:
 )
 def test_load_bad_manifest_raises_config_error(tmp_path, text):
     _raw_manifest(tmp_path, text)
-    with pytest.raises(ConfigError, match="manifest.json"):
+    with pytest.raises(ConfigError, match=r"manifest\.json"):
         Manifest.load(tmp_path)
 
 
@@ -155,5 +161,6 @@ def test_reappearing_deleted_path_is_new(tmp_path):
 
 
 def test_mark_deleted_unknown_path_raises(tmp_path):
-    with pytest.raises(ConfigError, match="raw/x.md"):
-        Manifest.load(tmp_path).mark_deleted("raw/x.md")
+    manifest = Manifest.load(tmp_path)
+    with pytest.raises(ConfigError, match=r"raw/x\.md"):
+        manifest.mark_deleted("raw/x.md")

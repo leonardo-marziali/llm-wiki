@@ -48,7 +48,8 @@ def _section_lines(pages: list[Page], section: str) -> list[str]:
         assert fm is not None
         link = p.rel.removeprefix(section + "/")
         lines.append(
-            f"- [{_link_title(fm.title)}]({link}) — {_one_line(fm.summary)} — {fm.status} — {fm.last_verified.isoformat()}"
+            f"- [{_link_title(fm.title)}]({link}) — {_one_line(fm.summary)} — "
+            f"{fm.status} — {fm.last_verified.isoformat()}"
         )
     return lines
 
@@ -84,7 +85,8 @@ def build_indexes(root: Path, cfg: WikiConfig) -> list[Path]:
     ]
     for s in cfg.sections:
         lines.append(
-            f"- [{s.name}]({s.name}/_index.md) — {len(by_section[s.name])} pages — {s.description}"
+            f"- [{s.name}]({s.name}/_index.md) — "
+            f"{len(by_section[s.name])} pages — {s.description}"
         )
     lines += ["", "## Hubs", ""]
     hubs = sorted(
@@ -100,7 +102,7 @@ def build_indexes(root: Path, cfg: WikiConfig) -> list[Path]:
     header = _header(top, f"# {cfg.name}\n\n{cfg.description}\n\n")
     budget = MAX_TOP_LINES - header.count("\n") - 1 - len(lines)
     if len(hub_lines) > budget:
-        hub_lines = hub_lines[: budget - 1] + [TRUNCATED] if budget >= 1 else []
+        hub_lines = [*hub_lines[: budget - 1], TRUNCATED] if budget >= 1 else []
     if _write_if_changed(top, header, lines + hub_lines):
         changed.append(top)
     return changed

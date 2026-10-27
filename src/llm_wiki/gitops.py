@@ -10,6 +10,7 @@ def git(root: Path, *args: str) -> str:
     try:
         proc = subprocess.run(
             ["git", *args],
+            check=False,
             cwd=root,
             capture_output=True,
             text=True,
@@ -43,7 +44,9 @@ def _existing_dir(path: Path) -> Path:
 
 
 def enclosing_repo(path: Path) -> Path | None:
-    """Toplevel of the git work tree containing ``path`` (which may not exist yet), else None."""
+    """Toplevel of the git work tree containing ``path`` (which may not exist yet), else
+    None.
+    """
     try:
         top = git(_existing_dir(path), "rev-parse", "--show-toplevel").strip()
     except GitError:
@@ -52,7 +55,9 @@ def enclosing_repo(path: Path) -> Path | None:
 
 
 def inside_git_dir(path: Path) -> bool:
-    """True when ``path`` (which may not exist yet) lies inside a repository's ``.git`` directory."""
+    """True when ``path`` (which may not exist yet) lies inside a repository's ``.git``
+    directory.
+    """
     try:
         return (
             git(_existing_dir(path), "rev-parse", "--is-inside-git-dir").strip()

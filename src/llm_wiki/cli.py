@@ -11,6 +11,14 @@ from typer.core import TyperGroup
 from llm_wiki import __version__
 from llm_wiki.errors import WikiError
 
+_WIKI_HELP = "Wiki name or path."
+_FORMAT_HELP = "text or json."
+
+
+def _check_format(fmt: str) -> None:
+    if fmt not in ("text", "json"):
+        raise WikiError("--format must be text or json")
+
 
 class WikiGroup(TyperGroup):
     """Root group that turns any `errors.WikiError` into `error: <msg>` on
@@ -65,7 +73,9 @@ def init(
         "", "--description", help="One line: what belongs in this wiki."
     ),
 ) -> None:
-    """Create a wiki (own git repo, or a folder in an existing repo) or register an existing one."""
+    """Create a wiki (own git repo, or a folder in an existing repo) or register an
+    existing one.
+    """
     from llm_wiki.init import init_wiki
 
     if profile not in ("software", "general"):
@@ -74,14 +84,17 @@ def init(
     verb = "created wiki" if res.created else "registered existing wiki"
     msg = f"{verb} {res.ref.name} at {res.ref.path}"
     if res.host_repo is not None:
-        msg += f" inside existing git repository {res.host_repo} (not committed — review and commit it there)"
+        msg += (
+            f" inside existing git repository {res.host_repo}"
+            " (not committed — review and commit it there)"
+        )
     typer.echo(msg)
 
 
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search terms."),
-    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
     all_wikis: bool = typer.Option(False, "--all", help="Search every known wiki."),
     status: str | None = typer.Option(
         None, "--status", help="Only pages with this status."
@@ -90,7 +103,7 @@ def search(
         None, "--section", help="Only pages in this section."
     ),
     top: int = typer.Option(8, "--top", help="Maximum number of hits."),
-    fmt: str = typer.Option("text", "--format", help="text or json."),
+    fmt: str = typer.Option("text", "--format", help=_FORMAT_HELP),
 ) -> None:
     """Find relevant pages (BM25 over title, summary, tags, id, body)."""
     from llm_wiki import registry
@@ -98,8 +111,7 @@ def search(
 
     if all_wikis and wiki is not None:
         raise WikiError("use either --wiki or --all")
-    if fmt not in ("text", "json"):
-        raise WikiError("--format must be text or json")
+    _check_format(fmt)
     if top < 1:
         raise WikiError("--top must be >= 1")
     refs = registry.known_wikis() if all_wikis else [registry.resolve(wiki, Path.cwd())]
@@ -115,15 +127,16 @@ def search(
     else:
         for h in hits:
             typer.echo(
-                f"{h.score:.2f}  {h.wiki}:{h.id}  {h.title} — {h.summary} [{h.status}, {h.last_verified}]"
+                f"{h.score:.2f}  {h.wiki}:{h.id}  {h.title} — {h.summary} "
+                f"[{h.status}, {h.last_verified}]"
             )
 
 
 @app.command()
 def lint(
-    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
     strict: bool = typer.Option(False, "--strict", help="Fail on warnings too."),
-    fmt: str = typer.Option("text", "--format", help="text or json."),
+    fmt: str = typer.Option("text", "--format", help=_FORMAT_HELP),
     report_file: bool = typer.Option(
         False, "--report", help="Also write .wiki/reports/lint-<date>.md."
     ),
@@ -136,8 +149,7 @@ def lint(
     from llm_wiki.lint import lint as run_lint
     from llm_wiki.lint import write_report
 
-    if fmt not in ("text", "json"):
-        raise WikiError("--format must be text or json")
+    _check_format(fmt)
     ref = registry.resolve(wiki, Path.cwd())
     today = date.today()
     report = run_lint(ref.path, load_config(ref.path), today=today)
@@ -163,9 +175,9 @@ def lint(
 
 @app.command()
 def status(
-    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
     all_wikis: bool = typer.Option(False, "--all", help="One row per known wiki."),
-    fmt: str = typer.Option("text", "--format", help="text or json."),
+    fmt: str = typer.Option("text", "--format", help=_FORMAT_HELP),
 ) -> None:
     """Show counts against caps, stale pages, pending sources and recent log."""
     from llm_wiki import registry
@@ -173,37 +185,48 @@ def status(
 
     if all_wikis and wiki is not None:
         raise WikiError("use either --wiki or --all")
-    if fmt not in ("text", "json"):
-        raise WikiError("--format must be text or json")
+    _check_format(fmt)
     if all_wikis:
-        rows = []
-        for ref in registry.known_wikis():
-            try:
-                rows.append(dataclasses.asdict(wiki_status(ref)))
-            except Exception as e:  # one broken wiki must not hide the others
-                rows.append(
-                    {
-                        "name": ref.name,
-                        "path": str(ref.path),
-                        "error": str(e) or type(e).__name__,
-                    }
-                )
+        rows = [_status_row(ref) for ref in registry.known_wikis()]
         if fmt == "json":
             typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
         else:
-            for r in rows:
-                if "error" in r:
-                    typer.echo(f"{r['name']}  {r['path']}  error: {r['error']}")
-                else:
-                    typer.echo(
-                        f"{r['name']}  {r['path']}  sources {r['sources']}/{r['max_sources']}  "
-                        f"pages {r['pages']}/{r['max_pages']}  — {r['description']}"
-                    )
+            _echo_status_rows(rows)
         return
     st = wiki_status(registry.resolve(wiki, Path.cwd()))
     if fmt == "json":
         typer.echo(json.dumps(dataclasses.asdict(st), ensure_ascii=False, indent=2))
-        return
+    else:
+        _echo_status(st)
+
+
+def _status_row(ref) -> dict:
+    """One `status --all` row; a wiki that fails to load becomes an error row."""
+    from llm_wiki.status import wiki_status
+
+    try:
+        return dataclasses.asdict(wiki_status(ref))
+    except Exception as e:  # noqa: BLE001  one broken wiki must not hide the others
+        return {
+            "name": ref.name,
+            "path": str(ref.path),
+            "error": str(e) or type(e).__name__,
+        }
+
+
+def _echo_status_rows(rows: list[dict]) -> None:
+    for r in rows:
+        if "error" in r:
+            typer.echo(f"{r['name']}  {r['path']}  error: {r['error']}")
+        else:
+            typer.echo(
+                f"{r['name']}  {r['path']}  "
+                f"sources {r['sources']}/{r['max_sources']}  "
+                f"pages {r['pages']}/{r['max_pages']}  — {r['description']}"
+            )
+
+
+def _echo_status(st) -> None:
     typer.echo(f"{st.name}  {st.path}")
     if st.description:
         typer.echo(st.description)
@@ -214,7 +237,8 @@ def status(
     typer.echo(f"stale: {', '.join(st.stale) if st.stale else 'none'}")
     typer.echo(f"inbox {st.inbox}  quarantined {st.quarantined}")
     typer.echo(
-        f"pending: new {st.pending['new']}, changed {st.pending['changed']}, deleted {st.pending['deleted']}"
+        f"pending: new {st.pending['new']}, changed {st.pending['changed']}, "
+        f"deleted {st.pending['deleted']}"
     )
     if st.last_log:
         typer.echo("recent log:")
@@ -224,11 +248,11 @@ def status(
 
 @app.command()
 def doctor(
-    wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
     no_probe: bool = typer.Option(
         False, "--no-probe", help="Skip the paid claude -p probes."
     ),
-    fmt: str = typer.Option("text", "--format", help="text or json."),
+    fmt: str = typer.Option("text", "--format", help=_FORMAT_HELP),
 ) -> None:
     """Check claude, git and optional tools (exit 1 if a check fails)."""
     from llm_wiki import registry
@@ -236,8 +260,7 @@ def doctor(
     from llm_wiki.doctor import Check, run_doctor
     from llm_wiki.errors import ConfigError, WikiNotFound
 
-    if fmt not in ("text", "json"):
-        raise WikiError("--format must be text or json")
+    _check_format(fmt)
     root = None
     try:
         root = registry.resolve(wiki, Path.cwd()).path

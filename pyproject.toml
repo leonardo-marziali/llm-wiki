@@ -40,6 +40,15 @@ llm_wiki = ["templates/*", "templates/**/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# pytest puts tests/ on sys.path, so tests can `from conftest import ...`
+extraPaths = ["tests"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 88

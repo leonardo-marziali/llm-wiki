@@ -19,7 +19,8 @@ def test_e2e_m1(tmp_path, monkeypatch):
 
     res = runner.invoke(app, ["status"])
     assert res.exit_code == 0, res.output
-    assert "sources 0/100" in res.output and "pages 2/500" in res.output
+    assert "sources 0/100" in res.output
+    assert "pages 2/500" in res.output
     res = runner.invoke(app, ["lint"])
     assert res.exit_code == 0, res.output
 
@@ -47,7 +48,10 @@ def test_e2e_m1(tmp_path, monkeypatch):
         page_text(
             "conventions.git-flow",
             "Git flow",
-            f"# Git flow\n\n**TL;DR** Branch from main.\n\nWe branch from main.[^1]\n\n[^1]: {rel}\n",
+            (
+                "# Git flow\n\n**TL;DR** Branch from main.\n\n"
+                f"We branch from main.[^1]\n\n[^1]: {rel}\n"
+            ),
             sources=[(rel, sha)],
             review_after="2099-01-01",
         ),
@@ -62,4 +66,5 @@ def test_e2e_m1(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     res = runner.invoke(app, ["status"])
     assert res.exit_code == 0, res.output
-    assert "sources 1/100" in res.output and "pages 3/500" in res.output
+    assert "sources 1/100" in res.output
+    assert "pages 3/500" in res.output

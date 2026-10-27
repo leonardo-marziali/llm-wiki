@@ -10,6 +10,8 @@ from . import images, sheets
 from .caps import Caps
 from .errors import RefusedSource, UnsupportedFormat, WikiError
 
+_XLSX = ".xlsx"
+_PPTX_CONVERTER = "markitdown+pptx-notes"
 SUPPORTED = {
     ".md",
     ".txt",
@@ -19,7 +21,7 @@ SUPPORTED = {
     ".gif",
     ".webp",
     ".pptx",
-    ".xlsx",
+    _XLSX,
     ".csv",
     ".docx",
     ".pdf",
@@ -57,7 +59,10 @@ class Conversion:
 
 def _header(source: str, sha: str, converter: str, part: str | None = None) -> str:
     part_line = f"part: {part}\n" if part else ""
-    return f"---\nsource: {source}\nsha256: {sha}\nconverter: {converter}\n{part_line}---\n\n"
+    return (
+        f"---\nsource: {source}\nsha256: {sha}\nconverter: {converter}\n"
+        f"{part_line}---\n\n"
+    )
 
 
 def _read_text(path: Path) -> str:
@@ -83,11 +88,8 @@ def _pptx_notes(path: Path) -> str:
         title = ""
         if slide.shapes.title is not None and slide.shapes.title.has_text_frame:
             title = slide.shapes.title.text.strip()
-        notes = (
-            slide.notes_slide.notes_text_frame.text.strip()
-            if slide.has_notes_slide
-            else ""
-        )
+        frame = slide.notes_slide.notes_text_frame if slide.has_notes_slide else None
+        notes = frame.text.strip() if frame is not None else ""
         if notes:
             blocks.append(f"## Slide {i}: {title}\n\n{notes}\n")
     return "\n".join(blocks)
@@ -142,7 +144,10 @@ def _pypdf_text(path: Path) -> str:
 
 
 def _docling_text(path: Path) -> str:
-    from docling.document_converter import DocumentConverter
+    # optional extra (`llm-wiki[docling]`); only called when it is installed
+    from docling.document_converter import (  # pyright: ignore[reportMissingImports]
+        DocumentConverter,
+    )
 
     return DocumentConverter().convert(str(path)).document.export_to_markdown()
 
@@ -157,7 +162,7 @@ def _pdf(path: Path) -> tuple[str, str, list[str]]:
     for name, fn in attempts:
         try:
             text = fn(path)
-        except Exception:
+        except Exception:  # noqa: BLE001  any converter may fail on a bad PDF; try the next
             failed += 1
             continue
         if len(text.strip()) > len(best_text.strip()):
@@ -202,7 +207,7 @@ def _split(text: str, limit: int) -> list[str]:
     sections: list[str] = []
     cur: list[str] = []
     for line in text.splitlines(keepends=True):
-        if (line.startswith("# ") or line.startswith("## ")) and cur:
+        if (line.startswith(("# ", "## "))) and cur:
             sections.append("".join(cur))
             cur = []
         cur.append(line)
@@ -221,88 +226,116 @@ def _split(text: str, limit: int) -> list[str]:
     return parts
 
 
-def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
-    suffix = raw_path.suffix.lower()
+def _check_ingestable(raw_path: Path, suffix: str) -> None:
     if never_ingest(raw_path.name):
         raise RefusedSource(
             f"{raw_path.name} looks like a secret/credential file and is never ingested"
         )
     if suffix not in SUPPORTED:
         raise UnsupportedFormat(
-            f"{suffix or raw_path.name} is not supported; supported: {', '.join(sorted(SUPPORTED))}"
+            f"{suffix or raw_path.name} is not supported; "
+            f"supported: {', '.join(sorted(SUPPORTED))}"
         )
 
+
+def _source_rel(root: Path, raw_path: Path) -> str:
+    try:
+        rel = raw_path.resolve().relative_to((root / "raw").resolve())
+    except ValueError:
+        return "raw/" + raw_path.name
+    return "raw/" + rel.as_posix()
+
+
+def _pptx(
+    raw_path: Path, source: str, sha: str, out_dir: Path
+) -> tuple[str, list[Path]]:
+    """Slide text, plus a separate notes file when the deck has speaker notes."""
+    body = _markitdown(raw_path)
+    notes = _pptx_notes(raw_path)
+    if not notes:
+        return body, []
+    notes_path = out_dir / f"{sha}.notes.md"
+    notes_path.write_text(
+        _header(source, sha, _PPTX_CONVERTER) + notes, encoding="utf-8"
+    )
+    return body, [notes_path]
+
+
+def _image_body(raw_path: Path) -> str:
+    info = images.triage(raw_path)
+    if info.reason:
+        raise RefusedSource(info.reason)
+    return (
+        f"Image: {info.width}x{info.height} px. Content not extracted; needs vision.\n"
+    )
+
+
+def _convert_body(
+    raw_path: Path, suffix: str, source: str, sha: str, out_dir: Path
+) -> tuple[str, str, list[str], list[Path]]:
+    """(converter, body, flags, extra output files) for one supported source."""
+    if suffix in (".md", ".txt"):
+        return "text", _read_text(raw_path), [], []
+    if suffix == ".docx":
+        return "markitdown", _markitdown(raw_path), [], []
+    if suffix == ".pptx":
+        body, extra = _pptx(raw_path, source, sha, out_dir)
+        return _PPTX_CONVERTER, body, [], extra
+    if suffix in (_XLSX, ".csv"):
+        rows = _xlsx_rows(raw_path) if suffix == _XLSX else _csv_rows(raw_path)
+        body, csvs = sheets.convert_sheets(rows, out_dir, sha)
+        return "sheets", body, ["large-sheet"] if csvs else [], csvs
+    if suffix == ".pdf":
+        converter, body, flags = _pdf(raw_path)
+        return converter, body, flags, []
+    return "image", _image_body(raw_path), ["needs-vision"], []
+
+
+def _write_outputs(
+    out_dir: Path, source: str, sha: str, converter: str, body: str, caps: Caps
+) -> tuple[list[Path], str, int]:
+    """Write the primary file, plus parts when it exceeds split_chars.
+
+    Returns the written paths, the primary text and the number of parts.
+    """
+    head = _header(source, sha, converter)
+    text = head + body
+    primary = out_dir / f"{sha}.md"
+    primary.write_text(text, encoding="utf-8")
+    outputs = [primary]
+    if len(text) <= caps.split_chars:
+        return outputs, text, 1
+    chunks = _split(body, max(caps.split_chars - len(head) - 32, 1))
+    for n, chunk in enumerate(chunks, 1):
+        p = out_dir / f"{sha}.p{n}.md"
+        p.write_text(
+            _header(source, sha, converter, f"{n}/{len(chunks)}") + chunk,
+            encoding="utf-8",
+        )
+        outputs.append(p)
+    return outputs, text, len(chunks)
+
+
+def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
+    suffix = raw_path.suffix.lower()
+    _check_ingestable(raw_path, suffix)
     out_dir = root / CONVERTED_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
+    source = _source_rel(root, raw_path)
     try:
-        source = (
-            "raw/" + raw_path.resolve().relative_to((root / "raw").resolve()).as_posix()
+        converter, body, flags, extra = _convert_body(
+            raw_path, suffix, source, sha, out_dir
         )
-    except ValueError:
-        source = "raw/" + raw_path.name
-
-    flags: list[str] = []
-    extra: list[Path] = []
-
-    try:
-        if suffix in (".md", ".txt"):
-            converter, body = "text", _read_text(raw_path)
-        elif suffix == ".docx":
-            converter, body = "markitdown", _markitdown(raw_path)
-        elif suffix == ".pptx":
-            converter, body = "markitdown+pptx-notes", _markitdown(raw_path)
-            notes = _pptx_notes(raw_path)
-            if notes:
-                notes_path = out_dir / f"{sha}.notes.md"
-                notes_path.write_text(
-                    _header(source, sha, converter) + notes, encoding="utf-8"
-                )
-                extra.append(notes_path)
-        elif suffix in (".xlsx", ".csv"):
-            converter = "sheets"
-            rows = _xlsx_rows(raw_path) if suffix == ".xlsx" else _csv_rows(raw_path)
-            body, csvs = sheets.convert_sheets(rows, out_dir, sha)
-            if csvs:
-                flags.append("large-sheet")
-                extra.extend(csvs)
-        elif suffix == ".pdf":
-            converter, body, flags = _pdf(raw_path)
-        else:
-            info = images.triage(raw_path)
-            if info.reason:
-                raise RefusedSource(info.reason)
-            converter = "image"
-            body = f"Image: {info.width}x{info.height} px. Content not extracted; needs vision.\n"
-            flags.append("needs-vision")
     except WikiError:
         raise
     except Exception as exc:
         raise RefusedSource(
             f"{raw_path.name}: could not be read ({type(exc).__name__})"
         ) from exc
-
-    primary = out_dir / f"{sha}.md"
-    text = _header(source, sha, converter) + body
-    primary.write_text(text, encoding="utf-8")
-    outputs = [primary]
-
-    parts = 1
-    if len(text) > caps.split_chars:
-        head = _header(source, sha, converter)
-        chunks = _split(body, max(caps.split_chars - len(head) - 32, 1))
-        parts = len(chunks)
-        for n, chunk in enumerate(chunks, 1):
-            p = out_dir / f"{sha}.p{n}.md"
-            p.write_text(
-                _header(source, sha, converter, f"{n}/{parts}") + chunk,
-                encoding="utf-8",
-            )
-            outputs.append(p)
-    outputs.extend(extra)
-
+    outputs, text, parts = _write_outputs(out_dir, source, sha, converter, body, caps)
     return Conversion(
         converter=converter,
-        outputs=[p.relative_to(root).as_posix() for p in outputs],
+        outputs=[p.relative_to(root).as_posix() for p in [*outputs, *extra]],
         chars=len(text),
         parts=parts,
         flags=flags,

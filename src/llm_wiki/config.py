@@ -53,7 +53,9 @@ class LlmSettings(BaseModel):
 
 
 class LlmOverrides(BaseModel):
-    """The [llm] table of wiki.toml or config.toml: every field optional, None means inherit."""
+    """The [llm] table of wiki.toml or config.toml: every field optional, None means
+    inherit.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -89,26 +91,40 @@ class WikiConfig(BaseModel):
     def effective_caps(self) -> Caps:
         known = {f.name for f in fields(Caps)}
         for key, value in self.caps.items():
-            if key not in known:
-                raise ConfigError(f"unknown cap '{key}' in [caps]")
-            hard = getattr(HARD_CAPS, key)
-            if value < 1:
-                raise ConfigError(f"cap {key}={value} must be at least 1")
-            if value > hard:
-                raise ConfigError(f"cap {key}={value} exceeds hard maximum {hard}")
-        overrides = dict(self.caps)
-        for key, value in self.caps.items():
-            warn = "warn_" + key.removeprefix("max_")
-            if key.startswith("max_") and warn in known and warn not in self.caps:
-                overrides[warn] = max(1, int(value * WARN_RATIO))
-        caps = replace(HARD_CAPS, **overrides)
-        for key in (f.name for f in fields(Caps)):  # field order: deterministic message
-            max_key = "max_" + key.removeprefix("warn_")
-            if key.startswith("warn_") and max_key in known:
-                warn_v, max_v = getattr(caps, key), getattr(caps, max_key)
-                if warn_v > max_v:
-                    raise ConfigError(f"cap {key}={warn_v} exceeds {max_key}={max_v}")
-        return caps
+            _check_cap(key, value, known)
+        caps = replace(HARD_CAPS, **_with_warn_defaults(self.caps, known))
+        # Sonar types dataclasses.replace() as DataclassInstance; it returns Caps
+        _check_warn_within_max(caps, known)  # NOSONAR
+        return caps  # NOSONAR
+
+
+def _check_cap(key: str, value: int, known: set[str]) -> None:
+    if key not in known:
+        raise ConfigError(f"unknown cap '{key}' in [caps]")
+    hard = getattr(HARD_CAPS, key)
+    if value < 1:
+        raise ConfigError(f"cap {key}={value} must be at least 1")
+    if value > hard:
+        raise ConfigError(f"cap {key}={value} exceeds hard maximum {hard}")
+
+
+def _with_warn_defaults(caps: dict[str, int], known: set[str]) -> dict[str, int]:
+    """``caps`` plus a derived warn_* level for each lowered max_* without one."""
+    out = dict(caps)
+    for key, value in caps.items():
+        warn = "warn_" + key.removeprefix("max_")
+        if key.startswith("max_") and warn in known and warn not in caps:
+            out[warn] = max(1, int(value * WARN_RATIO))
+    return out
+
+
+def _check_warn_within_max(caps: Caps, known: set[str]) -> None:
+    for key in (f.name for f in fields(Caps)):  # field order: deterministic message
+        max_key = "max_" + key.removeprefix("warn_")
+        if key.startswith("warn_") and max_key in known:
+            warn_v, max_v = getattr(caps, key), getattr(caps, max_key)
+            if warn_v > max_v:
+                raise ConfigError(f"cap {key}={warn_v} exceeds {max_key}={max_v}")
 
 
 def load_profile(name: str) -> list[Section]:

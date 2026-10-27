@@ -14,7 +14,7 @@ from llm_wiki.errors import ConfigError
 
 
 def write_toml(tmp_path, caps=None, **overrides):
-    """Write a valid wiki.toml into tmp_path (with overrides) and return the directory."""
+    """Write a valid wiki.toml (with overrides) into tmp_path; return the directory."""
     fields = {"name": "demo", "description": "A demo wiki", "profile": "general"}
     fields.update(overrides)
     lines = [f"{k} = {json.dumps(v)}" for k, v in fields.items() if isinstance(v, str)]
@@ -40,7 +40,8 @@ def test_hard_caps_values():
         500,
         400,
     )
-    assert HARD_CAPS.max_pages_per_ingest == 15 and HARD_CAPS.split_chars == 80_000
+    assert HARD_CAPS.max_pages_per_ingest == 15
+    assert HARD_CAPS.split_chars == 80_000
 
 
 def test_profiles_sections():
@@ -80,17 +81,19 @@ def test_no_caps_gives_hard_caps(tmp_path):
 
 
 def test_raising_cap_is_error(tmp_path):
-    with pytest.raises(ConfigError, match="max_pages.*500"):
-        load_config(write_toml(tmp_path, caps={"max_pages": 501})).effective_caps()
+    cfg = load_config(write_toml(tmp_path, caps={"max_pages": 501}))
+    with pytest.raises(ConfigError, match=r"max_pages.*500"):
+        cfg.effective_caps()
 
 
 def test_unknown_cap_key_is_error(tmp_path):
+    cfg = load_config(write_toml(tmp_path, caps={"max_bogus": 1}))
     with pytest.raises(ConfigError, match="max_bogus"):
-        load_config(write_toml(tmp_path, caps={"max_bogus": 1})).effective_caps()
+        cfg.effective_caps()
 
 
 def test_missing_file_is_error(tmp_path):
-    with pytest.raises(ConfigError, match="wiki.toml"):
+    with pytest.raises(ConfigError, match=r"wiki\.toml"):
         load_config(tmp_path)
 
 
@@ -122,8 +125,9 @@ def test_profile_alias():
 
 
 def test_unknown_top_level_key_is_error(tmp_path):
+    path = write_toml(tmp_path, strict_secret=True)
     with pytest.raises(ConfigError, match="strict_secret"):
-        load_config(write_toml(tmp_path, strict_secret=True))
+        load_config(path)
 
 
 def test_unknown_section_key_is_error(tmp_path):
@@ -136,13 +140,15 @@ def test_unknown_section_key_is_error(tmp_path):
 
 @pytest.mark.parametrize("value", [0, -1])
 def test_cap_below_one_is_error(tmp_path, value):
+    cfg = load_config(write_toml(tmp_path, caps={"max_pages": value}))
     with pytest.raises(ConfigError, match="max_pages"):
-        load_config(write_toml(tmp_path, caps={"max_pages": value})).effective_caps()
+        cfg.effective_caps()
 
 
 def test_warn_cap_below_one_is_error(tmp_path):
+    cfg = load_config(write_toml(tmp_path, caps={"warn_pages": 0}))
     with pytest.raises(ConfigError, match="warn_pages"):
-        load_config(write_toml(tmp_path, caps={"warn_pages": 0})).effective_caps()
+        cfg.effective_caps()
 
 
 @pytest.mark.parametrize(
@@ -155,8 +161,9 @@ def test_warn_cap_below_one_is_error(tmp_path):
 )
 def test_warn_above_max_is_error(tmp_path, caps):
     warn = next(k for k in caps if k.startswith("warn_"))
+    cfg = load_config(write_toml(tmp_path, caps=caps))
     with pytest.raises(ConfigError, match=warn):
-        load_config(write_toml(tmp_path, caps=caps)).effective_caps()
+        cfg.effective_caps()
 
 
 def test_warn_equal_to_max_is_ok(tmp_path):

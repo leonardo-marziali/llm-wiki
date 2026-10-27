@@ -106,7 +106,7 @@ def test_non_bmp_names_round_trip(tmp_path):
 def test_corrupt_registry_raises_config_error():
     registry_file().parent.mkdir(parents=True)
     registry_file().write_text("[wikis\n")
-    with pytest.raises(ConfigError, match="wikis.toml"):
+    with pytest.raises(ConfigError, match=r"wikis\.toml"):
         known_wikis()
 
 

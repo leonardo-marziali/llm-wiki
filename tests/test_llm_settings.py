@@ -76,14 +76,17 @@ def test_unknown_llm_key_is_error_in_wiki(tmp_path):
 
 def test_invalid_user_config_toml_is_error():
     write_user("[llm\n")
-    with pytest.raises(ConfigError, match="config.toml"):
+    with pytest.raises(ConfigError, match=r"config\.toml"):
         load_llm_settings(None)
 
 
 def test_dump_config_round_trips_llm(tmp_path):
-    base = dict(
-        name="d", description="d", profile="general", sections=load_profile("general")
-    )
+    base = {
+        "name": "d",
+        "description": "d",
+        "profile": "general",
+        "sections": load_profile("general"),
+    }
     cfg = WikiConfig(**base, llm=LlmOverrides(deep_model="x", edit_budget_usd=1.5))
     (tmp_path / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
     assert load_config(tmp_path).llm == cfg.llm
@@ -92,7 +95,7 @@ def test_dump_config_round_trips_llm(tmp_path):
 
 def test_non_table_llm_is_error(tmp_path):
     write_user("llm = 3\n")
-    with pytest.raises(ConfigError, match="config.toml"):
+    with pytest.raises(ConfigError, match=r"config\.toml"):
         load_llm_settings(None)
     (user_config_file()).unlink()
     root = write_wiki(tmp_path)

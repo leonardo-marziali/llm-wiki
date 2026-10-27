@@ -21,16 +21,19 @@ def test_status_counts_on_fresh_wiki(tmp_path):
     ref = WikiRef("demo", tmp_path / "demo", "path")
     st = wiki_status(ref, today=date(2026, 10, 26))
     assert st.name == "demo"
-    assert st.sources == 0 and st.max_sources == 100
-    assert st.pages == 2 and st.max_pages == 500
-    assert st.sections and all(v == 0 for v in st.sections.values())
-    assert st.stale == [] and st.inbox == 0 and st.quarantined == 0
+    assert st.sources == 0
+    assert st.max_sources == 100
+    assert st.pages == 2
+    assert st.max_pages == 500
+    assert st.sections
+    assert all(v == 0 for v in st.sections.values())
+    assert st.stale == []
+    assert st.inbox == 0
+    assert st.quarantined == 0
     assert st.pending == {"new": 0, "changed": 0, "deleted": 0}
-    assert (
-        len(st.last_log) == 1
-        and st.last_log[0].startswith("## [")
-        and "init" in st.last_log[0]
-    )
+    assert len(st.last_log) == 1
+    assert st.last_log[0].startswith("## [")
+    assert "init" in st.last_log[0]
 
 
 def test_status_counts_pending_raw_and_inbox(tmp_path, make_wiki):
@@ -57,7 +60,8 @@ def test_status_counts_pending_raw_and_inbox(tmp_path, make_wiki):
     st = wiki_status(WikiRef("Acme", root, "path"), today=date(2026, 10, 26))
     assert st.sources == 1
     assert st.pending == {"new": 1, "changed": 1, "deleted": 0}
-    assert st.inbox == 2 and st.quarantined == 1
+    assert st.inbox == 2
+    assert st.quarantined == 1
     assert st.pages == 3
     assert st.sections["conventions"] == 1
     assert st.stale == ["conventions.git-flow"]
@@ -69,8 +73,10 @@ def test_status_all_lists_registry_and_env_wikis(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     res = runner.invoke(app, ["status", "--all"])
     assert res.exit_code == 0, res.output
-    assert "one" in res.output and "two" in res.output
-    assert "sources 0/100" in res.output and "pages 2/500" in res.output
+    assert "one" in res.output
+    assert "two" in res.output
+    assert "sources 0/100" in res.output
+    assert "pages 2/500" in res.output
     # env-only wiki
     (tmp_path / "envw").mkdir()
     init(tmp_path / "envw", "envw")
@@ -95,7 +101,8 @@ def test_status_all_survives_broken_wiki(tmp_path, monkeypatch):
     res = runner.invoke(app, ["status", "--all"])
     assert res.exit_code == 0, res.output
     assert "error:" in res.output
-    assert "good" in res.output and "pages 2/500" in res.output
+    assert "good" in res.output
+    assert "pages 2/500" in res.output
 
 
 def test_no_wiki_resolves_exit_2(tmp_path, monkeypatch):
@@ -149,4 +156,5 @@ def test_status_all_catches_any_exception_per_wiki(tmp_path, monkeypatch):
     res = runner.invoke(app, ["status", "--all"])
     assert res.exit_code == 0, res.output
     assert "error: boom" in res.output
-    assert "good" in res.output and "pages 2/500" in res.output
+    assert "good" in res.output
+    assert "pages 2/500" in res.output

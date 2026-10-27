@@ -1,4 +1,6 @@
-"""`wiki init`: create the wiki skeleton (spec §3), commit it (unless it sits in a host repo) and register it."""
+"""`wiki init`: create the wiki skeleton (spec §3), commit it (unless it sits in a host
+repo) and register it.
+"""
 
 import re
 import shutil
@@ -40,9 +42,9 @@ _KIND_RULE = {
 class InitResult:
     ref: WikiRef
     created: bool
-    host_repo: Path | None = (
-        None  # enclosing repo the wiki lives in; None when init made its own repo or only re-registered
-    )
+    # Enclosing repo the wiki lives in; None when init made its own repo or only
+    # re-registered.
+    host_repo: Path | None = None
 
 
 def slug(text: str) -> str:
@@ -70,7 +72,8 @@ def sections_table(sections: list[Section]) -> str:
     ]
     for s in sections:
         rows.append(
-            f"| `{s.name}/` | {s.kind} | {_KIND_RULE[s.kind]} | {_cell(s.description)} |"
+            f"| `{s.name}/` | {s.kind} | {_KIND_RULE[s.kind]} "
+            f"| {_cell(s.description)} |"
         )
     return "\n".join(rows)
 
@@ -159,12 +162,55 @@ def _clean(root: Path, created_dir: bool) -> None:
 
 
 def _check_name_free(name: str, root: Path) -> None:
-    """Refuse a name another live wiki is registered under (a stale entry may be taken over)."""
+    """Refuse a name another live wiki is registered under (a stale entry may be taken
+    over).
+    """
     other = registered_path(name)
     if other is not None and other.resolve() != root and (other / WIKI_FILE).is_file():
         raise WikiError(
             f"wiki name '{name}' is already registered at {other}; pass --name"
         )
+
+
+def _reregister(root: Path, name: str | None) -> InitResult:
+    """Register the existing wiki at ``root`` again; ``name`` must match it."""
+    cfg = load_config(root)
+    if name is not None and name != cfg.name:
+        raise WikiError(
+            f"{root} is already the wiki '{cfg.name}'; "
+            f"drop --name or pass --name {cfg.name}"
+        )
+    _check_name_free(cfg.name, root)
+    register(cfg.name, root)
+    return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
+
+
+def _new_name(root: Path, name: str | None) -> str:
+    """``name``, or the slugged directory name, once it is a valid wiki name."""
+    if name is None:
+        name = slug(root.name)
+        if not name:
+            raise WikiError(
+                f"cannot derive a wiki name from '{root.name}': pass --name"
+            )
+    if not NAME_RE.fullmatch(name):
+        raise WikiError(
+            f"invalid wiki name '{name}': "
+            "use lowercase letters, digits and single hyphens, "
+            f"e.g. '{slug(name) or 'my-wiki'}'"
+        )
+    return name
+
+
+def _require_clean_lint(root: Path, cfg: WikiConfig, today: date) -> None:
+    report = lint(root, cfg, today=today)
+    if report.errors:
+        details = "; ".join(
+            f"{f.code} {f.path}: {f.message}"
+            for f in report.findings
+            if f.severity == "error"
+        )
+        raise WikiError(f"new wiki fails lint: {details}")
 
 
 def init_wiki(
@@ -176,27 +222,10 @@ def init_wiki(
 ) -> InitResult:
     root = Path(path).resolve()
     if (root / WIKI_FILE).is_file():
-        cfg = load_config(root)
-        if name is not None and name != cfg.name:
-            raise WikiError(
-                f"{root} is already the wiki '{cfg.name}'; drop --name or pass --name {cfg.name}"
-            )
-        _check_name_free(cfg.name, root)
-        register(cfg.name, root)
-        return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
+        return _reregister(root, name)
     if root.exists() and (not root.is_dir() or any(root.iterdir())):
         raise WikiError(f"{root} is not empty and not a wiki")
-    if name is None:
-        name = slug(root.name)
-        if not name:
-            raise WikiError(
-                f"cannot derive a wiki name from '{root.name}': pass --name"
-            )
-    if not NAME_RE.fullmatch(name):
-        raise WikiError(
-            f"invalid wiki name '{name}': use lowercase letters, digits and single hyphens, "
-            f"e.g. '{slug(name) or 'my-wiki'}'"
-        )
+    name = _new_name(root, name)
     _check_name_free(name, root)
     cfg = WikiConfig(
         name=name,
@@ -215,14 +244,7 @@ def init_wiki(
     root.mkdir(parents=True, exist_ok=True)
     try:
         _create(root, cfg, today)
-        report = lint(root, cfg, today=today)
-        if report.errors:
-            details = "; ".join(
-                f"{f.code} {f.path}: {f.message}"
-                for f in report.findings
-                if f.severity == "error"
-            )
-            raise WikiError(f"new wiki fails lint: {details}")
+        _require_clean_lint(root, cfg, today)
         if host_repo is None:
             gitops.init_repo(root)
             gitops.commit_all(root, f"chore: init wiki {name}")

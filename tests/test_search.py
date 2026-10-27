@@ -38,7 +38,8 @@ def put(
     p = root / "wiki" / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        f"---\nid: {id_}\ntitle: {title}\ntype: concept\nstatus: {status}\nsummary: {summary}\n"
+        f"---\nid: {id_}\ntitle: {title}\ntype: concept\n"
+        f"status: {status}\nsummary: {summary}\n"
         f"confidence: high\nreview_status: draft\nlast_verified: 2026-01-01\n"
         f"review_after: 2026-07-01\ntags: {tags}\n---\n{body}\n",
         encoding="utf-8",
@@ -113,7 +114,8 @@ def test_cli_search_json(tmp_path):
     )
     assert r.exit_code == 0, r.output
     data = json.loads(r.stdout)
-    assert isinstance(data, list) and len(data) == 1
+    assert isinstance(data, list)
+    assert len(data) == 1
     assert set(data[0]) == {f.name for f in fields(SearchHit)}
     assert data[0]["last_verified"] == "2026-01-01"
 
@@ -125,7 +127,8 @@ def test_cli_text_and_no_match(tmp_path):
     assert r.exit_code == 0
     assert r.stdout.strip().endswith("w:a  Kafka — Broker. [as-is, 2026-01-01]")
     r = CliRunner().invoke(app, ["search", "zzzzz", "--wiki", str(w)])
-    assert r.exit_code == 0 and r.stdout.strip() == "no matches"
+    assert r.exit_code == 0
+    assert r.stdout.strip() == "no matches"
 
 
 def test_cli_all_and_wiki_conflict(tmp_path):

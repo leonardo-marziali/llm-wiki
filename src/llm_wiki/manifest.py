@@ -73,7 +73,7 @@ class Manifest:
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
-                raise ValueError("top level must be an object")
+                raise ConfigError(f"{MANIFEST} is corrupt: top level must be an object")
             if data.get("version") != 1:
                 raise ConfigError(
                     f"{MANIFEST}: unsupported version {data.get('version')!r}"

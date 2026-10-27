@@ -42,12 +42,13 @@ REQUIRED_FLAGS = (
     "--restricted",
 )
 
-# Accepted by claude 2.1.310 but absent from --help; doctor's model probe proves it is honoured.
+# Accepted by claude 2.1.310 but absent from --help; doctor's model probe proves it is
+# honoured.
 HIDDEN_FLAGS = ("--system-prompt-file",)
 
-# Never forwarded: API keys would bill the API instead of the subscription, and the nested-session
-# markers make the child believe it runs inside another Claude Code. CLAUDE_CODE_OAUTH_TOKEN is the
-# subscription login and stays.
+# Never forwarded: API keys would bill the API instead of the subscription, and the
+# nested-session markers make the child believe it runs inside another Claude Code.
+# CLAUDE_CODE_OAUTH_TOKEN is the subscription login and stays.
 _STRIPPED_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -91,7 +92,8 @@ def make_call(
     json_schema: dict | None = None,
 ) -> Call:
     edit = role == "edit"
-    # Edit sessions are never re-run: a half-applied edit is ingest's post-check/rollback to handle.
+    # Edit sessions are never re-run: a half-applied edit is ingest's
+    # post-check/rollback to handle.
     return Call(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -174,22 +176,27 @@ def parse_output(stdout: str) -> Result:
         raise ClaudeError("claude returned unexpected JSON (not an object)")
     structured = data.get("structured_output")
     return Result(
-        text=data.get("result") if isinstance(data.get("result"), str) else "",
+        text=_str_field(data, "result"),
         structured=structured if isinstance(structured, dict) else None,
         cost_usd=_num(data.get("total_cost_usd"), float, 0.0),
         duration_ms=_num(data.get("duration_ms"), int, 0),
-        session_id=data.get("session_id")
-        if isinstance(data.get("session_id"), str)
-        else "",
+        session_id=_str_field(data, "session_id"),
         raw=data,
     )
 
 
+def _str_field(data: dict | None, key: str) -> str:
+    """``data[key]`` when it is a string, else ""."""
+    value = data.get(key) if data else None
+    return value if isinstance(value, str) else ""
+
+
 Kind = Literal["ok", "transient", "usage_limit", "auth", "budget", "schema", "fatal"]
 
-# Status codes need word boundaries: bare "500" would match inside timestamps and token counts.
-# Bare "budget" would misread usage errors such as "option --max-budget-usd: invalid number".
-_RULES = (
+# Status codes need word boundaries: bare "500" would match inside timestamps and token
+# counts. Bare "budget" would misread usage errors such as "option --max-budget-usd:
+# invalid number".
+_RULES: tuple[tuple[Kind, re.Pattern[str]], ...] = (
     ("budget", re.compile(r"exceeded.{0,40}budget|budget.{0,40}exceeded")),
     (
         "auth",
@@ -204,7 +211,8 @@ _RULES = (
     (
         "transient",
         re.compile(
-            r"overloaded|\b(?:429|500|502|503|504|529)\b|rate limit|econnreset|etimedout|socket hang up"
+            r"overloaded|\b(?:429|500|502|503|504|529)\b|rate limit"
+            r"|econnreset|etimedout|socket hang up"
             r"|network"
         ),
     ),
@@ -219,49 +227,63 @@ def _json_object(stdout: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _success_kind(data: dict | None, has_schema: bool) -> Kind:
+    if data is None:
+        return "transient"  # exit 0 with empty or non-JSON stdout
+    if has_schema and not isinstance(data.get("structured_output"), dict):
+        return "schema"
+    return "ok"
+
+
+def _failure_text(data: dict | None, stdout: str, stderr: str) -> str:
+    if data is not None:
+        text = f"{stderr} {data.get('result') or ''} {data.get('subtype') or ''}"
+    else:
+        text = f"{stderr} {stdout}"
+    return text.lower()
+
+
 def classify(
     returncode: int, stdout: str, stderr: str, *, has_schema: bool = False
 ) -> Kind:
     data = _json_object(stdout)
     failed = returncode != 0 or (data is not None and bool(data.get("is_error")))
     if not failed:
-        if data is None:
-            return "transient"  # exit 0 with empty or non-JSON stdout
-        if has_schema and not isinstance(data.get("structured_output"), dict):
-            return "schema"
-        return "ok"
-    if data is not None:
-        text = f"{stderr} {data.get('result') or ''} {data.get('subtype') or ''}"
-    else:
-        text = f"{stderr} {stdout}"
-    text = text.lower()
+        return _success_kind(data, has_schema)
     if data is not None and data.get("subtype") == "error_max_budget_usd":
         return "budget"
+    text = _failure_text(data, stdout, stderr)
     for kind, pattern in _RULES:
         if pattern.search(text):
             return kind
     return "fatal"
 
 
-def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
-    """One subprocess; None on timeout (subprocess.run has already killed the child)."""
-    # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv limit.
+def _write_prompt_file(text: str) -> Path:
+    """The system prompt as a temp file the caller deletes."""
     try:
-        fh = tempfile.NamedTemporaryFile(
-            "w", suffix=".md", encoding="utf-8", delete=False
-        )
+        fd, name = tempfile.mkstemp(suffix=".md")
     except OSError as exc:
         raise ClaudeError(f"cannot create the system prompt temp file: {exc}") from None
+    path = Path(name)
     try:
-        try:
-            with fh:
-                fh.write(call.system_prompt)
-        except OSError as exc:
-            raise ClaudeError(
-                f"cannot write the system prompt temp file: {exc}"
-            ) from None
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError as exc:
+        path.unlink(missing_ok=True)
+        raise ClaudeError(f"cannot write the system prompt temp file: {exc}") from None
+    return path
+
+
+def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
+    """One subprocess; None on timeout (subprocess.run has already killed the child)."""
+    # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv
+    # limit.
+    prompt_file = _write_prompt_file(call.system_prompt)
+    try:
         return subprocess.run(
-            build_argv(call, binary, Path(fh.name)),
+            build_argv(call, binary, prompt_file),
+            check=False,  # every exit code is classified by the caller
             input=call.prompt,
             capture_output=True,
             text=True,
@@ -287,18 +309,16 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
             f"claude not found at {binary} — install Claude Code"
         ) from None
     finally:
-        Path(fh.name).unlink(missing_ok=True)
+        prompt_file.unlink(missing_ok=True)
 
 
 def _snippet(stdout: str, stderr: str) -> str:
-    data = _json_object(stdout)
-    result = data.get("result") if data and isinstance(data.get("result"), str) else ""
+    result = _str_field(_json_object(stdout), "result")
     return (result.strip() or stderr.strip() or stdout.strip())[:200]
 
 
 def _message(stdout: str, stderr: str) -> str:
-    data = _json_object(stdout)
-    text = data.get("result") if data and isinstance(data.get("result"), str) else ""
+    text = _str_field(_json_object(stdout), "result")
     return (text.strip() or stderr.strip() or stdout.strip())[:500]
 
 
@@ -312,10 +332,40 @@ def _raise_for(kind: Kind, call: Call, proc) -> None:
     if kind == "budget":
         key = f"{call.role}_budget_usd" if call.role else "the budget setting"
         raise ClaudeBudgetExceeded(
-            f"claude exceeded the ${call.budget_usd:.2f} budget cap — raise {key} and re-run"
+            f"claude exceeded the ${call.budget_usd:.2f} budget cap — "
+            f"raise {key} and re-run"
         )
     raise ClaudeError(
         f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
+    )
+
+
+def _attempt(
+    call: Call, binary: str, cwd: Path
+) -> tuple[Kind, str, float, subprocess.CompletedProcess | None]:
+    """One run: its kind, failure message, cost and process (None on timeout)."""
+    proc = _spawn(call, binary, cwd)
+    if proc is None:
+        return "transient", f"claude timed out after {call.timeout_s}s", 0.0, None
+    data = _json_object(proc.stdout)
+    cost = _num(data.get("total_cost_usd"), float, 0.0) if data else 0.0
+    kind = classify(
+        proc.returncode, proc.stdout, proc.stderr, has_schema=bool(call.json_schema)
+    )
+    snippet = _snippet(proc.stdout, proc.stderr)
+    return kind, f"claude failed (exit {proc.returncode}): {snippet}", cost, proc
+
+
+def _with_schema_reminder(call: Call) -> Call:
+    # Sonar types dataclasses.replace() as DataclassInstance; it returns a Call
+    return dataclasses.replace(  # NOSONAR
+        call,
+        prompt=call.prompt
+        + (
+            "\n\nYour previous reply did not match the required JSON schema: "
+            "structured_output missing. "
+            "Reply again with only the structured output."
+        ),
     )
 
 
@@ -324,22 +374,13 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
     schema_retried = False
     spent = 0.0  # every attempt bills, not only the one that succeeds
     while True:
-        proc = _spawn(call, binary, cwd)
-        if proc is None:
-            kind: Kind = "transient"
-            failure = f"claude timed out after {call.timeout_s}s"
-        else:
-            data = _json_object(proc.stdout)
-            spent += _num(data.get("total_cost_usd"), float, 0.0) if data else 0.0
-            kind = classify(
-                proc.returncode,
-                proc.stdout,
-                proc.stderr,
-                has_schema=bool(call.json_schema),
-            )
-            failure = f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
-            if kind == "ok":
-                return dataclasses.replace(parse_output(proc.stdout), cost_usd=spent)
+        kind, failure, cost, proc = _attempt(call, binary, cwd)
+        spent += cost
+        if kind == "ok":
+            assert proc is not None
+            result = parse_output(proc.stdout)
+            # Sonar types dataclasses.replace() as DataclassInstance; this is a Result
+            return dataclasses.replace(result, cost_usd=spent)  # NOSONAR
         if kind == "transient":
             if transient >= call.max_retries:
                 raise ClaudeError(failure)
@@ -353,14 +394,7 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
                     "structured_output missing"
                 )
             schema_retried = True
-            call = dataclasses.replace(
-                call,
-                prompt=call.prompt
-                + (
-                    "\n\nYour previous reply did not match the required JSON schema: "
-                    "structured_output missing. Reply again with only the structured output."
-                ),
-            )
+            call = _with_schema_reminder(call)
             continue
         _raise_for(kind, call, proc)
 

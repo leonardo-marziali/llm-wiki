@@ -41,7 +41,7 @@ class Check:
 
 
 def parse_version(text: str) -> tuple[int, ...] | None:
-    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    m = re.search(r"(?<!\d)(\d{1,9})\.(\d{1,9})\.(\d{1,9})", text)
     return tuple(int(g) for g in m.groups()) if m else None
 
 
@@ -199,9 +199,11 @@ _MODEL_PROMPT = (
 
 
 def _probe_call(call: Call, role: Role, settings: LlmSettings) -> Call:
-    # One short attempt: a probe that fails is reported, not retried at the user's expense.
-    # role=None keeps budget errors from advising a settings key the probe cap ignores.
-    return replace(
+    # One short attempt: a probe that fails is reported, not retried at the user's
+    # expense. role=None keeps budget errors from advising a settings key the probe cap
+    # ignores.
+    # Sonar types dataclasses.replace() as DataclassInstance; it returns a Call
+    return replace(  # NOSONAR
         call,
         budget_usd=min(_PROBE_BUDGET, settings.budget(role)),
         role=None,
@@ -226,8 +228,9 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
             (Path(tmp) / "CLAUDE.md").write_text(
                 f"The wiki doctor canary word is {canary}.\n", encoding="utf-8"
             )
+            # Sonar types dataclasses.replace() as DataclassInstance; it returns a Call
             call = _probe_call(
-                replace(
+                replace(  # NOSONAR
                     make_call(
                         "plan",
                         settings,

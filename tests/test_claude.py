@@ -8,13 +8,13 @@ from llm_wiki.claude import (
     REQUIRED_FLAGS,
     build_argv,
     child_env,
-    claude_binary,
     classify,
+    claude_binary,
     make_call,
     parse_output,
     run,
 )
-from llm_wiki.config import LlmSettings
+from llm_wiki.config import LlmSettings, Role
 from llm_wiki.errors import (
     ClaudeAuthError,
     ClaudeBudgetExceeded,
@@ -26,7 +26,7 @@ from llm_wiki.errors import (
 )
 
 
-def _call(role="plan", **kw):
+def _call(role: Role = "plan", **kw):
     return make_call(role, LlmSettings(), prompt="P", system_prompt="S", **kw)
 
 
@@ -87,13 +87,16 @@ def test_child_env_strips_api_keys():
             "PATH": "/bin",
         }
     )
-    assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_AUTH_TOKEN" not in env
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "o" and env["PATH"] == "/bin"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "o"
+    assert env["PATH"] == "/bin"
 
 
 def test_child_env_strips_nested_session_markers():
     env = child_env({"CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli"})
-    assert "CLAUDECODE" not in env and "CLAUDE_CODE_ENTRYPOINT" not in env
+    assert "CLAUDECODE" not in env
+    assert "CLAUDE_CODE_ENTRYPOINT" not in env
     assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
 
 
@@ -116,7 +119,8 @@ def test_run_passes_prompt_on_stdin_and_system_prompt_via_file(fake_claude):
     fake_claude.queue({"stdout": ok()})
     run(_call())
     (c,) = fake_claude.calls()
-    assert c["stdin"] == "P" and c["system_prompt"] == "S"
+    assert c["stdin"] == "P"
+    assert c["system_prompt"] == "S"
     assert not Path(c["argv"][c["argv"].index("--system-prompt-file") + 1]).exists()
 
 
@@ -124,7 +128,8 @@ def test_plan_call_cwd_is_empty_tempdir(fake_claude):
     fake_claude.queue({"stdout": ok()})
     run(_call())
     (c,) = fake_claude.calls()
-    assert c["cwd"] != str(Path.cwd()) and c["listdir"] == []
+    assert c["cwd"] != str(Path.cwd())
+    assert c["listdir"] == []
     assert not Path(c["cwd"]).exists()
 
 
@@ -139,15 +144,15 @@ def test_large_system_prompt_goes_through_file(fake_claude):
     fake_claude.queue({"stdout": ok()})
     run(make_call("plan", LlmSettings(), prompt="P", system_prompt=big))
     (c,) = fake_claude.calls()
-    assert (
-        all(len(a.encode()) <= 131_072 for a in c["argv"]) and c["system_prompt"] == big
-    )
+    assert all(len(a.encode()) <= 131_072 for a in c["argv"])
+    assert c["system_prompt"] == big
 
 
 def test_missing_binary_raises_not_installed(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_WIKI_CLAUDE", str(tmp_path / "nope"))
+    call = _call()
     with pytest.raises(ClaudeNotInstalled):
-        run(_call())
+        run(call)
     monkeypatch.delenv("LLM_WIKI_CLAUDE")
     monkeypatch.setenv("PATH", "")
     with pytest.raises(ClaudeNotInstalled):
@@ -162,22 +167,27 @@ def test_transient_then_success(fake_claude):
     fake_claude.queue(OVERLOADED, {"stdout": ok("fine")})
     sleeps = []
     res = run(_call(), sleep=sleeps.append)
-    assert res.text == "fine" and len(fake_claude.calls()) == 2
-    assert len(sleeps) == 1 and 1.0 <= sleeps[0] <= 3.0
+    assert res.text == "fine"
+    assert len(fake_claude.calls()) == 2
+    assert len(sleeps) == 1
+    assert 1.0 <= sleeps[0] <= 3.0
 
 
 def test_transient_exhausts_after_three_retries(fake_claude):
     fake_claude.queue(*[OVERLOADED] * 4)
     sleeps = []
+    call = _call()
     with pytest.raises(ClaudeError, match="529"):
-        run(_call(), sleep=sleeps.append, rand=lambda: 0.5)
-    assert len(fake_claude.calls()) == 4 and sleeps == [2, 4, 8]
+        run(call, sleep=sleeps.append, rand=lambda: 0.5)
+    assert len(fake_claude.calls()) == 4
+    assert sleeps == [2, 4, 8]
 
 
 def test_auth_failure_not_retried(fake_claude):
     fake_claude.queue({"stdout": "", "stderr": "Not logged in", "exit": 1})
+    call = _call()
     with pytest.raises(ClaudeAuthError, match="claude /login"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
@@ -185,8 +195,9 @@ def test_usage_limit_not_retried_and_message_kept(fake_claude):
     fake_claude.queue(
         {"stdout": "", "stderr": "Claude AI usage limit reached|1761500000", "exit": 1}
     )
+    call = _call()
     with pytest.raises(ClaudeUsageLimit, match=r"1761500000.*wait and re-run"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
@@ -205,8 +216,9 @@ def test_budget_exceeded(fake_claude):
             "exit": 1,
         }
     )
+    call = _call()
     with pytest.raises(ClaudeBudgetExceeded, match=r"\$1\.00.*plan_budget_usd"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
@@ -216,14 +228,16 @@ def test_budget_without_role_names_generic_setting(fake_claude):
     fake_claude.queue(
         {"stdout": {"subtype": "error_max_budget_usd", "is_error": True}, "exit": 1}
     )
+    call = dataclasses.replace(_call(), role=None)
     with pytest.raises(ClaudeBudgetExceeded, match="the budget setting"):
-        run(dataclasses.replace(_call(), role=None))
+        run(call)
 
 
 def test_schema_missing_retried_once_with_error(fake_claude):
     fake_claude.queue({"stdout": ok(structured=None)}, {"stdout": ok(structured=None)})
+    call = _call(json_schema={"type": "object"})
     with pytest.raises(ClaudeSchemaError):
-        run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     first, second = fake_claude.calls()
     assert first["stdin"] == "P"
     assert second["stdin"].startswith(
@@ -254,8 +268,9 @@ def test_schema_retry_does_not_consume_transient_slot(fake_claude):
 
 def test_unparseable_output_retried_then_error(fake_claude):
     fake_claude.queue(*[{"stdout": "<html>oops"}] * 4)
+    call = _call()
     with pytest.raises(ClaudeError, match="<html>oops"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 4
 
 
@@ -266,7 +281,8 @@ def test_hang_times_out_and_retries(fake_claude):
     fake_claude.queue({"sleep": 5}, {"stdout": ok()})
     t0 = time.monotonic()
     res = run(dataclasses.replace(_call(), timeout_s=1), sleep=lambda s: None)
-    assert res.text == "done" and len(fake_claude.calls()) == 2
+    assert res.text == "done"
+    assert len(fake_claude.calls()) == 2
     assert time.monotonic() - t0 < 4
 
 
@@ -274,16 +290,16 @@ def test_timeout_message_after_retries(fake_claude):
     import dataclasses
 
     fake_claude.queue(*[{"sleep": 3}] * 4)
+    call = dataclasses.replace(_call(), timeout_s=0.3)
     with pytest.raises(ClaudeError, match=r"claude timed out after 0\.3s"):
-        run(
-            dataclasses.replace(_call(), timeout_s=0.3), sleep=lambda s: None
-        )  # float works too
+        run(call, sleep=lambda s: None)  # float works too
 
 
 def test_fatal_not_retried(fake_claude):
     fake_claude.queue({"stdout": "", "stderr": "unknown option --frob", "exit": 1})
+    call = _call()
     with pytest.raises(ClaudeError, match="unknown option --frob"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
@@ -297,8 +313,9 @@ def test_classify_success_beats_text_rules():
 def test_missing_cwd_is_not_reported_as_missing_binary(fake_claude, tmp_path):
     fake_claude.queue({"stdout": ok()})
     gone = tmp_path / "gone"
+    call = _call("edit", cwd=gone)
     with pytest.raises(ClaudeError, match="gone") as ei:
-        run(_call("edit", cwd=gone))
+        run(call)
     assert not isinstance(ei.value, ClaudeNotInstalled)
 
 
@@ -306,25 +323,30 @@ def test_non_executable_binary_is_clear_error(tmp_path):
     bin_ = tmp_path / "claude"
     bin_.write_text("#!/bin/sh\n")
     bin_.chmod(0o644)
+    call = _call()
+    binary = str(bin_)
     with pytest.raises(ClaudeNotInstalled, match="not executable"):
-        run(_call(), binary=str(bin_))
+        run(call, binary=binary)
 
 
 def test_system_prompt_file_removed_when_spawn_fails(tmp_path, monkeypatch):
     import tempfile
 
     made = []
-    real = tempfile.NamedTemporaryFile
+    real = tempfile.mkstemp
 
     def spy(*a, **kw):
-        fh = real(*a, **kw)
-        made.append(fh.name)
-        return fh
+        fd, name = real(*a, **kw)
+        made.append(name)
+        return fd, name
 
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", spy)
+    monkeypatch.setattr(tempfile, "mkstemp", spy)
+    call = _call()
+    binary = str(tmp_path / "nope")
     with pytest.raises(ClaudeNotInstalled):
-        run(_call(), binary=str(tmp_path / "nope"))
-    assert made and not any(Path(m).exists() for m in made)
+        run(call, binary=binary)
+    assert made
+    assert not any(Path(m).exists() for m in made)
 
 
 def test_parse_output_tolerates_malformed_numbers():
@@ -348,7 +370,8 @@ def test_env_stripping_holds_through_run(fake_claude, monkeypatch):
     fake_claude.queue({"stdout": ok()})
     run(_call())
     env = fake_claude.calls()[0]["env"]
-    assert env["ANTHROPIC_API_KEY"] is None and env["CLAUDECODE"] is None
+    assert env["ANTHROPIC_API_KEY"] is None
+    assert env["CLAUDECODE"] is None
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth"
     assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
 
@@ -366,8 +389,9 @@ def test_rate_limit_reached_is_transient_not_usage_limit(fake_claude):
 def test_cwd_that_is_a_file_is_clear_error(fake_claude, tmp_path):
     f = tmp_path / "afile"
     f.write_text("x")
+    call = _call("edit", cwd=f)
     with pytest.raises(ClaudeError, match="afile") as ei:
-        run(_call("edit", cwd=f))
+        run(call)
     assert not isinstance(ei.value, ClaudeNotInstalled)
 
 
@@ -383,9 +407,11 @@ def test_fatal_json_failure_quotes_result_text(fake_claude):
             "exit": 1,
         }
     )
+    call = _call()
     with pytest.raises(ClaudeError) as ei:
-        run(_call(), sleep=lambda s: None)
-    assert "model exploded" in str(ei.value) and "session_id" not in str(ei.value)
+        run(call, sleep=lambda s: None)
+    assert "model exploded" in str(ei.value)
+    assert "session_id" not in str(ei.value)
 
 
 def test_numbers_inside_larger_tokens_do_not_look_like_status_codes(fake_claude):
@@ -396,16 +422,19 @@ def test_numbers_inside_larger_tokens_do_not_look_like_status_codes(fake_claude)
             "exit": 1,
         }
     )
+    call = _call()
     with pytest.raises(ClaudeError, match="1500 tokens"):
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
 def test_edit_call_is_not_auto_retried(fake_claude, tmp_path):
-    assert _call("edit").max_retries == 0 and _call().max_retries == 3
+    assert _call("edit").max_retries == 0
+    assert _call().max_retries == 3
     fake_claude.queue(OVERLOADED, {"stdout": ok()})
+    call = _call("edit", cwd=tmp_path)
     with pytest.raises(ClaudeError, match="529"):
-        run(_call("edit", cwd=tmp_path), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
@@ -446,9 +475,10 @@ def test_unwritable_tempfile_is_claude_error(fake_claude, monkeypatch):
     def boom(*a, **kw):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", boom)
+    monkeypatch.setattr(tempfile, "mkstemp", boom)
+    call = _call()
     with pytest.raises(ClaudeError, match="No space left") as ei:
-        run(_call())
+        run(call)
     assert not isinstance(ei.value, ClaudeNotInstalled)
     assert fake_claude.calls() == []
 
@@ -460,8 +490,9 @@ def test_unwritable_tempdir_is_claude_error(fake_claude, monkeypatch):
         raise PermissionError(13, "Permission denied")
 
     monkeypatch.setattr(tempfile, "TemporaryDirectory", boom)
+    call = _call()
     with pytest.raises(ClaudeError, match="Permission denied") as ei:
-        run(_call())
+        run(call)
     assert not isinstance(ei.value, ClaudeNotInstalled)
 
 
@@ -472,10 +503,11 @@ def test_missing_env_binary_names_the_path(monkeypatch, tmp_path):
         ClaudeNotInstalled, match=f"LLM_WIKI_CLAUDE points to a missing file: {missing}"
     ):
         claude_binary()
+    call = _call()
     with pytest.raises(
         ClaudeNotInstalled, match="LLM_WIKI_CLAUDE points to a missing file"
     ):
-        run(_call())
+        run(call)
 
 
 def test_autouse_env_never_reaches_real_claude():

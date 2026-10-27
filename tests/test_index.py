@@ -40,7 +40,8 @@ def test_section_index_lines_and_order(tmp_path):
     assert idx in changed
     text = idx.read_text(encoding="utf-8")
     assert text.startswith("# Conventions\n\nHow we work.\n\n" + GENERATED_MARK + "\n")
-    assert text.endswith("\n") and not text.endswith("\n\n")
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
     lines = text.split(GENERATED_MARK + "\n")[1].splitlines()
     assert lines == [
         "- [Zzz hub](sub/hubby.md) — S. — as-is — 2026-01-01",
@@ -58,7 +59,8 @@ def test_hand_written_header_preserved(tmp_path):
     build_indexes(tmp_path, CFG)
     text = idx.read_text(encoding="utf-8")
     assert text.startswith("# Mine\n\nHand written.\n\n" + GENERATED_MARK + "\n")
-    assert "stale" not in text and "- [A](a.md)" in text
+    assert "stale" not in text
+    assert "- [A](a.md)" in text
 
 
 def test_top_index_lists_sections_with_counts(tmp_path):
@@ -70,14 +72,15 @@ def test_top_index_lists_sections_with_counts(tmp_path):
     text = (tmp_path / "wiki/index.md").read_text(encoding="utf-8")
     assert text.startswith("# Acme wiki\n\nAcme knowledge.\n\n" + GENERATED_MARK + "\n")
     assert (
-        "- [Overview](overview.md)\n- [Glossary](glossary.md)\n- [Open questions](open-questions.md)"
-        in text
+        "- [Overview](overview.md)\n- [Glossary](glossary.md)\n"
+        "- [Open questions](open-questions.md)" in text
     )
     assert "## Sections" in text
     assert "- [conventions](conventions/_index.md) — 2 pages — How we work." in text
     assert "- [systems](systems/_index.md) — 1 pages — What we run." in text
     assert text.index("conventions/_index.md") < text.index("systems/_index.md")
-    assert "## Hubs\n" in text and "- [Sys hub](systems/h.md)" in text
+    assert "## Hubs\n" in text
+    assert "- [Sys hub](systems/h.md)" in text
     assert "overview.md" not in (tmp_path / "wiki/conventions/_index.md").read_text(
         encoding="utf-8"
     )
@@ -153,4 +156,5 @@ def test_page_in_unconfigured_dir_ignored(tmp_path):
     build_indexes(tmp_path, CFG)
     assert not (tmp_path / "wiki/stray/_index.md").exists()
     top = (tmp_path / "wiki/index.md").read_text(encoding="utf-8")
-    assert "Stray" not in top and "stray" not in top
+    assert "Stray" not in top
+    assert "stray" not in top

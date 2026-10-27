@@ -61,12 +61,14 @@ def _git(root, *args):
 def test_init_creates_tree_and_lint_clean(tmp_path):
     root = tmp_path / "My Wiki"
     res = init_wiki(root, today=TODAY)
-    assert isinstance(res, InitResult) and res.created
+    assert isinstance(res, InitResult)
+    assert res.created
     assert res.ref.name == "my-wiki"
     for rel in SPEC_PATHS:
         assert (root / rel).is_file(), rel
     cfg = load_config(root)
-    assert cfg.name == "my-wiki" and cfg.profile == "software"
+    assert cfg.name == "my-wiki"
+    assert cfg.profile == "software"
     for s in cfg.sections:
         assert (root / "wiki" / s.name / "_index.md").is_file(), s.name
     assert (root / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
@@ -81,14 +83,18 @@ def test_init_creates_tree_and_lint_clean(tmp_path):
         assert entry in gi
     for name, type_ in (("overview", "overview"), ("glossary", "glossary")):
         page = read_page(root, root / "wiki" / f"{name}.md")
-        assert page.error is None and page.fm.type == type_ and page.fm.id == name
+        assert page.error is None
+        assert page.fm is not None
+        assert page.fm.type == type_
+        assert page.fm.id == name
         assert page.fm.review_after == date(2027, 1, 24)
         assert any(line.startswith("**TL;DR**") for line in page.body.split("\n"))
     report = lint(root, cfg, today=TODAY)
     assert report.errors == 0, report.findings
     assert report.warnings == 0, report.findings
     log = _git(root, "log", "--oneline").splitlines()
-    assert len(log) == 1 and log[0].endswith("chore: init wiki my-wiki")
+    assert len(log) == 1
+    assert log[0].endswith("chore: init wiki my-wiki")
     assert _git(root, "status", "--porcelain") == ""
     assert _git(root, "branch", "--show-current").strip() == "main"
     assert registry.resolve("my-wiki", tmp_path).path == root.resolve()
@@ -132,7 +138,8 @@ def test_init_existing_wiki_only_registers(tmp_path):
     }
     res = init_wiki(root, today=TODAY)
     assert res.created is False
-    assert res.ref.name == "acme" and res.ref.path == root.resolve()
+    assert res.ref.name == "acme"
+    assert res.ref.path == root.resolve()
     assert registry.resolve("acme", tmp_path).path == root.resolve()
     assert _git(root, "rev-parse", "HEAD") == head
     after = {
@@ -162,22 +169,25 @@ def test_agents_md_has_all_headings_in_order(tmp_path):
     root = tmp_path / "w"
     init_wiki(root, today=TODAY)
     text = (root / "AGENTS.md").read_text(encoding="utf-8")
-    prose = re.sub(
-        r"^```.*?^```", "", text, flags=re.M | re.S
-    )  # body template has ## lines
-    h2 = re.findall(r"^## (.+)$", prose, re.M)
+    # the body template has ## lines
+    prose = re.sub(r"^```.*?^```", "", text, flags=re.MULTILINE | re.DOTALL)
+    h2 = re.findall(r"^## (.+)$", prose, re.MULTILINE)
     titles = [re.sub(r"^\d+\.\s*", "", h).strip() for h in h2]
     assert titles == AGENTS_HEADINGS
-    assert "{{" not in text and "}}" not in text
-    assert len(text) < 26_000  # "about 25k"
+    assert "{{" not in text
+    assert "}}" not in text
+    # "about 25k" of content; Prettier's table-column padding is not content
+    assert len(re.sub(r" {2,}", " ", text)) < 26_000
 
 
 def test_agents_md_mentions_sections_and_caps(tmp_path):
     root = tmp_path / "w"
     init_wiki(root, name="acme", description="Acme platform knowledge.", today=TODAY)
     text = (root / "AGENTS.md").read_text(encoding="utf-8")
-    assert "400" in text and "conventions" in text
-    assert "acme" in text and "Acme platform knowledge." in text
+    assert "400" in text
+    assert "conventions" in text
+    assert "acme" in text
+    assert "Acme platform knowledge." in text
     for s in load_config(root).sections:
         assert f"`{s.name}/`" in text
     for cap in ("100", "500", "15", "80,000"):
@@ -188,7 +198,7 @@ def test_init_without_git_identity_fails_before_writing(tmp_path, monkeypatch):
     monkeypatch.setattr(gitops, "has_identity", lambda root: False)
     root = tmp_path / "w"
     root.mkdir()
-    with pytest.raises(GitError, match="configure git user.name and user.email"):
+    with pytest.raises(GitError, match=r"configure git user\.name and user\.email"):
         init_wiki(root, today=TODAY)
     assert list(root.iterdir()) == []
     assert not registry.registry_file().exists()
@@ -203,7 +213,7 @@ def test_gitops_helpers(tmp_path):
     sha = gitops.commit_all(root, "first")
     assert re.fullmatch(r"[0-9a-f]{40}", sha)
     assert gitops.git(root, "rev-parse", "HEAD").strip() == sha
-    with pytest.raises(GitError, match="unknown-subcommand|not a git command"):
+    with pytest.raises(GitError, match=r"unknown-subcommand|not a git command"):
         gitops.git(root, "unknown-subcommand")
 
 
@@ -232,13 +242,15 @@ def test_cli_init_messages(tmp_path):
     other.mkdir()
     (other / "x").write_text("x", encoding="utf-8")
     r = CliRunner().invoke(app, ["init", str(other)])
-    assert r.exit_code == 2 and "not empty and not a wiki" in r.stderr
+    assert r.exit_code == 2
+    assert "not empty and not a wiki" in r.stderr
 
 
 def _agents(tmp_path):
     root = tmp_path / "w"
     init_wiki(root, today=TODAY)
-    return (root / "AGENTS.md").read_text(encoding="utf-8")
+    # Prettier wraps the template's prose, so phrases may span lines
+    return " ".join((root / "AGENTS.md").read_text(encoding="utf-8").split())
 
 
 def test_agents_md_deleted_source_drops_citations(tmp_path):
@@ -337,7 +349,10 @@ def test_init_refuses_name_registered_at_other_path(tmp_path):
     before = registry.registry_file().read_text(encoding="utf-8")
     with pytest.raises(
         WikiError,
-        match=f"wiki name 'demo' is already registered at {re.escape(str(a.resolve()))}; pass --name",
+        match=(
+            "wiki name 'demo' is already registered at "
+            f"{re.escape(str(a.resolve()))}; pass --name"
+        ),
     ):
         init_wiki(b, name="demo", today=TODAY)
     assert not b.exists()
@@ -423,7 +438,8 @@ def test_init_inside_repo_without_identity_succeeds(tmp_path, monkeypatch):
     host = _host_repo(tmp_path)
     monkeypatch.setattr(gitops, "has_identity", lambda root: False)
     result = init_wiki(host / "wiki", today=TODAY)
-    assert result.created and result.host_repo == host.resolve()
+    assert result.created
+    assert result.host_repo == host.resolve()
 
 
 def test_enclosing_repo_detection(tmp_path):
@@ -438,7 +454,8 @@ def test_cli_init_host_repo_message(tmp_path):
     r = CliRunner().invoke(app, ["init", str(wiki), "--name", "acme"])
     assert r.exit_code == 0, r.output
     assert r.stdout.strip() == (
-        f"created wiki acme at {wiki.resolve()} inside existing git repository {host.resolve()} "
+        f"created wiki acme at {wiki.resolve()} "
+        f"inside existing git repository {host.resolve()} "
         "(not committed — review and commit it there)"
     )
 
@@ -447,6 +464,6 @@ def test_init_inside_git_dir_is_refused(tmp_path):
     host = tmp_path / "host"
     host.mkdir()
     subprocess.run(["git", "init", "-q", str(host)], check=True)
-    with pytest.raises(WikiError, match="inside a .git directory"):
+    with pytest.raises(WikiError, match=r"inside a \.git directory"):
         init_wiki(host / ".git" / "w")
     assert not (host / ".git" / "w").exists()

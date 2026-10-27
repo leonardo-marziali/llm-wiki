@@ -4,21 +4,32 @@ Secrets are redacted first, then injection detection runs on the redacted text s
 excerpts never contain a secret.
 """
 
+import bisect
+import contextlib
+import itertools
 import json
 import re
 import shutil
 import subprocess
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 MARK = "‹REDACTED:{kind}›"
 _MARK_PREFIX = "‹REDACTED:"
 
-_PLACEHOLDER = re.compile(
-    r"^(<.*>|\$[({].*|\{\{.*\}\}|\*+|x{3,}|\.{3,}|changeme|your[_-]?\w*|null|none|n/?a|example\w*)$",
-    re.I,
+_PLACEHOLDERS = tuple(
+    re.compile(rf"^(?:{p})$", re.IGNORECASE)
+    for p in (
+        r"<.*>",  # <your-token>
+        r"\$[({].*",  # $(cmd), ${VAR}
+        r"\{\{.*\}\}",  # {{ template }}
+        r"\*+|x{3,}|\.{3,}",  # masked
+        r"changeme|null|none|n/?a",
+        r"your[_-]?\w*|example\w*",
+    )
 )
 # `$(cmd)` / `${VAR}` (shell substitution) fetch a secret at run time; they are not one
 _SHELL_SUBST = ("$(", "${")
@@ -26,13 +37,14 @@ _ARN = re.compile(r"arn:aws[\w-]*:secretsmanager:[^\s]*$")
 
 
 def _looks_secret(value: str) -> bool:
-    """Real secrets have digits, symbols or mixed case; plain words ("required", "mandatory") do not."""
+    """Real secrets have digits, symbols or mixed case; plain words do not.
+
+    Plain words such as "required" or "mandatory" are not secrets.
+    """
     v = value.strip("\"'`,;")
-    if len(v) < 6 or _PLACEHOLDER.match(v) or _MARK_PREFIX in v:
+    if len(v) < 6 or any(p.match(v) for p in _PLACEHOLDERS) or _MARK_PREFIX in v:
         return False
-    if v.isalpha() and (v.islower() or v.istitle()) and len(v) < 16:
-        return False
-    return True
+    return not (v.isalpha() and (v.islower() or v.istitle()) and len(v) < 16)
 
 
 # (kind, pattern, group holding the secret value or 0 for the whole match)
@@ -40,8 +52,9 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
     (
         "private_key",
         re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-            re.S,
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
+            r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+            re.DOTALL,
         ),
         0,
     ),
@@ -56,15 +69,17 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
     ("jfrog_api_key", re.compile(r"\bAKC[a-zA-Z0-9]{20,}\b"), 0),
     (
         "github_token",
-        re.compile(
-            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"
+        # ASCII on purpose: on str patterns \w also matches non-ASCII letters
+        re.compile(  # NOSONAR
+            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b"
+            r"|\bgithub_pat_[A-Za-z0-9_]{40,}\b"
         ),
         0,
     ),
     ("slack_token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b"), 0),
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), 0),
-    ("bearer", re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9\-._~+/]{20,}=*)"), 2),
-    ("basic_auth", re.compile(r"(?i)\b(basic\s+)([A-Za-z0-9+/]{16,}={0,2})"), 2),
+    ("bearer", re.compile(r"(?i)\b(bearer\s+)([a-z0-9\-._~+/]{20,}=*)"), 2),
+    ("basic_auth", re.compile(r"(?i)\b(basic\s+)([a-z0-9+/]{16,}={0,2})"), 2),
     (
         "url_credentials",
         re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s/:@]+:)([^\s/@]{3,})(@)"),
@@ -73,7 +88,7 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
     (
         "aws_secret",
         re.compile(
-            r"(?i)(aws_secret_access_key\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"']{20,})"
+            r"(?i)(aws_secret_access_key\s*+[\"']?\s*+[:=]\s*+[\"']?)([^\s\"']{20,})"
         ),
         2,
     ),
@@ -88,12 +103,26 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
     (
         "password",
         re.compile(
-            r"(?i)((?<![A-Za-z0-9])(?:password|passwd|pwd|pass)\b\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"'<>,;|]{4,})"
+            r"(?i)((?<![a-z0-9])(?:password|passwd|pwd|pass)\b\s*+[\"']?\s*+[:=]\s*+[\"']?)"
+            r"([^\s\"'<>,;|]{4,})"
         ),
         2,
     ),
     ("conn_string_password", re.compile(r"(?i)(password|pwd)(=)([^;\s]{4,})"), 3),
 ]
+
+
+def _is_false_positive(kind: str, m: re.Match[str], value: str) -> bool:
+    if _MARK_PREFIX in value:
+        return True  # already redacted
+    if kind in ("password", "token") and not _looks_secret(value):
+        return True
+    if kind == "conn_string_password" and value.startswith(_SHELL_SUBST):
+        return True
+    # `arn:aws:secretsmanager:...:secret:<name>` names a secret, it is not one
+    return kind == "token" and bool(
+        _ARN.search(m.string, max(0, m.start() - 80), m.start() + 1)
+    )
 
 
 def redact(text: str) -> tuple[str, Counter[str]]:
@@ -105,19 +134,8 @@ def redact(text: str) -> tuple[str, Counter[str]]:
             if group == 0:
                 counts[kind] += 1
                 return mark
-            value = m.group(group)
-            if _MARK_PREFIX in value:
-                return m.group(0)  # already redacted
-            if kind in ("password", "token") and not _looks_secret(value):
+            if _is_false_positive(kind, m, m.group(group)):
                 return m.group(0)
-            if kind == "conn_string_password" and value.startswith(_SHELL_SUBST):
-                return m.group(0)
-            if kind == "token" and _ARN.search(
-                m.string, max(0, m.start() - 80), m.start() + 1
-            ):
-                return m.group(
-                    0
-                )  # `arn:aws:secretsmanager:...:secret:<name>` names a secret, it is not one
             counts[kind] += 1
             start, end = m.start(group) - m.start(0), m.end(group) - m.start(0)
             whole = m.group(0)
@@ -136,7 +154,10 @@ class Hit:
 
 INJECTION_RULES: dict[str, list[str]] = {
     "addressed_to_ai": [
-        r"(?i)\b(?:hey|dear|attention|note to|instructions? for)\s+(?:the\s+)?(?:ai|assistant|llm|language model|agent|claude|chatgpt|copilot)\b",
+        (
+            r"(?i)\b(?:hey|dear|attention|note to|instructions? for)\s+(?:the\s+)?"
+            r"(?:ai|assistant|llm|language model|agent|claude|chatgpt|copilot)\b"
+        ),
         r"(?i)\b(?:ai|assistant|agent|llm|claude)s?\s*[:,]\s*(?:please\s+)?(?:ignore|run|execute|delete|write|send|disregard|forget)\b",
     ],
     "override": [
@@ -163,24 +184,26 @@ def _clip(s: str) -> str:
     return s if len(s) <= _EXCERPT_MAX else s[: _EXCERPT_MAX - 1] + "…"
 
 
+def _hidden_hits(text: str, line_of: Callable[[int], int]) -> list[Hit]:
+    """One hit per line holding invisible characters, listing their code points."""
+    hidden: dict[int, list[str]] = {}
+    for m in _HIDDEN.finditer(text):
+        if m.start() == 0 and m.group(0) == "\ufeff":
+            continue
+        codes = hidden.setdefault(line_of(m.start()), [])
+        code = f"U+{ord(m.group(0)):04X}"
+        if code not in codes:
+            codes.append(code)
+    return [Hit("hidden_chars", n, _clip(" ".join(c))) for n, c in hidden.items()]
+
+
 def find_injection(text: str) -> list[Hit]:
     hits: list[Hit] = []
     lines = text.split("\n")
-    starts: list[int] = []
-    pos = 0
-    for ln in lines:
-        starts.append(pos)
-        pos += len(ln) + 1
+    starts = list(itertools.accumulate((len(ln) + 1 for ln in lines[:-1]), initial=0))
 
     def line_of(offset: int) -> int:
-        lo, hi = 0, len(starts) - 1
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if starts[mid] <= offset:
-                lo = mid
-            else:
-                hi = mid - 1
-        return lo + 1
+        return bisect.bisect_right(starts, offset)
 
     # every excerpt is built from lines with all base64 blobs masked
     masked = [
@@ -191,16 +214,7 @@ def find_injection(text: str) -> list[Hit]:
             for m in rx.finditer(text):
                 n = line_of(m.start())
                 hits.append(Hit(kind, n, _clip(masked[n - 1])))
-    hidden: dict[int, list[str]] = {}
-    for m in _HIDDEN.finditer(text):
-        if m.start() == 0 and m.group(0) == "﻿":
-            continue
-        codes = hidden.setdefault(line_of(m.start()), [])
-        code = f"U+{ord(m.group(0)):04X}"
-        if code not in codes:
-            codes.append(code)
-    for n, codes in hidden.items():
-        hits.append(Hit("hidden_chars", n, _clip(" ".join(codes))))
+    hits += _hidden_hits(text, line_of)
     hits.sort(key=lambda h: (h.line, h.kind))
     return hits
 
@@ -244,10 +258,8 @@ def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
         return ["gitleaks-error"]
     finally:
         for f in (src, report):
-            try:
+            with contextlib.suppress(OSError):
                 f.unlink(missing_ok=True)
-            except OSError:
-                pass
     return sorted(
         {str(f["RuleID"]) for f in findings if isinstance(f, dict) and "RuleID" in f}
     )
@@ -256,7 +268,10 @@ def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
 def screen_text(
     text: str, gitleaks_path: Path | None = None, tmp_dir: Path | None = None
 ) -> ScreenResult:
-    """Gitleaks runs only when a binary exists AND tmp_dir (inside the wiki root) is given."""
+    """Gitleaks runs only when a binary exists AND tmp_dir is given.
+
+    tmp_dir must lie inside the wiki root.
+    """
     binary = str(gitleaks_path) if gitleaks_path else shutil.which("gitleaks")
     leaks = _run_gitleaks(text, binary, tmp_dir) if binary and tmp_dir else []
     redacted, counts = redact(text)

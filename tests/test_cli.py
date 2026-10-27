@@ -7,7 +7,8 @@ from llm_wiki.cli import app
 
 def test_version_flag():
     r = CliRunner().invoke(app, ["--version"])
-    assert r.exit_code == 0 and r.stdout.strip() == f"wiki {__version__}"
+    assert r.exit_code == 0
+    assert r.stdout.strip() == f"wiki {__version__}"
 
 
 def test_no_args_shows_help():

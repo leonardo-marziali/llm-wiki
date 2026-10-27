@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import imagehash
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from .errors import RefusedSource
 
@@ -25,7 +25,7 @@ def triage(path: Path) -> ImageInfo:
         with Image.open(path) as img:
             width, height = img.size
             phash = str(imagehash.phash(img))
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+    except (OSError, Image.DecompressionBombError) as exc:
         raise RefusedSource(f"unreadable image: {path.name}") from exc
     reason = "image too small" if min(width, height) < MIN_SIDE else None
     return ImageInfo(width, height, phash, reason)

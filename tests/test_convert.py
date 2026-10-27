@@ -22,7 +22,9 @@ def test_txt_copied_with_header(root):
     p = root / "raw" / "a.txt"
     p.write_text("hello world", encoding="utf-8")
     c = convert(root, p, SHA, HARD_CAPS)
-    assert c.converter == "text" and c.parts == 1 and c.flags == []
+    assert c.converter == "text"
+    assert c.parts == 1
+    assert c.flags == []
     assert c.outputs[0] == f".wiki/converted/{SHA}.md"
     text = out(root, c)
     assert text.startswith(
@@ -38,7 +40,8 @@ def test_latin1_txt_and_bom_csv(root, make_csv):
     c = root / "raw" / "b.csv"
     make_csv(c, [["a", "b"], ["1", "2"]], encoding="utf-8-sig")
     text = out(root, convert(root, c, SHA, HARD_CAPS))
-    assert text.startswith("---\nsource:") and "| a | b |" in text
+    assert text.startswith("---\nsource:")
+    assert "| a | b |" in text
 
 
 def test_docx_headings_survive(root, make_docx):
@@ -47,7 +50,8 @@ def test_docx_headings_survive(root, make_docx):
         [("h1", "Title"), ("p", "intro"), ("h2", "Section A"), ("p", "body")],
     )
     text = out(root, convert(root, p, SHA, HARD_CAPS))
-    assert "# Title" in text and "## Section A" in text
+    assert "# Title" in text
+    assert "## Section A" in text
 
 
 def test_pptx_notes_extracted(root, make_pptx):
@@ -58,9 +62,9 @@ def test_pptx_notes_extracted(root, make_pptx):
     c = convert(root, p, SHA, HARD_CAPS)
     assert c.converter == "markitdown+pptx-notes"
     notes = (root / ".wiki/converted" / f"{SHA}.notes.md").read_text()
-    assert (
-        "Slide 2" in notes and "remember the demo" in notes and "Slide 1" not in notes
-    )
+    assert "Slide 2" in notes
+    assert "remember the demo" in notes
+    assert "Slide 1" not in notes
     assert f".wiki/converted/{SHA}.notes.md" in c.outputs
 
 
@@ -78,9 +82,12 @@ def test_xlsx_small_inline_large_csv_profile(root, make_xlsx):
     p = make_xlsx(root / "raw" / "w.xlsx", {"small": small, "large": large})
     c = convert(root, p, SHA, HARD_CAPS)
     text = out(root, c)
-    assert c.converter == "sheets" and c.flags == ["large-sheet"]
-    assert "## Sheet: small" in text and "| a | b | c |" in text
-    assert "## Sheet: large" in text and "rows: 300" in text
+    assert c.converter == "sheets"
+    assert c.flags == ["large-sheet"]
+    assert "## Sheet: small" in text
+    assert "| a | b | c |" in text
+    assert "## Sheet: large" in text
+    assert "rows: 300" in text
     assert "kind: k0, k1, k2" in text
     assert f".wiki/converted/{SHA}.large.csv" in c.outputs
     assert (root / f".wiki/converted/{SHA}.large.csv").exists()
@@ -89,7 +96,8 @@ def test_xlsx_small_inline_large_csv_profile(root, make_xlsx):
 def test_text_pdf_no_flag(root, make_text_pdf):
     p = make_text_pdf(root / "raw" / "t.pdf", ["Quarterly report. " * 20])
     c = convert(root, p, SHA, HARD_CAPS)
-    assert c.flags == [] and c.converter in {"markitdown", "pypdf"}
+    assert c.flags == []
+    assert c.converter in {"markitdown", "pypdf"}
     assert "Quarterly report" in out(root, c)
 
 
@@ -101,7 +109,8 @@ def test_scanned_pdf_flagged_needs_vision(root, make_scanned_pdf):
 def test_png_stub_and_flag(root, make_png):
     p = make_png(root / "raw" / "i.png", (64, 48))
     c = convert(root, p, SHA, HARD_CAPS)
-    assert c.converter == "image" and c.flags == ["needs-vision"]
+    assert c.converter == "image"
+    assert c.flags == ["needs-vision"]
     assert "64x48" in out(root, c)
 
 
@@ -139,7 +148,8 @@ def test_large_text_split_into_parts(root):
         "".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20))
     )
     c = convert(root, p, SHA, HARD_CAPS)
-    assert c.chars > 200_000 - 10_000 and c.parts >= 3
+    assert c.chars > 200_000 - 10_000
+    assert c.parts >= 3
     for n in range(1, c.parts + 1):
         assert len(out_part(root, n)) <= 80_000
 
@@ -190,18 +200,22 @@ def test_sheet_slug_collision_distinct_csvs(root, make_xlsx):
     p = make_xlsx(root / "raw" / "w.xlsx", {"A b": rows, "A-b": rows})
     c = convert(root, p, SHA, HARD_CAPS)
     csvs = [o for o in c.outputs if o.endswith(".csv")]
-    assert len(csvs) == 2 and len(set(csvs)) == 2
+    assert len(csvs) == 2
+    assert len(set(csvs)) == 2
 
 
 def test_xlsx_trailing_empty_trimmed(root, make_xlsx):
     import openpyxl
+    from openpyxl.cell.cell import Cell
 
     p = make_xlsx(
         root / "raw" / "t.xlsx", {"s": [["a", "b", "c"]] + [["1", "2", "3"]] * 4}
     )
     wb = openpyxl.load_workbook(p)
-    wb["s"].cell(row=500, column=40).value = ""
-    wb["s"].cell(row=500, column=40).number_format = "0.00"
+    cell = wb["s"].cell(row=500, column=40)
+    assert isinstance(cell, Cell)
+    cell.value = ""
+    cell.number_format = "0.00"
     wb.save(p)
     c = convert(root, p, SHA, HARD_CAPS)
     assert c.flags == []

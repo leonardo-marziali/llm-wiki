@@ -43,7 +43,8 @@ def test_valid_page_parses(tmp_path):
     p = write(tmp_path, "conventions/git-flow.md", fm_text() + "# Body\n")
     page = read_page(tmp_path, p)
     assert page.error is None
-    assert page.fm is not None and page.fm.title == "Git flow"
+    assert page.fm is not None
+    assert page.fm.title == "Git flow"
     assert page.fm.last_verified == date(2026, 1, 1)
     assert page.rel == "conventions/git-flow.md"
     assert page.body == "# Body\n"
@@ -54,19 +55,22 @@ def test_bad_vocab_sets_error(tmp_path):
     p = write(tmp_path, "a/x.md", fm_text(status="done"))
     page = read_page(tmp_path, p)
     assert page.fm is None
-    assert page.error and "status" in page.error
+    assert page.error
+    assert "status" in page.error
 
 
 def test_missing_frontmatter_sets_error(tmp_path):
     p = write(tmp_path, "a/x.md", "# Just a body\n")
     page = read_page(tmp_path, p)
-    assert page.fm is None and page.error
+    assert page.fm is None
+    assert page.error
 
 
 def test_malformed_yaml_sets_error_not_raise(tmp_path):
     p = write(tmp_path, "a/x.md", "---\nid: [unclosed\n---\nbody\n")
     page = read_page(tmp_path, p)
-    assert page.fm is None and page.error
+    assert page.fm is None
+    assert page.error
     with pytest.raises(ValueError):
         split_frontmatter("---\nid: [unclosed\n---\nbody\n")
 
@@ -81,7 +85,9 @@ def test_source_path_must_be_raw(tmp_path):
     src = f"sources:\n  - path: wiki/x.md\n    sha256: {SHA}\n    locator: p1\n"
     text = fm_text().rstrip("-\n") + "\n" + src + "---\n"
     page = read_page(tmp_path, write(tmp_path, "a/x.md", text))
-    assert page.fm is None and page.error and "raw/" in page.error
+    assert page.fm is None
+    assert page.error
+    assert "raw/" in page.error
     ok = text.replace("wiki/x.md", "raw/x.md")
     assert read_page(tmp_path, write(tmp_path, "a/y.md", ok)).error is None
 
@@ -89,7 +95,9 @@ def test_source_path_must_be_raw(tmp_path):
 def test_review_after_must_follow_last_verified(tmp_path):
     p = write(tmp_path, "a/x.md", fm_text(review_after="2026-01-01"))
     page = read_page(tmp_path, p)
-    assert page.fm is None and page.error and "review_after" in page.error
+    assert page.fm is None
+    assert page.error
+    assert "review_after" in page.error
 
 
 def test_iter_pages_skips_system_files_and_archive(tmp_path):
@@ -128,8 +136,10 @@ def test_non_utf8_file_sets_error_not_raise(tmp_path):
     p.write_bytes(b"\xff\xfe")
     page = read_page(tmp_path, p)
     assert page.fm is None
-    assert page.error and "UTF-8" in page.error
-    assert page.body == "" and page.line_count == 0
+    assert page.error
+    assert "UTF-8" in page.error
+    assert page.body == ""
+    assert page.line_count == 0
 
 
 def test_iter_pages_skips_directories_named_md(tmp_path):
@@ -140,11 +150,15 @@ def test_iter_pages_skips_directories_named_md(tmp_path):
 
 @pytest.mark.parametrize("sha", ["a" * 64 + "\n", "A" * 64])
 def test_sha256_rejects_newline_and_uppercase(tmp_path, sha):
-    src = f"sources:\n  - path: raw/a.md\n    sha256: {json.dumps(sha)}\n    locator: L1\n"
+    src = (
+        "sources:\n  - path: raw/a.md\n"
+        f"    sha256: {json.dumps(sha)}\n    locator: L1\n"
+    )
     p = write(tmp_path, "a/x.md", fm_text().removesuffix("---\n") + src + "---\n")
     page = read_page(tmp_path, p)
     assert page.fm is None
-    assert page.error and "sha256" in page.error
+    assert page.error
+    assert "sha256" in page.error
 
 
 def test_source_path_rejects_dotdot(tmp_path):
@@ -152,4 +166,5 @@ def test_source_path_rejects_dotdot(tmp_path):
     p = write(tmp_path, "a/x.md", fm_text().removesuffix("---\n") + src + "---\n")
     page = read_page(tmp_path, p)
     assert page.fm is None
-    assert page.error and "path" in page.error
+    assert page.error
+    assert "path" in page.error
