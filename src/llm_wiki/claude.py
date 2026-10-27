@@ -16,7 +16,11 @@ from typing import Literal
 
 from llm_wiki.config import LlmSettings, Role
 from llm_wiki.errors import (
-    ClaudeAuthError, ClaudeBudgetExceeded, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError,
+    ClaudeAuthError,
+    ClaudeBudgetExceeded,
+    ClaudeError,
+    ClaudeNotInstalled,
+    ClaudeSchemaError,
     ClaudeUsageLimit,
 )
 
@@ -24,9 +28,18 @@ EDIT_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
 # Every flag build_argv can emit; `wiki doctor` checks them against `claude --help`.
 REQUIRED_FLAGS = (
-    "--output-format", "--model", "--system-prompt-file", "--tools", "--no-session-persistence",
-    "--setting-sources", "--strict-mcp-config", "--permission-prompts", "--max-budget-usd",
-    "--json-schema", "--permission-mode", "--restricted",
+    "--output-format",
+    "--model",
+    "--system-prompt-file",
+    "--tools",
+    "--no-session-persistence",
+    "--setting-sources",
+    "--strict-mcp-config",
+    "--permission-prompts",
+    "--max-budget-usd",
+    "--json-schema",
+    "--permission-mode",
+    "--restricted",
 )
 
 # Accepted by claude 2.1.310 but absent from --help; doctor's model probe proves it is honoured.
@@ -35,7 +48,12 @@ HIDDEN_FLAGS = ("--system-prompt-file",)
 # Never forwarded: API keys would bill the API instead of the subscription, and the nested-session
 # markers make the child believe it runs inside another Claude Code. CLAUDE_CODE_OAUTH_TOKEN is the
 # subscription login and stays.
-_STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
+_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+)
 
 
 @dataclass(frozen=True)
@@ -64,15 +82,27 @@ class Result:
 
 
 def make_call(
-    role: Role, settings: LlmSettings, *, prompt: str, system_prompt: str,
-    cwd: Path | None = None, json_schema: dict | None = None,
+    role: Role,
+    settings: LlmSettings,
+    *,
+    prompt: str,
+    system_prompt: str,
+    cwd: Path | None = None,
+    json_schema: dict | None = None,
 ) -> Call:
     edit = role == "edit"
     # Edit sessions are never re-run: a half-applied edit is ingest's post-check/rollback to handle.
     return Call(
-        prompt=prompt, system_prompt=system_prompt, model=settings.model(role),
-        tools=EDIT_TOOLS if edit else (), budget_usd=settings.budget(role), cwd=cwd,
-        json_schema=json_schema, edit=edit, timeout_s=900 if edit else 300, role=role,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model=settings.model(role),
+        tools=EDIT_TOOLS if edit else (),
+        budget_usd=settings.budget(role),
+        cwd=cwd,
+        json_schema=json_schema,
+        edit=edit,
+        timeout_s=900 if edit else 300,
+        role=role,
         max_retries=0 if edit else 3,
     )
 
@@ -81,7 +111,9 @@ def claude_binary() -> str:
     override = os.environ.get("LLM_WIKI_CLAUDE")
     if override:
         if not Path(override).exists():
-            raise ClaudeNotInstalled(f"LLM_WIKI_CLAUDE points to a missing file: {override}")
+            raise ClaudeNotInstalled(
+                f"LLM_WIKI_CLAUDE points to a missing file: {override}"
+            )
         return override
     found = shutil.which("claude")
     if not found:
@@ -91,13 +123,30 @@ def claude_binary() -> str:
 
 def build_argv(call: Call, binary: str, system_prompt_file: Path) -> list[str]:
     argv = [
-        binary, "-p", "--output-format", "json", "--model", call.model,
-        "--system-prompt-file", str(system_prompt_file), "--tools", ",".join(call.tools),
-        "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config",
-        "--permission-prompts", "none", "--max-budget-usd", f"{call.budget_usd:.2f}",
+        binary,
+        "-p",
+        "--output-format",
+        "json",
+        "--model",
+        call.model,
+        "--system-prompt-file",
+        str(system_prompt_file),
+        "--tools",
+        ",".join(call.tools),
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--permission-prompts",
+        "none",
+        "--max-budget-usd",
+        f"{call.budget_usd:.2f}",
     ]
     if call.json_schema:
-        argv += ["--json-schema", json.dumps(call.json_schema, separators=(",", ":"), sort_keys=True)]
+        argv += [
+            "--json-schema",
+            json.dumps(call.json_schema, separators=(",", ":"), sort_keys=True),
+        ]
     if call.edit:
         argv += ["--permission-mode", "acceptEdits", "--restricted"]
     return argv
@@ -129,7 +178,9 @@ def parse_output(stdout: str) -> Result:
         structured=structured if isinstance(structured, dict) else None,
         cost_usd=_num(data.get("total_cost_usd"), float, 0.0),
         duration_ms=_num(data.get("duration_ms"), int, 0),
-        session_id=data.get("session_id") if isinstance(data.get("session_id"), str) else "",
+        session_id=data.get("session_id")
+        if isinstance(data.get("session_id"), str)
+        else "",
         raw=data,
     )
 
@@ -140,11 +191,23 @@ Kind = Literal["ok", "transient", "usage_limit", "auth", "budget", "schema", "fa
 # Bare "budget" would misread usage errors such as "option --max-budget-usd: invalid number".
 _RULES = (
     ("budget", re.compile(r"exceeded.{0,40}budget|budget.{0,40}exceeded")),
-    ("auth", re.compile(r"/login|not logged in|invalid api key|authentication|oauth token|\b401\b")),
-    ("usage_limit", re.compile(r"usage limit|(?<!rate )limit reached|limit will reset")),
-    ("transient", re.compile(
-        r"overloaded|\b(?:429|500|502|503|504|529)\b|rate limit|econnreset|etimedout|socket hang up"
-        r"|network")),
+    (
+        "auth",
+        re.compile(
+            r"/login|not logged in|invalid api key|authentication|oauth token|\b401\b"
+        ),
+    ),
+    (
+        "usage_limit",
+        re.compile(r"usage limit|(?<!rate )limit reached|limit will reset"),
+    ),
+    (
+        "transient",
+        re.compile(
+            r"overloaded|\b(?:429|500|502|503|504|529)\b|rate limit|econnreset|etimedout|socket hang up"
+            r"|network"
+        ),
+    ),
 )
 
 
@@ -156,7 +219,9 @@ def _json_object(stdout: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def classify(returncode: int, stdout: str, stderr: str, *, has_schema: bool = False) -> Kind:
+def classify(
+    returncode: int, stdout: str, stderr: str, *, has_schema: bool = False
+) -> Kind:
     data = _json_object(stdout)
     failed = returncode != 0 or (data is not None and bool(data.get("is_error")))
     if not failed:
@@ -182,7 +247,9 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
     """One subprocess; None on timeout (subprocess.run has already killed the child)."""
     # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv limit.
     try:
-        fh = tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False)
+        fh = tempfile.NamedTemporaryFile(
+            "w", suffix=".md", encoding="utf-8", delete=False
+        )
     except OSError as exc:
         raise ClaudeError(f"cannot create the system prompt temp file: {exc}") from None
     try:
@@ -190,21 +257,35 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
             with fh:
                 fh.write(call.system_prompt)
         except OSError as exc:
-            raise ClaudeError(f"cannot write the system prompt temp file: {exc}") from None
+            raise ClaudeError(
+                f"cannot write the system prompt temp file: {exc}"
+            ) from None
         return subprocess.run(
-            build_argv(call, binary, Path(fh.name)), input=call.prompt, capture_output=True,
-            text=True, encoding="utf-8", cwd=cwd, env=child_env(os.environ), timeout=call.timeout_s,
+            build_argv(call, binary, Path(fh.name)),
+            input=call.prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=cwd,
+            env=child_env(os.environ),
+            timeout=call.timeout_s,
         )
     except subprocess.TimeoutExpired:
         return None
     except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
         if not cwd.is_dir() or not os.access(cwd, os.X_OK):
-            raise ClaudeError(f"working directory is not an accessible directory: {cwd}") from None
+            raise ClaudeError(
+                f"working directory is not an accessible directory: {cwd}"
+            ) from None
         if isinstance(exc, PermissionError):
             raise ClaudeNotInstalled(f"claude at {binary} is not executable") from None
         if binary == os.environ.get("LLM_WIKI_CLAUDE"):
-            raise ClaudeNotInstalled(f"LLM_WIKI_CLAUDE points to a missing file: {binary}") from None
-        raise ClaudeNotInstalled(f"claude not found at {binary} — install Claude Code") from None
+            raise ClaudeNotInstalled(
+                f"LLM_WIKI_CLAUDE points to a missing file: {binary}"
+            ) from None
+        raise ClaudeNotInstalled(
+            f"claude not found at {binary} — install Claude Code"
+        ) from None
     finally:
         Path(fh.name).unlink(missing_ok=True)
 
@@ -225,12 +306,17 @@ def _raise_for(kind: Kind, call: Call, proc) -> None:
     if kind == "auth":
         raise ClaudeAuthError("claude is not logged in — run `claude /login`")
     if kind == "usage_limit":
-        raise ClaudeUsageLimit(f"{_message(proc.stdout, proc.stderr)} — wait and re-run")
+        raise ClaudeUsageLimit(
+            f"{_message(proc.stdout, proc.stderr)} — wait and re-run"
+        )
     if kind == "budget":
         key = f"{call.role}_budget_usd" if call.role else "the budget setting"
         raise ClaudeBudgetExceeded(
-            f"claude exceeded the ${call.budget_usd:.2f} budget cap — raise {key} and re-run")
-    raise ClaudeError(f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}")
+            f"claude exceeded the ${call.budget_usd:.2f} budget cap — raise {key} and re-run"
+        )
+    raise ClaudeError(
+        f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
+    )
 
 
 def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
@@ -245,7 +331,12 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
         else:
             data = _json_object(proc.stdout)
             spent += _num(data.get("total_cost_usd"), float, 0.0) if data else 0.0
-            kind = classify(proc.returncode, proc.stdout, proc.stderr, has_schema=bool(call.json_schema))
+            kind = classify(
+                proc.returncode,
+                proc.stdout,
+                proc.stderr,
+                has_schema=bool(call.json_schema),
+            )
             failure = f"claude failed (exit {proc.returncode}): {_snippet(proc.stdout, proc.stderr)}"
             if kind == "ok":
                 return dataclasses.replace(parse_output(proc.stdout), cost_usd=spent)
@@ -253,26 +344,37 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
             if transient >= call.max_retries:
                 raise ClaudeError(failure)
             transient += 1
-            sleep(2 ** transient * (0.5 + rand()))
+            sleep(2**transient * (0.5 + rand()))
             continue
         if kind == "schema":
             if schema_retried:
-                raise ClaudeSchemaError("claude reply did not match the required JSON schema: "
-                                        "structured_output missing")
+                raise ClaudeSchemaError(
+                    "claude reply did not match the required JSON schema: "
+                    "structured_output missing"
+                )
             schema_retried = True
-            call = dataclasses.replace(call, prompt=call.prompt + (
-                "\n\nYour previous reply did not match the required JSON schema: "
-                "structured_output missing. Reply again with only the structured output."))
+            call = dataclasses.replace(
+                call,
+                prompt=call.prompt
+                + (
+                    "\n\nYour previous reply did not match the required JSON schema: "
+                    "structured_output missing. Reply again with only the structured output."
+                ),
+            )
             continue
         _raise_for(kind, call, proc)
 
 
-def run(call: Call, *, binary: str | None = None, sleep=time.sleep, rand=random.random) -> Result:
+def run(
+    call: Call, *, binary: str | None = None, sleep=time.sleep, rand=random.random
+) -> Result:
     binary = binary or claude_binary()
     if call.cwd is not None:
         return _execute(call, binary, call.cwd, sleep, rand)
     try:
-        tmp = tempfile.TemporaryDirectory(prefix="llm-wiki-", ignore_cleanup_errors=True)
+        tmp = tempfile.TemporaryDirectory(
+            prefix="llm-wiki-", ignore_cleanup_errors=True
+        )
     except OSError as exc:
         raise ClaudeError(f"cannot create a temp directory: {exc}") from None
     with tmp as path:  # plan calls see no files

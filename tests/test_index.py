@@ -14,7 +14,9 @@ CFG = WikiConfig(
 )
 
 
-def page(title: str, type_: str = "convention", summary: str = "S.", status: str = "as-is") -> str:
+def page(
+    title: str, type_: str = "convention", summary: str = "S.", status: str = "as-is"
+) -> str:
     return (
         "---\n"
         f"id: x\ntitle: {title}\ntype: {type_}\nstatus: {status}\nsummary: {summary}\n"
@@ -50,7 +52,9 @@ def test_section_index_lines_and_order(tmp_path):
 def test_hand_written_header_preserved(tmp_path):
     write(tmp_path, "conventions/a.md", page("A"))
     idx = tmp_path / "wiki/conventions/_index.md"
-    idx.write_text("# Mine\n\nHand written.\n\n" + GENERATED_MARK + "\n- stale\n", encoding="utf-8")
+    idx.write_text(
+        "# Mine\n\nHand written.\n\n" + GENERATED_MARK + "\n- stale\n", encoding="utf-8"
+    )
     build_indexes(tmp_path, CFG)
     text = idx.read_text(encoding="utf-8")
     assert text.startswith("# Mine\n\nHand written.\n\n" + GENERATED_MARK + "\n")
@@ -65,13 +69,18 @@ def test_top_index_lists_sections_with_counts(tmp_path):
     build_indexes(tmp_path, CFG)
     text = (tmp_path / "wiki/index.md").read_text(encoding="utf-8")
     assert text.startswith("# Acme wiki\n\nAcme knowledge.\n\n" + GENERATED_MARK + "\n")
-    assert "- [Overview](overview.md)\n- [Glossary](glossary.md)\n- [Open questions](open-questions.md)" in text
+    assert (
+        "- [Overview](overview.md)\n- [Glossary](glossary.md)\n- [Open questions](open-questions.md)"
+        in text
+    )
     assert "## Sections" in text
     assert "- [conventions](conventions/_index.md) — 2 pages — How we work." in text
     assert "- [systems](systems/_index.md) — 1 pages — What we run." in text
     assert text.index("conventions/_index.md") < text.index("systems/_index.md")
     assert "## Hubs\n" in text and "- [Sys hub](systems/h.md)" in text
-    assert "overview.md" not in (tmp_path / "wiki/conventions/_index.md").read_text(encoding="utf-8")
+    assert "overview.md" not in (tmp_path / "wiki/conventions/_index.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_top_index_under_100_lines_with_many_hubs(tmp_path):
@@ -107,13 +116,20 @@ def test_multiline_summary_and_bracket_title_stay_one_line(tmp_path):
     build_indexes(tmp_path, CFG)
     out = (tmp_path / "wiki/conventions/_index.md").read_text(encoding="utf-8")
     lines = out.split(GENERATED_MARK + "\n")[1].splitlines()
-    assert lines == [r"- [A \[b\] — c](odd.md) — line one line two — as-is — 2026-01-01"]
+    assert lines == [
+        r"- [A \[b\] — c](odd.md) — line one line two — as-is — 2026-01-01"
+    ]
 
 
 def test_top_index_under_100_lines_when_budget_exhausted(tmp_path):
-    cfg = CFG.model_copy(update={
-        "sections": [Section(name=f"s{i:02}", kind="as-is", description="d") for i in range(85)]
-    })
+    cfg = CFG.model_copy(
+        update={
+            "sections": [
+                Section(name=f"s{i:02}", kind="as-is", description="d")
+                for i in range(85)
+            ]
+        }
+    )
     write(tmp_path, "s00/h1.md", page("H1", type_="hub"))
     write(tmp_path, "s00/h2.md", page("H2", type_="hub"))
     build_indexes(tmp_path, cfg)

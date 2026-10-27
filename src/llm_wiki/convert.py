@@ -11,13 +11,32 @@ from .caps import Caps
 from .errors import RefusedSource, UnsupportedFormat, WikiError
 
 SUPPORTED = {
-    ".md", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ".pptx", ".xlsx", ".csv", ".docx", ".pdf",
+    ".md",
+    ".txt",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pptx",
+    ".xlsx",
+    ".csv",
+    ".docx",
+    ".pdf",
 }
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 NEVER_INGEST_SUFFIXES = (
-    ".publishsettings", ".postman_environment.json", ".pem", ".key", ".pfx", ".p12", ".jks",
-    ".keystore", ".env", ".kdbx", ".ppk",
+    ".publishsettings",
+    ".postman_environment.json",
+    ".pem",
+    ".key",
+    ".pfx",
+    ".p12",
+    ".jks",
+    ".keystore",
+    ".env",
+    ".kdbx",
+    ".ppk",
 )
 MIN_PDF_CHARS_PER_PAGE = 200
 CONVERTED_DIR = Path(".wiki") / "converted"
@@ -64,7 +83,11 @@ def _pptx_notes(path: Path) -> str:
         title = ""
         if slide.shapes.title is not None and slide.shapes.title.has_text_frame:
             title = slide.shapes.title.text.strip()
-        notes = slide.notes_slide.notes_text_frame.text.strip() if slide.has_notes_slide else ""
+        notes = (
+            slide.notes_slide.notes_text_frame.text.strip()
+            if slide.has_notes_slide
+            else ""
+        )
         if notes:
             blocks.append(f"## Slide {i}: {title}\n\n{notes}\n")
     return "\n".join(blocks)
@@ -89,7 +112,12 @@ def _xlsx_rows(path: Path) -> dict[str, list[list[str]]]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         return {
-            ws.title: _trim([["" if c is None else str(c) for c in row] for row in ws.iter_rows(values_only=True)])
+            ws.title: _trim(
+                [
+                    ["" if c is None else str(c) for c in row]
+                    for row in ws.iter_rows(values_only=True)
+                ]
+            )
             for ws in wb.worksheets
         }
     finally:
@@ -137,8 +165,14 @@ def _pdf(path: Path) -> tuple[str, str, list[str]]:
         if len(text.strip()) / pages >= MIN_PDF_CHARS_PER_PAGE:
             return name, text, []
     if failed == len(attempts):
-        raise RefusedSource(f"{path.name}: could not be read (all PDF extractors failed)")
-    flags = ["needs-vision"] if len(best_text.strip()) / pages < MIN_PDF_CHARS_PER_PAGE else []
+        raise RefusedSource(
+            f"{path.name}: could not be read (all PDF extractors failed)"
+        )
+    flags = (
+        ["needs-vision"]
+        if len(best_text.strip()) / pages < MIN_PDF_CHARS_PER_PAGE
+        else []
+    )
     return best_name, best_text, flags
 
 
@@ -190,7 +224,9 @@ def _split(text: str, limit: int) -> list[str]:
 def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
     suffix = raw_path.suffix.lower()
     if never_ingest(raw_path.name):
-        raise RefusedSource(f"{raw_path.name} looks like a secret/credential file and is never ingested")
+        raise RefusedSource(
+            f"{raw_path.name} looks like a secret/credential file and is never ingested"
+        )
     if suffix not in SUPPORTED:
         raise UnsupportedFormat(
             f"{suffix or raw_path.name} is not supported; supported: {', '.join(sorted(SUPPORTED))}"
@@ -199,7 +235,9 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
     out_dir = root / CONVERTED_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        source = "raw/" + raw_path.resolve().relative_to((root / "raw").resolve()).as_posix()
+        source = (
+            "raw/" + raw_path.resolve().relative_to((root / "raw").resolve()).as_posix()
+        )
     except ValueError:
         source = "raw/" + raw_path.name
 
@@ -239,7 +277,9 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
     except WikiError:
         raise
     except Exception as exc:
-        raise RefusedSource(f"{raw_path.name}: could not be read ({type(exc).__name__})") from exc
+        raise RefusedSource(
+            f"{raw_path.name}: could not be read ({type(exc).__name__})"
+        ) from exc
 
     primary = out_dir / f"{sha}.md"
     text = _header(source, sha, converter) + body
@@ -253,7 +293,10 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
         parts = len(chunks)
         for n, chunk in enumerate(chunks, 1):
             p = out_dir / f"{sha}.p{n}.md"
-            p.write_text(_header(source, sha, converter, f"{n}/{parts}") + chunk, encoding="utf-8")
+            p.write_text(
+                _header(source, sha, converter, f"{n}/{parts}") + chunk,
+                encoding="utf-8",
+            )
             outputs.append(p)
     outputs.extend(extra)
 

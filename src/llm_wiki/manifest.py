@@ -75,8 +75,15 @@ class Manifest:
             if not isinstance(data, dict):
                 raise ValueError("top level must be an object")
             if data.get("version") != 1:
-                raise ConfigError(f"{MANIFEST}: unsupported version {data.get('version')!r}")
-            return cls({k: SourceEntry.model_validate(v) for k, v in data.get("sources", {}).items()})
+                raise ConfigError(
+                    f"{MANIFEST}: unsupported version {data.get('version')!r}"
+                )
+            return cls(
+                {
+                    k: SourceEntry.model_validate(v)
+                    for k, v in data.get("sources", {}).items()
+                }
+            )
         except ConfigError:
             raise
         except (ValueError, ValidationError, AttributeError, OSError) as e:
@@ -130,4 +137,6 @@ class Manifest:
             "version": 1,
             "sources": {k: e.model_dump(mode="json") for k, e in self.entries.items()},
         }
-        f.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        f.write_text(
+            json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )

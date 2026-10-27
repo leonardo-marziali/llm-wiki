@@ -9,12 +9,18 @@ from llm_wiki.errors import GitError
 def git(root: Path, *args: str) -> str:
     try:
         proc = subprocess.run(
-            ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8",
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
     except FileNotFoundError:
         raise GitError("git is not installed or not on PATH") from None
     if proc.returncode != 0:
-        msg = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        msg = (
+            proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        )
         raise GitError(f"git {' '.join(args)}: {msg}")
     return proc.stdout
 
@@ -48,7 +54,10 @@ def enclosing_repo(path: Path) -> Path | None:
 def inside_git_dir(path: Path) -> bool:
     """True when ``path`` (which may not exist yet) lies inside a repository's ``.git`` directory."""
     try:
-        return git(_existing_dir(path), "rev-parse", "--is-inside-git-dir").strip() == "true"
+        return (
+            git(_existing_dir(path), "rev-parse", "--is-inside-git-dir").strip()
+            == "true"
+        )
     except GitError:
         return False
 

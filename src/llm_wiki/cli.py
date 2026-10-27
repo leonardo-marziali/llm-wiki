@@ -42,7 +42,10 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def _root(
     version: bool = typer.Option(
-        False, "--version", callback=_version_callback, is_eager=True,
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
         help="Show the version and exit.",
     ),
 ) -> None:
@@ -51,10 +54,16 @@ def _root(
 
 @app.command()
 def init(
-    path: Path = typer.Argument(..., help="Directory for the new wiki (or an existing wiki)."),
-    name: str | None = typer.Option(None, "--name", help="Wiki name (default: the slugged directory name)."),
+    path: Path = typer.Argument(
+        ..., help="Directory for the new wiki (or an existing wiki)."
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="Wiki name (default: the slugged directory name)."
+    ),
     profile: str = typer.Option("software", "--profile", help="software or general."),
-    description: str = typer.Option("", "--description", help="One line: what belongs in this wiki."),
+    description: str = typer.Option(
+        "", "--description", help="One line: what belongs in this wiki."
+    ),
 ) -> None:
     """Create a wiki (own git repo, or a folder in an existing repo) or register an existing one."""
     from llm_wiki.init import init_wiki
@@ -74,8 +83,12 @@ def search(
     query: str = typer.Argument(..., help="Search terms."),
     wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
     all_wikis: bool = typer.Option(False, "--all", help="Search every known wiki."),
-    status: str | None = typer.Option(None, "--status", help="Only pages with this status."),
-    section: str | None = typer.Option(None, "--section", help="Only pages in this section."),
+    status: str | None = typer.Option(
+        None, "--status", help="Only pages with this status."
+    ),
+    section: str | None = typer.Option(
+        None, "--section", help="Only pages in this section."
+    ),
     top: int = typer.Option(8, "--top", help="Maximum number of hits."),
     fmt: str = typer.Option("text", "--format", help="text or json."),
 ) -> None:
@@ -92,7 +105,11 @@ def search(
     refs = registry.known_wikis() if all_wikis else [registry.resolve(wiki, Path.cwd())]
     hits = run_search(refs, query, top=top, status=status, section=section)
     if fmt == "json":
-        typer.echo(json.dumps([dataclasses.asdict(h) for h in hits], ensure_ascii=False, indent=2))
+        typer.echo(
+            json.dumps(
+                [dataclasses.asdict(h) for h in hits], ensure_ascii=False, indent=2
+            )
+        )
     elif not hits:
         typer.echo("no matches")
     else:
@@ -107,7 +124,9 @@ def lint(
     wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
     strict: bool = typer.Option(False, "--strict", help="Fail on warnings too."),
     fmt: str = typer.Option("text", "--format", help="text or json."),
-    report_file: bool = typer.Option(False, "--report", help="Also write .wiki/reports/lint-<date>.md."),
+    report_file: bool = typer.Option(
+        False, "--report", help="Also write .wiki/reports/lint-<date>.md."
+    ),
 ) -> None:
     """Check the page contract, links, citations and caps."""
     from datetime import date
@@ -135,7 +154,9 @@ def lint(
         typer.echo(f"{report.errors} errors, {report.warnings} warnings")
     if report_file:
         # stderr in json mode keeps stdout parseable
-        typer.echo(f"report: {write_report(ref.path, report, today)}", err=fmt == "json")
+        typer.echo(
+            f"report: {write_report(ref.path, report, today)}", err=fmt == "json"
+        )
     if report.errors or (strict and report.warnings):
         raise typer.Exit(1)
 
@@ -160,7 +181,13 @@ def status(
             try:
                 rows.append(dataclasses.asdict(wiki_status(ref)))
             except Exception as e:  # one broken wiki must not hide the others
-                rows.append({"name": ref.name, "path": str(ref.path), "error": str(e) or type(e).__name__})
+                rows.append(
+                    {
+                        "name": ref.name,
+                        "path": str(ref.path),
+                        "error": str(e) or type(e).__name__,
+                    }
+                )
         if fmt == "json":
             typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
         else:
@@ -180,11 +207,15 @@ def status(
     typer.echo(f"{st.name}  {st.path}")
     if st.description:
         typer.echo(st.description)
-    typer.echo(f"sources {st.sources}/{st.max_sources}  pages {st.pages}/{st.max_pages}")
+    typer.echo(
+        f"sources {st.sources}/{st.max_sources}  pages {st.pages}/{st.max_pages}"
+    )
     typer.echo("sections: " + ", ".join(f"{k} {v}" for k, v in st.sections.items()))
     typer.echo(f"stale: {', '.join(st.stale) if st.stale else 'none'}")
     typer.echo(f"inbox {st.inbox}  quarantined {st.quarantined}")
-    typer.echo(f"pending: new {st.pending['new']}, changed {st.pending['changed']}, deleted {st.pending['deleted']}")
+    typer.echo(
+        f"pending: new {st.pending['new']}, changed {st.pending['changed']}, deleted {st.pending['deleted']}"
+    )
     if st.last_log:
         typer.echo("recent log:")
         for ln in st.last_log:
@@ -194,7 +225,9 @@ def status(
 @app.command()
 def doctor(
     wiki: str | None = typer.Option(None, "--wiki", help="Wiki name or path."),
-    no_probe: bool = typer.Option(False, "--no-probe", help="Skip the paid claude -p probes."),
+    no_probe: bool = typer.Option(
+        False, "--no-probe", help="Skip the paid claude -p probes."
+    ),
     fmt: str = typer.Option("text", "--format", help="text or json."),
 ) -> None:
     """Check claude, git and optional tools (exit 1 if a check fails)."""
@@ -214,12 +247,20 @@ def doctor(
     config_checks: list[Check] = []
     try:
         settings = load_llm_settings(root)
-    except ConfigError as e:  # a bad config is one more finding, not a reason to skip the rest
-        config_checks.append(Check("config", "fail", f"{e}; using default llm settings"))
+    except (
+        ConfigError
+    ) as e:  # a bad config is one more finding, not a reason to skip the rest
+        config_checks.append(
+            Check("config", "fail", f"{e}; using default llm settings")
+        )
         settings = LlmSettings()
     checks = config_checks + run_doctor(settings, probe=not no_probe)
     if fmt == "json":
-        typer.echo(json.dumps([dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2))
+        typer.echo(
+            json.dumps(
+                [dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2
+            )
+        )
     else:
         width = max([16, *(len(c.name) for c in checks)])
         for c in checks:

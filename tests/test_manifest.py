@@ -18,8 +18,14 @@ def _write(root: Path, rel: str, text: str) -> Path:
 
 def _entry(path: str, sha: str, status="ingested", **kw) -> SourceEntry:
     return SourceEntry(
-        path=path, sha256=sha, size=1, mime="text/plain", category="misc",
-        first_seen=date(2026, 10, 26), status=status, **kw,
+        path=path,
+        sha256=sha,
+        size=1,
+        mime="text/plain",
+        category="misc",
+        first_seen=date(2026, 10, 26),
+        status=status,
+        **kw,
     )
 
 
@@ -38,7 +44,11 @@ def test_scan_classifies_new_changed_unchanged_deleted(tmp_path):
     chg = _write(tmp_path, "raw/docs/chg.md", "v1")
     gone = _write(tmp_path, "raw/gone.md", "gone")
     m = Manifest.load(tmp_path)
-    for p, rel in ((keep, "raw/docs/keep.md"), (chg, "raw/docs/chg.md"), (gone, "raw/gone.md")):
+    for p, rel in (
+        (keep, "raw/docs/keep.md"),
+        (chg, "raw/docs/chg.md"),
+        (gone, "raw/gone.md"),
+    ):
         m.record(_entry(rel, sha256_file(p)))
     gone.unlink()
     chg.write_text("v2")
@@ -121,13 +131,16 @@ def _raw_manifest(root: Path, text: str) -> None:
     (root / MANIFEST).write_text(text)
 
 
-@pytest.mark.parametrize("text", [
-    "{not json",
-    "[]",
-    '{"version": 1, "sources": {"raw/a.md": {"path": "raw/a.md"}}}',
-    '{"version": 2, "sources": {}}',
-    '{"sources": {}}',
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        "[]",
+        '{"version": 1, "sources": {"raw/a.md": {"path": "raw/a.md"}}}',
+        '{"version": 2, "sources": {}}',
+        '{"sources": {}}',
+    ],
+)
 def test_load_bad_manifest_raises_config_error(tmp_path, text):
     _raw_manifest(tmp_path, text)
     with pytest.raises(ConfigError, match="manifest.json"):

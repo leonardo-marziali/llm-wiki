@@ -5,12 +5,24 @@ import pytest
 from conftest import ok
 
 from llm_wiki.claude import (
-    REQUIRED_FLAGS, build_argv, child_env, claude_binary, classify, make_call, parse_output, run,
+    REQUIRED_FLAGS,
+    build_argv,
+    child_env,
+    claude_binary,
+    classify,
+    make_call,
+    parse_output,
+    run,
 )
 from llm_wiki.config import LlmSettings
 from llm_wiki.errors import (
-    ClaudeAuthError, ClaudeBudgetExceeded, ClaudeError, ClaudeNotInstalled, ClaudeSchemaError,
-    ClaudeUsageLimit, WikiError,
+    ClaudeAuthError,
+    ClaudeBudgetExceeded,
+    ClaudeError,
+    ClaudeNotInstalled,
+    ClaudeSchemaError,
+    ClaudeUsageLimit,
+    WikiError,
 )
 
 
@@ -19,10 +31,24 @@ def _call(role="plan", **kw):
 
 
 BASE = [
-    "claude", "-p", "--output-format", "json", "--model", "claude-sonnet-5-5",
-    "--system-prompt-file", "/s", "--tools", "", "--no-session-persistence",
-    "--setting-sources", "", "--strict-mcp-config", "--permission-prompts", "none",
-    "--max-budget-usd", "1.00",
+    "claude",
+    "-p",
+    "--output-format",
+    "json",
+    "--model",
+    "claude-sonnet-5-5",
+    "--system-prompt-file",
+    "/s",
+    "--tools",
+    "",
+    "--no-session-persistence",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--permission-prompts",
+    "none",
+    "--max-budget-usd",
+    "1.00",
 ]
 
 
@@ -38,21 +64,29 @@ def test_edit_argv_adds_permission_flags():
 
 
 def test_schema_is_compact_sorted_json():
-    argv = build_argv(_call(json_schema={"b": 1, "a": {"y": [1, 2], "x": 0}}), "claude", Path("/s"))
+    argv = build_argv(
+        _call(json_schema={"b": 1, "a": {"y": [1, 2], "x": 0}}), "claude", Path("/s")
+    )
     assert argv[-2:] == ["--json-schema", '{"a":{"x":0,"y":[1,2]},"b":1}']
 
 
 def test_required_flags_cover_build_argv():
     for call in (_call(), _call("edit"), _call(json_schema={"a": 1})):
-        flags = {a for a in build_argv(call, "claude", Path("/s")) if a.startswith("--")}
+        flags = {
+            a for a in build_argv(call, "claude", Path("/s")) if a.startswith("--")
+        }
         assert flags <= set(REQUIRED_FLAGS)
 
 
 def test_child_env_strips_api_keys():
-    env = child_env({
-        "ANTHROPIC_API_KEY": "k", "ANTHROPIC_AUTH_TOKEN": "t",
-        "CLAUDE_CODE_OAUTH_TOKEN": "o", "PATH": "/bin",
-    })
+    env = child_env(
+        {
+            "ANTHROPIC_API_KEY": "k",
+            "ANTHROPIC_AUTH_TOKEN": "t",
+            "CLAUDE_CODE_OAUTH_TOKEN": "o",
+            "PATH": "/bin",
+        }
+    )
     assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_AUTH_TOKEN" not in env
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "o" and env["PATH"] == "/bin"
 
@@ -65,7 +99,12 @@ def test_child_env_strips_nested_session_markers():
 
 def test_parse_output_success():
     res = parse_output(json.dumps(ok("hi", {"a": 1}, 0.01)))
-    assert (res.text, res.structured, res.cost_usd, res.session_id) == ("hi", {"a": 1}, 0.01, "s1")
+    assert (res.text, res.structured, res.cost_usd, res.session_id) == (
+        "hi",
+        {"a": 1},
+        0.01,
+        "s1",
+    )
 
 
 def test_parse_output_rejects_non_json():
@@ -100,7 +139,9 @@ def test_large_system_prompt_goes_through_file(fake_claude):
     fake_claude.queue({"stdout": ok()})
     run(make_call("plan", LlmSettings(), prompt="P", system_prompt=big))
     (c,) = fake_claude.calls()
-    assert all(len(a.encode()) <= 131_072 for a in c["argv"]) and c["system_prompt"] == big
+    assert (
+        all(len(a.encode()) <= 131_072 for a in c["argv"]) and c["system_prompt"] == big
+    )
 
 
 def test_missing_binary_raises_not_installed(monkeypatch, tmp_path):
@@ -141,16 +182,29 @@ def test_auth_failure_not_retried(fake_claude):
 
 
 def test_usage_limit_not_retried_and_message_kept(fake_claude):
-    fake_claude.queue({"stdout": "", "stderr": "Claude AI usage limit reached|1761500000", "exit": 1})
+    fake_claude.queue(
+        {"stdout": "", "stderr": "Claude AI usage limit reached|1761500000", "exit": 1}
+    )
     with pytest.raises(ClaudeUsageLimit, match=r"1761500000.*wait and re-run"):
         run(_call(), sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
 
 
 def test_budget_exceeded(fake_claude):
-    fake_claude.queue({"stdout": {
-        "type": "result", "subtype": "error_max_budget_usd", "is_error": True, "result": "",
-        "total_cost_usd": 1.2, "duration_ms": 1, "session_id": "s"}, "exit": 1})
+    fake_claude.queue(
+        {
+            "stdout": {
+                "type": "result",
+                "subtype": "error_max_budget_usd",
+                "is_error": True,
+                "result": "",
+                "total_cost_usd": 1.2,
+                "duration_ms": 1,
+                "session_id": "s",
+            },
+            "exit": 1,
+        }
+    )
     with pytest.raises(ClaudeBudgetExceeded, match=r"\$1\.00.*plan_budget_usd"):
         run(_call(), sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
@@ -159,7 +213,9 @@ def test_budget_exceeded(fake_claude):
 def test_budget_without_role_names_generic_setting(fake_claude):
     import dataclasses
 
-    fake_claude.queue({"stdout": {"subtype": "error_max_budget_usd", "is_error": True}, "exit": 1})
+    fake_claude.queue(
+        {"stdout": {"subtype": "error_max_budget_usd", "is_error": True}, "exit": 1}
+    )
     with pytest.raises(ClaudeBudgetExceeded, match="the budget setting"):
         run(dataclasses.replace(_call(), role=None))
 
@@ -170,19 +226,28 @@ def test_schema_missing_retried_once_with_error(fake_claude):
         run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
     first, second = fake_claude.calls()
     assert first["stdin"] == "P"
-    assert second["stdin"].startswith("P\n\nYour previous reply did not match the required JSON schema:")
+    assert second["stdin"].startswith(
+        "P\n\nYour previous reply did not match the required JSON schema:"
+    )
     assert second["stdin"].endswith("Reply again with only the structured output.")
 
 
 def test_schema_retry_recovers(fake_claude):
-    fake_claude.queue({"stdout": ok(structured=None)}, {"stdout": ok(structured={"a": 1})})
+    fake_claude.queue(
+        {"stdout": ok(structured=None)}, {"stdout": ok(structured={"a": 1})}
+    )
     res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
     assert res.structured == {"a": 1}
 
 
 def test_schema_retry_does_not_consume_transient_slot(fake_claude):
     fake_claude.queue(
-        OVERLOADED, OVERLOADED, OVERLOADED, {"stdout": ok(structured=None)}, {"stdout": ok(structured={"a": 1})})
+        OVERLOADED,
+        OVERLOADED,
+        OVERLOADED,
+        {"stdout": ok(structured=None)},
+        {"stdout": ok(structured={"a": 1})},
+    )
     res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
     assert res.structured == {"a": 1}
 
@@ -210,7 +275,9 @@ def test_timeout_message_after_retries(fake_claude):
 
     fake_claude.queue(*[{"sleep": 3}] * 4)
     with pytest.raises(ClaudeError, match=r"claude timed out after 0\.3s"):
-        run(dataclasses.replace(_call(), timeout_s=0.3), sleep=lambda s: None)  # float works too
+        run(
+            dataclasses.replace(_call(), timeout_s=0.3), sleep=lambda s: None
+        )  # float works too
 
 
 def test_fatal_not_retried(fake_claude):
@@ -261,8 +328,16 @@ def test_system_prompt_file_removed_when_spawn_fails(tmp_path, monkeypatch):
 
 
 def test_parse_output_tolerates_malformed_numbers():
-    res = parse_output(json.dumps({"result": "x", "total_cost_usd": "abc", "duration_ms": [1],
-                                   "structured_output": "str"}))
+    res = parse_output(
+        json.dumps(
+            {
+                "result": "x",
+                "total_cost_usd": "abc",
+                "duration_ms": [1],
+                "structured_output": "str",
+            }
+        )
+    )
     assert (res.cost_usd, res.duration_ms, res.structured) == (0.0, 0, None)
 
 
@@ -280,8 +355,10 @@ def test_env_stripping_holds_through_run(fake_claude, monkeypatch):
 
 def test_rate_limit_reached_is_transient_not_usage_limit(fake_claude):
     assert classify(1, "", "API Error: 429 Rate limit reached") == "transient"
-    fake_claude.queue({"stdout": "", "stderr": "API Error: 429 Rate limit reached", "exit": 1},
-                      {"stdout": ok("fine")})
+    fake_claude.queue(
+        {"stdout": "", "stderr": "API Error: 429 Rate limit reached", "exit": 1},
+        {"stdout": ok("fine")},
+    )
     assert run(_call(), sleep=lambda s: None).text == "fine"
     assert len(fake_claude.calls()) == 2
 
@@ -295,15 +372,30 @@ def test_cwd_that_is_a_file_is_clear_error(fake_claude, tmp_path):
 
 
 def test_fatal_json_failure_quotes_result_text(fake_claude):
-    fake_claude.queue({"stdout": {"is_error": True, "subtype": "error_during_execution",
-                                  "result": "model exploded", "session_id": "s"}, "exit": 1})
+    fake_claude.queue(
+        {
+            "stdout": {
+                "is_error": True,
+                "subtype": "error_during_execution",
+                "result": "model exploded",
+                "session_id": "s",
+            },
+            "exit": 1,
+        }
+    )
     with pytest.raises(ClaudeError) as ei:
         run(_call(), sleep=lambda s: None)
     assert "model exploded" in str(ei.value) and "session_id" not in str(ei.value)
 
 
 def test_numbers_inside_larger_tokens_do_not_look_like_status_codes(fake_claude):
-    fake_claude.queue({"stdout": "", "stderr": "bad request: 1500 tokens exceeds limit 1761500000", "exit": 1})
+    fake_claude.queue(
+        {
+            "stdout": "",
+            "stderr": "bad request: 1500 tokens exceeds limit 1761500000",
+            "exit": 1,
+        }
+    )
     with pytest.raises(ClaudeError, match="1500 tokens"):
         run(_call(), sleep=lambda s: None)
     assert len(fake_claude.calls()) == 1
@@ -318,22 +410,32 @@ def test_edit_call_is_not_auto_retried(fake_claude, tmp_path):
 
 
 def test_cost_sums_failed_transient_attempts(fake_claude):
-    failed = {"stdout": {"is_error": True, "result": "API Error: 529 overloaded", "total_cost_usd": 0.02},
-              "exit": 1}
+    failed = {
+        "stdout": {
+            "is_error": True,
+            "result": "API Error: 529 overloaded",
+            "total_cost_usd": 0.02,
+        },
+        "exit": 1,
+    }
     fake_claude.queue(failed, {"stdout": ok(cost=0.01)})
     res = run(_call(), sleep=lambda s: None)
     assert res.cost_usd == pytest.approx(0.03)
 
 
 def test_cost_sums_schema_retry(fake_claude):
-    fake_claude.queue({"stdout": ok(structured=None, cost=0.01)},
-                      {"stdout": ok(structured={"a": 1}, cost=0.02)})
+    fake_claude.queue(
+        {"stdout": ok(structured=None, cost=0.01)},
+        {"stdout": ok(structured={"a": 1}, cost=0.02)},
+    )
     res = run(_call(json_schema={"type": "object"}), sleep=lambda s: None)
     assert res.cost_usd == pytest.approx(0.03)
 
 
 def test_invalid_budget_option_is_fatal_not_budget():
-    assert classify(1, "", "error: option --max-budget-usd: invalid number 'x'") == "fatal"
+    assert (
+        classify(1, "", "error: option --max-budget-usd: invalid number 'x'") == "fatal"
+    )
     assert classify(1, "", "Exceeded USD budget (1.00)") == "budget"
     assert classify(1, "", "budget of $1 exceeded") == "budget"
 
@@ -366,9 +468,13 @@ def test_unwritable_tempdir_is_claude_error(fake_claude, monkeypatch):
 def test_missing_env_binary_names_the_path(monkeypatch, tmp_path):
     missing = tmp_path / "nope"
     monkeypatch.setenv("LLM_WIKI_CLAUDE", str(missing))
-    with pytest.raises(ClaudeNotInstalled, match=f"LLM_WIKI_CLAUDE points to a missing file: {missing}"):
+    with pytest.raises(
+        ClaudeNotInstalled, match=f"LLM_WIKI_CLAUDE points to a missing file: {missing}"
+    ):
         claude_binary()
-    with pytest.raises(ClaudeNotInstalled, match="LLM_WIKI_CLAUDE points to a missing file"):
+    with pytest.raises(
+        ClaudeNotInstalled, match="LLM_WIKI_CLAUDE points to a missing file"
+    ):
         run(_call())
 
 

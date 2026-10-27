@@ -45,7 +45,8 @@ def test_non_wiki_errors_are_not_swallowed(boom_command):
 
 
 @pytest.mark.parametrize(
-    "name", ["ConfigError", "WikiNotFound", "UnsupportedFormat", "RefusedSource", "GitError"]
+    "name",
+    ["ConfigError", "WikiNotFound", "UnsupportedFormat", "RefusedSource", "GitError"],
 )
 def test_error_hierarchy(name):
     assert issubclass(getattr(errors, name), errors.WikiError)

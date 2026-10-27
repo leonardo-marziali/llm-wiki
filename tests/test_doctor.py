@@ -9,7 +9,13 @@ from llm_wiki.cli import app
 from conftest import ok
 from llm_wiki import doctor as doctor_mod
 from llm_wiki.config import LlmSettings
-from llm_wiki.doctor import PROBE_SCHEMA, parse_version, probe_edit_confinement, probe_model, run_doctor
+from llm_wiki.doctor import (
+    PROBE_SCHEMA,
+    parse_version,
+    probe_edit_confinement,
+    probe_model,
+    run_doctor,
+)
 
 runner = CliRunner()
 
@@ -63,14 +69,20 @@ def test_doctor_missing_claude_fails_without_traceback(monkeypatch, tmp_path):
     monkeypatch.delenv("LLM_WIKI_CLAUDE", raising=False)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "git").symlink_to(shutil.which("git"))  # the claude row is the only failure
+    (bin_dir / "git").symlink_to(
+        shutil.which("git")
+    )  # the claude row is the only failure
     monkeypatch.setenv("PATH", str(bin_dir))
     res = _doctor()
-    assert [c["name"] for c in json.loads(res.output) if c["status"] == "fail"] == ["claude"]
+    assert [c["name"] for c in json.loads(res.output) if c["status"] == "fail"] == [
+        "claude"
+    ]
     res = runner.invoke(app, ["doctor"])
     assert res.exit_code == 1
     assert "Traceback" not in res.output
-    assert any(ln.startswith("fail") and "claude" in ln for ln in res.output.splitlines())
+    assert any(
+        ln.startswith("fail") and "claude" in ln for ln in res.output.splitlines()
+    )
     assert "claude-version" not in res.output and "claude-flags" not in res.output
 
 
@@ -80,7 +92,9 @@ def test_doctor_nonexistent_claude_path_fails_cleanly(monkeypatch, tmp_path):
     assert res.exit_code == 1
     c = _by_name(res)["claude"]
     assert c["status"] == "fail"
-    assert c["detail"] == f"LLM_WIKI_CLAUDE points to a missing file: {tmp_path / 'nope'}"
+    assert (
+        c["detail"] == f"LLM_WIKI_CLAUDE points to a missing file: {tmp_path / 'nope'}"
+    )
 
 
 def test_doctor_warns_on_api_key_env(fake_claude, monkeypatch):
@@ -91,10 +105,14 @@ def test_doctor_warns_on_api_key_env(fake_claude, monkeypatch):
     assert res.exit_code == 0
 
 
-def test_optional_tools_missing_are_warnings_not_failures(fake_claude, monkeypatch, tmp_path):
+def test_optional_tools_missing_are_warnings_not_failures(
+    fake_claude, monkeypatch, tmp_path
+):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "git").symlink_to(shutil.which("git"))  # isolate git from any gitleaks/rg beside it
+    (bin_dir / "git").symlink_to(
+        shutil.which("git")
+    )  # isolate git from any gitleaks/rg beside it
     py_dir = str(Path(shutil.which("python3")).parent)
     fake_dir = str(Path(fake_claude.queue_file).parent)
     monkeypatch.setenv("PATH", f"{bin_dir}:{fake_dir}:{py_dir}")
@@ -160,7 +178,9 @@ def test_flags_match_whole_tokens(fake_claude, monkeypatch):
     flags = [f if f != "--model" else "--model-foo" for f in REQUIRED_FLAGS]
     monkeypatch.setenv("FAKE_CLAUDE_HELP", "\n".join(flags))
     c = _by_name(_doctor("--no-probe"))["claude-flags"]
-    assert c["status"] == "fail" and "--model" in c["detail"].split(": ", 1)[1].split(", ")
+    assert c["status"] == "fail" and "--model" in c["detail"].split(": ", 1)[1].split(
+        ", "
+    )
 
 
 S = LlmSettings()
@@ -175,7 +195,10 @@ def test_probe_model_ok(fake_claude):
     (call,) = fake_claude.calls()
     assert "CLAUDE.md" in call["listdir"]
     assert "--json-schema" in call["argv"]
-    assert json.loads(call["argv"][call["argv"].index("--json-schema") + 1]) == PROBE_SCHEMA
+    assert (
+        json.loads(call["argv"][call["argv"].index("--json-schema") + 1])
+        == PROBE_SCHEMA
+    )
     assert call["argv"][call["argv"].index("--max-budget-usd") + 1] == "0.25"
 
 
@@ -193,7 +216,11 @@ def test_probe_model_detects_ignored_system_prompt(fake_claude):
 
 def test_hidden_flag_not_required_in_help(fake_claude, monkeypatch):
     from llm_wiki.claude import HIDDEN_FLAGS
-    monkeypatch.setenv("FAKE_CLAUDE_HELP", "\n".join(f for f in REQUIRED_FLAGS if f not in HIDDEN_FLAGS))
+
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_HELP",
+        "\n".join(f for f in REQUIRED_FLAGS if f not in HIDDEN_FLAGS),
+    )
     assert "claude-flags" not in _by_name(_doctor("--no-probe"))
 
 
@@ -232,7 +259,11 @@ def test_probes_dedupe_models(fake_claude):
     fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
     checks = run_doctor(S, probe=True)
     names = [c.name for c in checks]
-    assert names[-3:] == [f"model:{S.model('plan')}", f"model:{S.model('deep')}", "edit-confinement"]
+    assert names[-3:] == [
+        f"model:{S.model('plan')}",
+        f"model:{S.model('deep')}",
+        "edit-confinement",
+    ]
     assert len(fake_claude.calls()) == 3
 
 
@@ -247,7 +278,9 @@ def test_edit_probe_ok(fake_claude):
 
 
 def test_edit_probe_detects_escape(fake_claude):
-    fake_claude.queue({"stdout": ok(), "write": {"inside.txt": "ok"}, "write_abs_from_prompt": True})
+    fake_claude.queue(
+        {"stdout": ok(), "write": {"inside.txt": "ok"}, "write_abs_from_prompt": True}
+    )
     c = probe_edit_confinement(S)
     assert c.status == "fail" and "outside the wiki" in c.detail
 
@@ -278,13 +311,23 @@ def test_edit_probe_error_after_escape_still_reports_escape(fake_claude):
 
 
 def test_probe_model_non_leaking_canary_text_is_ok(fake_claude):
-    fake_claude.queue({"stdout": ok(structured={"ok": True, "canary": "none"}), "echo_token": True})
+    fake_claude.queue(
+        {"stdout": ok(structured={"ok": True, "canary": "none"}), "echo_token": True}
+    )
     assert probe_model("plan", S).status == "ok"
 
 
 def test_probe_budget_error_does_not_advise_settings_key(fake_claude):
-    fake_claude.queue({"stdout": {"subtype": "error_max_budget_usd", "is_error": True, "result": "x"},
-                       "exit": 1})
+    fake_claude.queue(
+        {
+            "stdout": {
+                "subtype": "error_max_budget_usd",
+                "is_error": True,
+                "result": "x",
+            },
+            "exit": 1,
+        }
+    )
     c = probe_model("plan", S)
     assert c.status == "fail" and "_budget_usd" not in c.detail
 
@@ -303,7 +346,11 @@ def test_edit_probe_without_escape_attempt_is_unproven(fake_claude):
 
 
 def test_edit_probe_denial_of_other_path_is_unproven(fake_claude):
-    other = {"permission_denials": [{"tool_name": "Write", "tool_input": {"file_path": "/elsewhere/x"}}]}
+    other = {
+        "permission_denials": [
+            {"tool_name": "Write", "tool_input": {"file_path": "/elsewhere/x"}}
+        ]
+    }
     fake_claude.queue({"stdout": {**ok(), **other}, "write": {"inside.txt": "ok"}})
     assert probe_edit_confinement(S).status == "warn"
 
@@ -324,8 +371,11 @@ def test_probe_timeout_is_120s(fake_claude, monkeypatch):
     import llm_wiki.doctor as d
 
     seen = []
-    monkeypatch.setattr(d, "run", lambda call: seen.append(call) or (_ for _ in ()).throw(
-        d.ClaudeError("x")))
+    monkeypatch.setattr(
+        d,
+        "run",
+        lambda call: seen.append(call) or (_ for _ in ()).throw(d.ClaudeError("x")),
+    )
     probe_model("plan", S)
     probe_edit_confinement(S)
     assert [(c.timeout_s, c.max_retries) for c in seen] == [(120, 0), (120, 0)]
@@ -351,5 +401,8 @@ def test_bad_config_is_fail_row_and_other_checks_run(fake_claude):
     res = _doctor("--no-probe")
     assert res.exit_code == 1
     checks = _by_name(res)
-    assert checks["config"]["status"] == "fail" and "config.toml" in checks["config"]["detail"]
+    assert (
+        checks["config"]["status"] == "fail"
+        and "config.toml" in checks["config"]["detail"]
+    )
     assert checks["claude"]["status"] == "ok" and checks["git"]["status"] == "ok"

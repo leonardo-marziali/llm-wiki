@@ -113,7 +113,9 @@ class WikiConfig(BaseModel):
 
 def load_profile(name: str) -> list[Section]:
     try:
-        text = (resources.files("llm_wiki") / "templates" / "profiles" / f"{name}.toml").read_text("utf-8")
+        text = (
+            resources.files("llm_wiki") / "templates" / "profiles" / f"{name}.toml"
+        ).read_text("utf-8")
     except (FileNotFoundError, NotADirectoryError):
         raise ConfigError(f"unknown profile '{name}'") from None
     return [Section(**s) for s in tomllib.loads(text)["sections"]]

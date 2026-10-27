@@ -25,7 +25,9 @@ def test_txt_copied_with_header(root):
     assert c.converter == "text" and c.parts == 1 and c.flags == []
     assert c.outputs[0] == f".wiki/converted/{SHA}.md"
     text = out(root, c)
-    assert text.startswith(f"---\nsource: raw/a.txt\nsha256: {SHA}\nconverter: text\n---\n")
+    assert text.startswith(
+        f"---\nsource: raw/a.txt\nsha256: {SHA}\nconverter: text\n---\n"
+    )
     assert "hello world" in text
 
 
@@ -40,17 +42,25 @@ def test_latin1_txt_and_bom_csv(root, make_csv):
 
 
 def test_docx_headings_survive(root, make_docx):
-    p = make_docx(root / "raw" / "d.docx", [("h1", "Title"), ("p", "intro"), ("h2", "Section A"), ("p", "body")])
+    p = make_docx(
+        root / "raw" / "d.docx",
+        [("h1", "Title"), ("p", "intro"), ("h2", "Section A"), ("p", "body")],
+    )
     text = out(root, convert(root, p, SHA, HARD_CAPS))
     assert "# Title" in text and "## Section A" in text
 
 
 def test_pptx_notes_extracted(root, make_pptx):
-    p = make_pptx(root / "raw" / "s.pptx", [("One", ["x"], ""), ("Two", ["y"], "remember the demo")])
+    p = make_pptx(
+        root / "raw" / "s.pptx",
+        [("One", ["x"], ""), ("Two", ["y"], "remember the demo")],
+    )
     c = convert(root, p, SHA, HARD_CAPS)
     assert c.converter == "markitdown+pptx-notes"
     notes = (root / ".wiki/converted" / f"{SHA}.notes.md").read_text()
-    assert "Slide 2" in notes and "remember the demo" in notes and "Slide 1" not in notes
+    assert (
+        "Slide 2" in notes and "remember the demo" in notes and "Slide 1" not in notes
+    )
     assert f".wiki/converted/{SHA}.notes.md" in c.outputs
 
 
@@ -62,7 +72,9 @@ def test_pptx_without_notes_has_no_notes_file(root, make_pptx):
 
 def test_xlsx_small_inline_large_csv_profile(root, make_xlsx):
     small = [["a", "b", "c"]] + [[str(i), str(i * 2), "x"] for i in range(4)]
-    large = [["id", "kind", "n", "note"]] + [[str(i), "k" + str(i % 3), str(i), f"note {i}"] for i in range(299)]
+    large = [["id", "kind", "n", "note"]] + [
+        [str(i), "k" + str(i % 3), str(i), f"note {i}"] for i in range(299)
+    ]
     p = make_xlsx(root / "raw" / "w.xlsx", {"small": small, "large": large})
     c = convert(root, p, SHA, HARD_CAPS)
     text = out(root, c)
@@ -109,7 +121,9 @@ def test_never_ingest_refused(root):
 def test_unsupported_format_raises(root):
     p = root / "raw" / "x.json"
     p.write_text("{}")
-    with pytest.raises(UnsupportedFormat, match=r"\.json is not supported; supported: .*\.pdf"):
+    with pytest.raises(
+        UnsupportedFormat, match=r"\.json is not supported; supported: .*\.pdf"
+    ):
         convert(root, p, SHA, HARD_CAPS)
     assert ".pdf" in SUPPORTED
 
@@ -121,7 +135,9 @@ def test_uppercase_extension_routes(root, make_pptx):
 
 def test_large_text_split_into_parts(root):
     p = root / "raw" / "big.md"
-    p.write_text("".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20)))
+    p.write_text(
+        "".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20))
+    )
     c = convert(root, p, SHA, HARD_CAPS)
     assert c.chars > 200_000 - 10_000 and c.parts >= 3
     for n in range(1, c.parts + 1):
@@ -143,7 +159,11 @@ def test_single_huge_section_hard_split(root):
 def test_near_duplicate_phash(tmp_path, make_png):
     a = make_png(tmp_path / "a.png", (128, 128), rects=((10, 10, 90, 90),))
     b = make_png(tmp_path / "b.png", (128, 128), rects=((10, 10, 91, 90),))
-    c = make_png(tmp_path / "c.png", (128, 128), rects=((0, 0, 127, 20), (0, 100, 20, 127), (60, 40, 120, 70)))
+    c = make_png(
+        tmp_path / "c.png",
+        (128, 128),
+        rects=((0, 0, 127, 20), (0, 100, 20, 127), (60, 40, 120, 70)),
+    )
     ha, hb, hc = (images.triage(x).phash for x in (a, b, c))
     assert images.near_duplicate(hb, {"a": ha}) == "a"
     assert images.near_duplicate(hc, {"a": ha}, max_distance=0) is None
@@ -176,7 +196,9 @@ def test_sheet_slug_collision_distinct_csvs(root, make_xlsx):
 def test_xlsx_trailing_empty_trimmed(root, make_xlsx):
     import openpyxl
 
-    p = make_xlsx(root / "raw" / "t.xlsx", {"s": [["a", "b", "c"]] + [["1", "2", "3"]] * 4})
+    p = make_xlsx(
+        root / "raw" / "t.xlsx", {"s": [["a", "b", "c"]] + [["1", "2", "3"]] * 4}
+    )
     wb = openpyxl.load_workbook(p)
     wb["s"].cell(row=500, column=40).value = ""
     wb["s"].cell(row=500, column=40).number_format = "0.00"
@@ -188,10 +210,14 @@ def test_xlsx_trailing_empty_trimmed(root, make_xlsx):
 
 def test_split_parts_carry_header_and_part_line(root):
     p = root / "raw" / "big.md"
-    p.write_text("".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20)))
+    p.write_text(
+        "".join(f"## Sec {i}\n\n" + ("word " * 2000) + "\n\n" for i in range(20))
+    )
     c = convert(root, p, SHA, HARD_CAPS)
     for n in range(1, c.parts + 1):
         t = out_part(root, n)
-        assert t.startswith(f"---\nsource: raw/big.md\nsha256: {SHA}\nconverter: text\n")
+        assert t.startswith(
+            f"---\nsource: raw/big.md\nsha256: {SHA}\nconverter: text\n"
+        )
         assert f"part: {n}/{c.parts}\n---" in t
         assert len(t) <= 80_000

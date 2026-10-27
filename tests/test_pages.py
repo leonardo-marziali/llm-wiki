@@ -93,11 +93,22 @@ def test_review_after_must_follow_last_verified(tmp_path):
 
 
 def test_iter_pages_skips_system_files_and_archive(tmp_path):
-    for rel in ("overview.md", "b/two.md", "a/one.md", "a/_index.md",
-                "index.md", "log.md", "open-questions.md", "_archive/old.md"):
+    for rel in (
+        "overview.md",
+        "b/two.md",
+        "a/one.md",
+        "a/_index.md",
+        "index.md",
+        "log.md",
+        "open-questions.md",
+        "_archive/old.md",
+    ):
         write(tmp_path, rel, "x\n")
     assert [p.rel for p in iter_pages(tmp_path)] == [
-        "a/one.md", "b/two.md", "overview.md"]
+        "a/one.md",
+        "b/two.md",
+        "overview.md",
+    ]
 
 
 def test_render_frontmatter_roundtrip(tmp_path):

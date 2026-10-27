@@ -14,7 +14,14 @@ from llm_wiki.config import WikiConfig
 from llm_wiki.errors import WikiError
 from llm_wiki.index import GENERATED_MARK
 from llm_wiki.manifest import Manifest
-from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, Page, id_for, iter_pages
+from llm_wiki.pages import (
+    ID_RE,
+    SOURCELESS_TYPES,
+    SYSTEM_FILES,
+    Page,
+    id_for,
+    iter_pages,
+)
 from llm_wiki.screen import find_injection, redact
 
 Severity = Literal["error", "warn"]
@@ -37,7 +44,11 @@ _MIN_WORDS = 12
 _TITLE_RATIO = 90
 _NOT_UTF8 = "not valid UTF-8"
 # the check a system file feeds; an unreadable file is reported under that code
-_SYSTEM_CODE = {"log.md": "log-format", "index.md": "index-too-long", "_index.md": "not-in-index"}
+_SYSTEM_CODE = {
+    "log.md": "log-format",
+    "index.md": "index-too-long",
+    "_index.md": "not-in-index",
+}
 
 
 @dataclass
@@ -201,17 +212,30 @@ def _routing(kind: str, page: Page) -> str | None:
         if fm.adr_status is None:
             return "decision without adr_status"
         if fm.status == "to-be" and fm.adr_status != "proposed":
-            return f"to-be decision with adr_status '{fm.adr_status}' (must be 'proposed')"
+            return (
+                f"to-be decision with adr_status '{fm.adr_status}' (must be 'proposed')"
+            )
     elif fm.status == "to-be":
         return f"status 'to-be' in a {kind} section"
     return None
 
 
-def _cap(out: list[Finding], code: str, path: str, what: str, n: int, max_: int, warn: int) -> None:
+def _cap(
+    out: list[Finding], code: str, path: str, what: str, n: int, max_: int, warn: int
+) -> None:
     if n > max_:
-        out.append(Finding("error", code, path, f"{n} {what} exceeds the cap of {max_}"))
+        out.append(
+            Finding("error", code, path, f"{n} {what} exceeds the cap of {max_}")
+        )
     elif n >= warn:
-        out.append(Finding("warn", code + "-warn", path, f"{n} {what} reaches the warning level of {warn}"))
+        out.append(
+            Finding(
+                "warn",
+                code + "-warn",
+                path,
+                f"{n} {what} reaches the warning level of {warn}",
+            )
+        )
 
 
 def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
@@ -226,15 +250,25 @@ def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
         if not _resolve(page.path.parent, target).is_file():
             add("error", "broken-link", f"link target '{target}' does not exist")
     if page.line_count > caps.max_page_lines:
-        add("error", "page-too-long", f"{page.line_count} lines (max {caps.max_page_lines})")
+        add(
+            "error",
+            "page-too-long",
+            f"{page.line_count} lines (max {caps.max_page_lines})",
+        )
     _, counts = redact(page.body)
     if sum(counts.values()):
         add("error", "secret-in-page", "possible secret: " + ", ".join(sorted(counts)))
     hits = find_injection(page.body)
-    for sev, group in (("error", [h for h in hits if h.kind not in _WARN_INJECTION]),
-                       ("warn", [h for h in hits if h.kind in _WARN_INJECTION])):
+    for sev, group in (
+        ("error", [h for h in hits if h.kind not in _WARN_INJECTION]),
+        ("warn", [h for h in hits if h.kind in _WARN_INJECTION]),
+    ):
         if group:
-            add(sev, "injection-in-page", "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in group))
+            add(
+                sev,
+                "injection-in-page",
+                "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in group),
+            )
     if page.error is not None:
         add("error", "frontmatter-invalid", page.error)
         return out
@@ -266,21 +300,37 @@ def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
         label, target = m.group(1), m.group(2)
         p = _in_raw(root, target)
         if p is None:
-            add("error", "citation-outside-raw", f"footnote [^{label}] cites '{target}' outside raw/")
+            add(
+                "error",
+                "citation-outside-raw",
+                f"footnote [^{label}] cites '{target}' outside raw/",
+            )
         elif not p.is_file():
-            add("error", "citation-missing", f"footnote [^{label}] cites missing '{target}'")
+            add(
+                "error",
+                "citation-missing",
+                f"footnote [^{label}] cites missing '{target}'",
+            )
 
     for src in fm.sources:
         p = _in_raw(root, src.path)
         if p is None:
-            add("error", "citation-outside-raw", f"source '{src.path}' resolves outside raw/")
+            add(
+                "error",
+                "citation-outside-raw",
+                f"source '{src.path}' resolves outside raw/",
+            )
         elif not p.is_file():
             add("error", "citation-missing", f"source '{src.path}' does not exist")
         entry = ctx["manifest"].entries.get(src.path)
         if entry is None or entry.status == "deleted":
             add("error", "sha-mismatch", f"source '{src.path}' is not in the manifest")
         elif entry.sha256 != src.sha256:
-            add("error", "sha-mismatch", f"source '{src.path}' sha256 differs from the manifest")
+            add(
+                "error",
+                "sha-mismatch",
+                f"source '{src.path}' sha256 differs from the manifest",
+            )
 
     for text in _uncited(page.body):
         add("warn", "uncited-paragraph", f"no citation: {text[:60]}")
@@ -294,12 +344,20 @@ def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
 
 def _system_files(wiki: Path) -> list[Path]:
     return sorted(
-        p for p in wiki.rglob("*.md")
-        if p.is_file() and p.name in SYSTEM_FILES and "_archive" not in p.relative_to(wiki).parts[:-1]
+        p
+        for p in wiki.rglob("*.md")
+        if p.is_file()
+        and p.name in SYSTEM_FILES
+        and "_archive" not in p.relative_to(wiki).parts[:-1]
     )
 
 
-def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: date | None = None) -> LintReport:
+def lint(
+    root: Path,
+    cfg: WikiConfig,
+    only: list[Path] | None = None,
+    today: date | None = None,
+) -> LintReport:
     """Lint the wiki at ``root``.
 
     ``only`` limits per-page checks to those pages (absolute or relative to
@@ -349,54 +407,109 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
     for p in valid:
         assert p.fm is not None
         if p.fm.id in first_id:
-            findings.append(Finding("error", "duplicate-id", "wiki/" + p.rel,
-                                    f"id '{p.fm.id}' also used by wiki/{first_id[p.fm.id]}"))
+            findings.append(
+                Finding(
+                    "error",
+                    "duplicate-id",
+                    "wiki/" + p.rel,
+                    f"id '{p.fm.id}' also used by wiki/{first_id[p.fm.id]}",
+                )
+            )
         else:
             first_id[p.fm.id] = p.rel
     for i, a in enumerate(valid):
-        for b in valid[i + 1:]:
+        for b in valid[i + 1 :]:
             assert a.fm is not None and b.fm is not None
-            if fuzz.token_sort_ratio(a.fm.title.casefold(), b.fm.title.casefold()) >= _TITLE_RATIO:
-                findings.append(Finding("warn", "duplicate-title", "wiki/" + b.rel,
-                                        f"title '{b.fm.title}' is close to '{a.fm.title}' (wiki/{a.rel})"))
+            if (
+                fuzz.token_sort_ratio(a.fm.title.casefold(), b.fm.title.casefold())
+                >= _TITLE_RATIO
+            ):
+                findings.append(
+                    Finding(
+                        "warn",
+                        "duplicate-title",
+                        "wiki/" + b.rel,
+                        f"title '{b.fm.title}' is close to '{a.fm.title}' (wiki/{a.rel})",
+                    )
+                )
 
     system_text: dict[Path, str | None] = {}
     for f in _system_files(wiki):
         rel = f.relative_to(root).as_posix()
         text = system_text[f] = _read(f)
         if text is None:
-            findings.append(Finding("error", _SYSTEM_CODE.get(f.name, "broken-link"), rel, _NOT_UTF8))
+            findings.append(
+                Finding(
+                    "error", _SYSTEM_CODE.get(f.name, "broken-link"), rel, _NOT_UTF8
+                )
+            )
             continue
         for target in _md_links(text):
             if not _resolve(f.parent, target).is_file():
-                findings.append(Finding("error", "broken-link", rel, f"link target '{target}' does not exist"))
+                findings.append(
+                    Finding(
+                        "error",
+                        "broken-link",
+                        rel,
+                        f"link target '{target}' does not exist",
+                    )
+                )
 
     live = sum(e.status != "deleted" for e in manifest.entries.values())
-    _cap(findings, "cap-sources", "", "sources", live, caps.max_sources, caps.warn_sources)
-    _cap(findings, "cap-pages", "", "pages", len(valid), caps.max_pages, caps.warn_pages)
+    _cap(
+        findings,
+        "cap-sources",
+        "",
+        "sources",
+        live,
+        caps.max_sources,
+        caps.warn_sources,
+    )
+    _cap(
+        findings, "cap-pages", "", "pages", len(valid), caps.max_pages, caps.warn_pages
+    )
     per_section: dict[str, int] = defaultdict(int)
     for p in valid:
         section = _section_of(p.rel, kinds)
         if section is not None:
             per_section[section] += 1
     for s in kinds:
-        _cap(findings, "cap-section", f"wiki/{s}", f"pages in section '{s}'", per_section[s],
-             caps.max_section_pages, caps.warn_section_pages)
+        _cap(
+            findings,
+            "cap-section",
+            f"wiki/{s}",
+            f"pages in section '{s}'",
+            per_section[s],
+            caps.max_section_pages,
+            caps.warn_section_pages,
+        )
 
     index = wiki / "index.md"
     index_text = system_text.get(index)
     if index_text is not None:
         n = len(index_text.splitlines())
         if n > caps.max_index_lines:
-            findings.append(Finding("error", "index-too-long", "wiki/index.md",
-                                    f"{n} lines (max {caps.max_index_lines})"))
+            findings.append(
+                Finding(
+                    "error",
+                    "index-too-long",
+                    "wiki/index.md",
+                    f"{n} lines (max {caps.max_index_lines})",
+                )
+            )
     log = wiki / "log.md"
     log_text = system_text.get(log)
     if log_text is not None:
         for n, line in enumerate(log_text.splitlines(), 1):
             if line.startswith("## ") and not _LOG.match(line):
-                findings.append(Finding("error", "log-format", "wiki/log.md",
-                                        f"line {n}: expected '## [YYYY-MM-DD] op | text'"))
+                findings.append(
+                    Finding(
+                        "error",
+                        "log-format",
+                        "wiki/log.md",
+                        f"line {n}: expected '## [YYYY-MM-DD] op | text'",
+                    )
+                )
 
     findings.sort(key=lambda f: (f.path, f.code, f.message))
     return LintReport(findings)
@@ -405,7 +518,11 @@ def lint(root: Path, cfg: WikiConfig, only: list[Path] | None = None, today: dat
 def write_report(root: Path, report: LintReport, today: date) -> Path:
     """Write ``.wiki/reports/lint-YYYY-MM-DD.md`` grouped by severity, then code."""
     path = Path(root) / ".wiki" / "reports" / f"lint-{today.isoformat()}.md"
-    lines = [f"# Lint report {today.isoformat()}", "", f"{report.errors} errors, {report.warnings} warnings"]
+    lines = [
+        f"# Lint report {today.isoformat()}",
+        "",
+        f"{report.errors} errors, {report.warnings} warnings",
+    ]
     for sev in ("error", "warn"):
         group = [f for f in report.findings if f.severity == sev]
         if not group:
@@ -413,7 +530,11 @@ def write_report(root: Path, report: LintReport, today: date) -> Path:
         lines += ["", f"## {sev}"]
         for code in sorted({f.code for f in group}):
             lines += ["", f"### {code}", ""]
-            lines += [f"- `{f.path or '(wiki)'}`: {f.message}" for f in group if f.code == code]
+            lines += [
+                f"- `{f.path or '(wiki)'}`: {f.message}"
+                for f in group
+                if f.code == code
+            ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

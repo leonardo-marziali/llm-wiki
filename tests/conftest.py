@@ -10,7 +10,9 @@ def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "test")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.com")
-    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))  # never see a repo above tmp_path
+    monkeypatch.setenv(
+        "GIT_CEILING_DIRECTORIES", str(tmp_path.parent)
+    )  # never see a repo above tmp_path
     monkeypatch.setenv("LLM_WIKI_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("LLM_WIKI_PATH", raising=False)
     # A missing binary by default: no test can reach the real, paid claude. fake_claude overrides it.
@@ -99,7 +101,11 @@ def make_text_pdf():
                 f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
                 f"/Resources << /Font << /F1 {font} 0 R >> >> /Contents {4 + 2 * i} 0 R >>"
             ).encode()
-            objs[4 + 2 * i] = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
+            objs[4 + 2 * i] = (
+                f"<< /Length {len(stream)} >>\nstream\n".encode()
+                + stream
+                + b"\nendstream"
+            )
         objs[font] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
         out = bytearray(b"%PDF-1.4\n")
         offsets = {}
@@ -164,7 +170,9 @@ def page_text(
 ) -> str:
     """Frontmatter + body for a page; ``sources`` is a list of (path, sha256)."""
     if sources:
-        src = "sources:\n" + "".join(f"- path: {p}\n  sha256: {s}\n  locator: section 1\n" for p, s in sources)
+        src = "sources:\n" + "".join(
+            f"- path: {p}\n  sha256: {s}\n  locator: section 1\n" for p, s in sources
+        )
     else:
         src = "sources: []\n"
     return (
@@ -186,7 +194,12 @@ def make_wiki():
         from llm_wiki.manifest import Manifest, SourceEntry, sha256_file
 
         root = tmp_path / "w"
-        cfg = WikiConfig(name="Acme", description="Acme wiki.", profile=profile, sections=load_profile(profile))
+        cfg = WikiConfig(
+            name="Acme",
+            description="Acme wiki.",
+            profile=profile,
+            sections=load_profile(profile),
+        )
         root.mkdir(parents=True)
         (root / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
         for s in cfg.sections:
@@ -196,30 +209,51 @@ def make_wiki():
         raw.write_text("# Guide\n\nAlways branch from main.\n", encoding="utf-8")
         sha = sha256_file(raw)
         m = Manifest()
-        m.record(SourceEntry(
-            path=RAW_REL, sha256=sha, size=raw.stat().st_size, mime="text/markdown",
-            category="docs", first_seen=date(2026, 1, 1), status="ingested",
-        ))
+        m.record(
+            SourceEntry(
+                path=RAW_REL,
+                sha256=sha,
+                size=raw.stat().st_size,
+                mime="text/markdown",
+                category="docs",
+                first_seen=date(2026, 1, 1),
+                status="ingested",
+            )
+        )
         m.save(root)
         wiki = root / "wiki"
         if profile == "software":
-            (wiki / PAGE_REL).write_text(page_text(
-                "conventions.git-flow", "Git flow",
-                "# Git flow\n\n**TL;DR** Branch from main.\n\nWe branch from main for every change.[^1]\n\n"
-                f"[^1]: {RAW_REL}\n",
-                sources=[(RAW_REL, sha)],
-            ), encoding="utf-8")
+            (wiki / PAGE_REL).write_text(
+                page_text(
+                    "conventions.git-flow",
+                    "Git flow",
+                    "# Git flow\n\n**TL;DR** Branch from main.\n\nWe branch from main for every change.[^1]\n\n"
+                    f"[^1]: {RAW_REL}\n",
+                    sources=[(RAW_REL, sha)],
+                ),
+                encoding="utf-8",
+            )
             overview_body = "# Overview\n\n**TL;DR** Start here.\n\n- [Git flow](conventions/git-flow.md)\n"
         else:
             overview_body = "# Overview\n\n**TL;DR** Start here.\n"
         (wiki / "overview.md").write_text(
-            page_text("overview", "Overview", overview_body, type_="overview"), encoding="utf-8")
+            page_text("overview", "Overview", overview_body, type_="overview"),
+            encoding="utf-8",
+        )
         (wiki / "glossary.md").write_text(
-            page_text("glossary", "Glossary", "# Glossary\n\n**TL;DR** Terms.\n", type_="glossary"),
-            encoding="utf-8")
+            page_text(
+                "glossary",
+                "Glossary",
+                "# Glossary\n\n**TL;DR** Terms.\n",
+                type_="glossary",
+            ),
+            encoding="utf-8",
+        )
         (wiki / "open-questions.md").write_text("# Open questions\n", encoding="utf-8")
         build_indexes(root, cfg)
-        (wiki / "log.md").write_text("# Log\n\n## [2026-10-26] init | created wiki\n", encoding="utf-8")
+        (wiki / "log.md").write_text(
+            "# Log\n\n## [2026-10-26] init | created wiki\n", encoding="utf-8"
+        )
         return root
 
     return make
@@ -228,8 +262,14 @@ def make_wiki():
 def ok(result="done", structured=None, cost=0.01):
     """A successful `claude -p --output-format json` payload."""
     return {
-        "type": "result", "subtype": "success", "is_error": False, "result": result,
-        "structured_output": structured, "total_cost_usd": cost, "duration_ms": 5, "session_id": "s1",
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": result,
+        "structured_output": structured,
+        "total_cost_usd": cost,
+        "duration_ms": 5,
+        "session_id": "s1",
     }
 
 
@@ -245,7 +285,10 @@ class FakeClaude:
     def calls(self) -> list[dict]:
         if not self.log_file.exists():
             return []
-        return [json.loads(line) for line in self.log_file.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line)
+            for line in self.log_file.read_text(encoding="utf-8").splitlines()
+        ]
 
 
 @pytest.fixture
@@ -253,8 +296,12 @@ def fake_claude(tmp_path, monkeypatch):
     from llm_wiki.claude import REQUIRED_FLAGS
 
     fake = FakeClaude(tmp_path)
-    monkeypatch.setenv("LLM_WIKI_CLAUDE", str(Path(__file__).parent / "fake_claude" / "claude"))
+    monkeypatch.setenv(
+        "LLM_WIKI_CLAUDE", str(Path(__file__).parent / "fake_claude" / "claude")
+    )
     monkeypatch.setenv("FAKE_CLAUDE_QUEUE", str(fake.queue_file))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(fake.log_file))
-    monkeypatch.setenv("FAKE_CLAUDE_HELP", "\n".join(REQUIRED_FLAGS))  # one source of truth
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_HELP", "\n".join(REQUIRED_FLAGS)
+    )  # one source of truth
     return fake

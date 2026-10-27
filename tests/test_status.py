@@ -26,7 +26,11 @@ def test_status_counts_on_fresh_wiki(tmp_path):
     assert st.sections and all(v == 0 for v in st.sections.values())
     assert st.stale == [] and st.inbox == 0 and st.quarantined == 0
     assert st.pending == {"new": 0, "changed": 0, "deleted": 0}
-    assert len(st.last_log) == 1 and st.last_log[0].startswith("## [") and "init" in st.last_log[0]
+    assert (
+        len(st.last_log) == 1
+        and st.last_log[0].startswith("## [")
+        and "init" in st.last_log[0]
+    )
 
 
 def test_status_counts_pending_raw_and_inbox(tmp_path, make_wiki):
@@ -42,7 +46,12 @@ def test_status_counts_pending_raw_and_inbox(tmp_path, make_wiki):
     (q / "bad.txt").write_text("x")
     (q / "bad.txt.reason.json").write_text("{}")
     (root / "wiki" / PAGE_REL).write_text(
-        page_text("conventions.git-flow", "Git flow", "# Git flow\n", review_after="2026-01-02"),
+        page_text(
+            "conventions.git-flow",
+            "Git flow",
+            "# Git flow\n",
+            review_after="2026-01-02",
+        ),
         encoding="utf-8",
     )
     st = wiki_status(WikiRef("Acme", root, "path"), today=date(2026, 10, 26))
@@ -66,7 +75,11 @@ def test_status_all_lists_registry_and_env_wikis(tmp_path, monkeypatch):
     (tmp_path / "envw").mkdir()
     init(tmp_path / "envw", "envw")
     reg = tmp_path / "home" / "wikis.toml"
-    reg.write_text("".join(ln for ln in reg.read_text().splitlines(True) if not ln.startswith('"envw"')))
+    reg.write_text(
+        "".join(
+            ln for ln in reg.read_text().splitlines(True) if not ln.startswith('"envw"')
+        )
+    )
     monkeypatch.setenv("LLM_WIKI_PATH", str(tmp_path / "envw"))
     res = runner.invoke(app, ["status", "--all", "--format", "json"])
     assert res.exit_code == 0, res.output
@@ -98,7 +111,9 @@ def test_status_non_utf8_log_does_not_crash(tmp_path, monkeypatch):
     init(tmp_path / "demo", "demo")
     log = tmp_path / "demo" / "wiki" / "log.md"
     log.write_bytes(log.read_bytes() + b"\xff\n")
-    st = wiki_status(WikiRef("demo", tmp_path / "demo", "path"), today=date(2026, 10, 26))
+    st = wiki_status(
+        WikiRef("demo", tmp_path / "demo", "path"), today=date(2026, 10, 26)
+    )
     assert st.last_log == ["error: log.md not valid UTF-8"]
     monkeypatch.chdir(tmp_path / "demo")
     res = runner.invoke(app, ["status"])

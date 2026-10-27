@@ -53,7 +53,9 @@ SPEC_PATHS = [
 
 
 def _git(root, *args):
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    ).stdout
 
 
 def test_init_creates_tree_and_lint_clean(tmp_path):
@@ -68,8 +70,12 @@ def test_init_creates_tree_and_lint_clean(tmp_path):
     for s in cfg.sections:
         assert (root / "wiki" / s.name / "_index.md").is_file(), s.name
     assert (root / "CLAUDE.md").read_text(encoding="utf-8") == "@AGENTS.md\n"
-    assert (root / "wiki/log.md").read_text(encoding="utf-8") == "# Log\n\n## [2026-10-26] init | my-wiki\n"
-    assert (root / "wiki/open-questions.md").read_text(encoding="utf-8") == "# Open questions\n"
+    assert (root / "wiki/log.md").read_text(
+        encoding="utf-8"
+    ) == "# Log\n\n## [2026-10-26] init | my-wiki\n"
+    assert (root / "wiki/open-questions.md").read_text(
+        encoding="utf-8"
+    ) == "# Open questions\n"
     gi = (root / ".gitignore").read_text(encoding="utf-8").split()
     for entry in (".wiki/quarantine/", ".wiki/runs/", ".wiki/tmp/", ".env*"):
         assert entry in gi
@@ -90,9 +96,22 @@ def test_init_creates_tree_and_lint_clean(tmp_path):
 
 def test_init_general_profile_sections(tmp_path):
     root = tmp_path / "notes"
-    init_wiki(root, name="notes", profile="general", description="Personal notes.", today=TODAY)
+    init_wiki(
+        root,
+        name="notes",
+        profile="general",
+        description="Personal notes.",
+        today=TODAY,
+    )
     cfg = load_config(root)
-    assert [s.name for s in cfg.sections] == ["concepts", "topics", "howto", "references", "proposals", "sources"]
+    assert [s.name for s in cfg.sections] == [
+        "concepts",
+        "topics",
+        "howto",
+        "references",
+        "proposals",
+        "sources",
+    ]
     assert cfg.description == "Personal notes."
     for s in cfg.sections:
         assert (root / "wiki" / s.name / "_index.md").is_file()
@@ -106,13 +125,21 @@ def test_init_existing_wiki_only_registers(tmp_path):
     init_wiki(root, name="acme", today=TODAY)
     registry.registry_file().unlink()
     head = _git(root, "rev-parse", "HEAD")
-    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file() and ".git" not in p.parts}
+    before = {
+        p: p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and ".git" not in p.parts
+    }
     res = init_wiki(root, today=TODAY)
     assert res.created is False
     assert res.ref.name == "acme" and res.ref.path == root.resolve()
     assert registry.resolve("acme", tmp_path).path == root.resolve()
     assert _git(root, "rev-parse", "HEAD") == head
-    after = {p: p.read_bytes() for p in root.rglob("*") if p.is_file() and ".git" not in p.parts}
+    after = {
+        p: p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and ".git" not in p.parts
+    }
     assert after == before
 
 
@@ -135,7 +162,9 @@ def test_agents_md_has_all_headings_in_order(tmp_path):
     root = tmp_path / "w"
     init_wiki(root, today=TODAY)
     text = (root / "AGENTS.md").read_text(encoding="utf-8")
-    prose = re.sub(r"^```.*?^```", "", text, flags=re.M | re.S)  # body template has ## lines
+    prose = re.sub(
+        r"^```.*?^```", "", text, flags=re.M | re.S
+    )  # body template has ## lines
     h2 = re.findall(r"^## (.+)$", prose, re.M)
     titles = [re.sub(r"^\d+\.\s*", "", h).strip() for h in h2]
     assert titles == AGENTS_HEADINGS
@@ -180,8 +209,19 @@ def test_gitops_helpers(tmp_path):
 
 def test_cli_init_messages(tmp_path):
     root = tmp_path / "w"
-    r = CliRunner().invoke(app, ["init", str(root), "--name", "acme", "--profile", "general",
-                                 "--description", "Acme."])
+    r = CliRunner().invoke(
+        app,
+        [
+            "init",
+            str(root),
+            "--name",
+            "acme",
+            "--profile",
+            "general",
+            "--description",
+            "Acme.",
+        ],
+    )
     assert r.exit_code == 0, r.output
     assert r.stdout.strip() == f"created wiki acme at {root.resolve()}"
     assert load_config(root).profile == "general"
@@ -248,8 +288,13 @@ def test_init_rolls_back_on_lint_failure(tmp_path, monkeypatch, pre_existing):
     from llm_wiki import init as init_mod
     from llm_wiki.lint import Finding, LintReport
 
-    monkeypatch.setattr(init_mod, "lint", lambda *a, **k: LintReport(
-        [Finding("error", "broken-link", "wiki/x.md", "boom")]))
+    monkeypatch.setattr(
+        init_mod,
+        "lint",
+        lambda *a, **k: LintReport(
+            [Finding("error", "broken-link", "wiki/x.md", "boom")]
+        ),
+    )
     root = tmp_path / "w"
     if pre_existing:
         root.mkdir()
@@ -290,7 +335,10 @@ def test_init_refuses_name_registered_at_other_path(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     init_wiki(a, name="demo", today=TODAY)
     before = registry.registry_file().read_text(encoding="utf-8")
-    with pytest.raises(WikiError, match=f"wiki name 'demo' is already registered at {re.escape(str(a.resolve()))}; pass --name"):
+    with pytest.raises(
+        WikiError,
+        match=f"wiki name 'demo' is already registered at {re.escape(str(a.resolve()))}; pass --name",
+    ):
         init_wiki(b, name="demo", today=TODAY)
     assert not b.exists()
     assert registry.registry_file().read_text(encoding="utf-8") == before
@@ -299,7 +347,10 @@ def test_init_refuses_name_registered_at_other_path(tmp_path):
 
 def test_cli_init_name_collision_exit_2(tmp_path):
     runner = CliRunner()
-    assert runner.invoke(app, ["init", str(tmp_path / "a"), "--name", "demo"]).exit_code == 0
+    assert (
+        runner.invoke(app, ["init", str(tmp_path / "a"), "--name", "demo"]).exit_code
+        == 0
+    )
     res = runner.invoke(app, ["init", str(tmp_path / "b"), "--name", "demo"])
     assert res.exit_code == 2
     assert "error: wiki name 'demo' is already registered at" in res.stderr
@@ -311,7 +362,9 @@ def test_init_existing_wiki_refuses_name_registered_elsewhere(tmp_path):
     init_wiki(a, name="demo", today=TODAY)
     saved = registry.registry_file().read_text(encoding="utf-8")
     registry.registry_file().unlink()
-    init_wiki(b, name="demo", today=TODAY)  # a second wiki 'demo', created while unregistered
+    init_wiki(
+        b, name="demo", today=TODAY
+    )  # a second wiki 'demo', created while unregistered
     registry.registry_file().write_text(saved, encoding="utf-8")
     with pytest.raises(WikiError, match="wiki name 'demo' is already registered at"):
         init_wiki(b, today=TODAY)
@@ -386,7 +439,8 @@ def test_cli_init_host_repo_message(tmp_path):
     assert r.exit_code == 0, r.output
     assert r.stdout.strip() == (
         f"created wiki acme at {wiki.resolve()} inside existing git repository {host.resolve()} "
-        "(not committed — review and commit it there)")
+        "(not committed — review and commit it there)"
+    )
 
 
 def test_init_inside_git_dir_is_refused(tmp_path):

@@ -22,7 +22,10 @@ def _md_table(rows: list[list[str]]) -> str:
     if not rows:
         return ""
     width = max(len(r) for r in rows)
-    rows = [[_clip(c).replace("|", "\\|") for c in r] + [""] * (width - len(r)) for r in rows]
+    rows = [
+        [_clip(c).replace("|", "\\|") for c in r] + [""] * (width - len(r))
+        for r in rows
+    ]
     out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * width]
     out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
     return "\n".join(out)
@@ -69,10 +72,14 @@ def convert_sheets(
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         slug, n = _slug(name), 1
-        while (csv_path := out_dir / f"{sha}.{slug}{'' if n == 1 else f'-{n}'}.csv") in csvs:
+        while (
+            csv_path := out_dir / f"{sha}.{slug}{'' if n == 1 else f'-{n}'}.csv"
+        ) in csvs:
             n += 1
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
             csv.writer(fh).writerows(rows)
         csvs.append(csv_path)
-        parts.append(f"Large sheet, full data in `{csv_path.name}`.\n\n{_profile(rows)}\n")
+        parts.append(
+            f"Large sheet, full data in `{csv_path.name}`.\n\n{_profile(rows)}\n"
+        )
     return "\n".join(parts), csvs

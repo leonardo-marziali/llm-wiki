@@ -26,7 +26,9 @@ def test_github_token_redacted():
 
 
 def test_other_new_kinds():
-    out, counts = redact("xoxb-1234567890-abcdef AIza" + "A" * 35 + " Server=x;Pwd=hunter22;")
+    out, counts = redact(
+        "xoxb-1234567890-abcdef AIza" + "A" * 35 + " Server=x;Pwd=hunter22;"
+    )
     assert counts["slack_token"] == 1
     assert counts["google_api_key"] == 1
     assert counts["conn_string_password"] + counts["password"] == 1
@@ -34,7 +36,9 @@ def test_other_new_kinds():
 
 
 def test_private_key_block_redacted():
-    text = "a\n-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----\nb"
+    text = (
+        "a\n-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----\nb"
+    )
     out, counts = redact(text)
     assert out == "a\n‹REDACTED:private_key›\nb"
     assert counts["private_key"] == 1
@@ -53,7 +57,12 @@ def test_already_redacted_not_rerredacted():
 
 
 def test_runbook_commands_not_injection():
-    assert find_injection("git push origin main\nkubectl apply -f deploy.yaml\nrm -rf build/") == []
+    assert (
+        find_injection(
+            "git push origin main\nkubectl apply -f deploy.yaml\nrm -rf build/"
+        )
+        == []
+    )
 
 
 def test_ignore_previous_instructions_hit():
@@ -73,7 +82,10 @@ def test_agent_config_hit():
 
 def test_zero_width_and_tag_chars_hit():
     hits = find_injection("a​b\n\U000e0041x")
-    assert [(h.kind, h.line) for h in hits] == [("hidden_chars", 1), ("hidden_chars", 2)]
+    assert [(h.kind, h.line) for h in hits] == [
+        ("hidden_chars", 1),
+        ("hidden_chars", 2),
+    ]
     assert "U+200B" in hits[0].excerpt and "​" not in hits[0].excerpt
     assert "U+E0041" in hits[1].excerpt
 
@@ -109,7 +121,9 @@ def test_quarantine_moves_file_and_writes_reason(tmp_path):
     dest = quarantine(tmp_path, raw, {"why": "injection"})
     assert dest == tmp_path / ".wiki" / "quarantine" / "bad.md"
     assert dest.read_text() == "x" and not raw.exists()
-    assert json.loads((dest.parent / "bad.md.reason.json").read_text()) == {"why": "injection"}
+    assert json.loads((dest.parent / "bad.md.reason.json").read_text()) == {
+        "why": "injection"
+    }
 
 
 def test_quarantine_name_collision(tmp_path):
@@ -152,7 +166,9 @@ def test_gitleaks_tmpfile_removed_and_ids_kept(monkeypatch, tmp_path):
         seen["src"] = src
         assert tmp_path in __import__("pathlib").Path(src).parents
         report = cmd[cmd.index("--report-path") + 1]
-        __import__("pathlib").Path(report).write_text('[{"RuleID": "aws-key", "Secret": "x"}]')
+        __import__("pathlib").Path(report).write_text(
+            '[{"RuleID": "aws-key", "Secret": "x"}]'
+        )
         return subprocess.CompletedProcess(cmd, 1)
 
     monkeypatch.setattr(subprocess, "run", fake_run)

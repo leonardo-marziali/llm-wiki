@@ -47,7 +47,9 @@ def _section_lines(pages: list[Page], section: str) -> list[str]:
         fm = p.fm
         assert fm is not None
         link = p.rel.removeprefix(section + "/")
-        lines.append(f"- [{_link_title(fm.title)}]({link}) — {_one_line(fm.summary)} — {fm.status} — {fm.last_verified.isoformat()}")
+        lines.append(
+            f"- [{_link_title(fm.title)}]({link}) — {_one_line(fm.summary)} — {fm.status} — {fm.last_verified.isoformat()}"
+        )
     return lines
 
 
@@ -66,7 +68,9 @@ def build_indexes(root: Path, cfg: WikiConfig) -> list[Path]:
     for s in cfg.sections:
         path = wiki / s.name / "_index.md"
         default = f"# {s.name[:1].upper()}{s.name[1:]}\n\n{s.description}\n\n"
-        if _write_if_changed(path, _header(path, default), _section_lines(by_section[s.name], s.name)):
+        if _write_if_changed(
+            path, _header(path, default), _section_lines(by_section[s.name], s.name)
+        ):
             changed.append(path)
 
     top = wiki / "index.md"
@@ -79,10 +83,17 @@ def build_indexes(root: Path, cfg: WikiConfig) -> list[Path]:
         "",
     ]
     for s in cfg.sections:
-        lines.append(f"- [{s.name}]({s.name}/_index.md) — {len(by_section[s.name])} pages — {s.description}")
+        lines.append(
+            f"- [{s.name}]({s.name}/_index.md) — {len(by_section[s.name])} pages — {s.description}"
+        )
     lines += ["", "## Hubs", ""]
     hubs = sorted(
-        (p for pages in by_section.values() for p in pages if p.fm and p.fm.type == "hub"),
+        (
+            p
+            for pages in by_section.values()
+            for p in pages
+            if p.fm and p.fm.type == "hub"
+        ),
         key=lambda p: (p.fm.title.casefold(), p.rel),  # type: ignore[union-attr]
     )
     hub_lines = [f"- [{_link_title(p.fm.title)}]({p.rel})" for p in hubs]  # type: ignore[union-attr]

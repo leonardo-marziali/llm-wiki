@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Literal
 
 from llm_wiki import gitops
-from llm_wiki.config import WIKI_FILE, Profile, Section, WikiConfig, dump_config, load_config, load_profile
+from llm_wiki.config import (
+    WIKI_FILE,
+    Profile,
+    Section,
+    WikiConfig,
+    dump_config,
+    load_config,
+    load_profile,
+)
 from llm_wiki.errors import GitError, WikiError
 from llm_wiki.index import build_indexes
 from llm_wiki.lint import lint
@@ -32,7 +40,9 @@ _KIND_RULE = {
 class InitResult:
     ref: WikiRef
     created: bool
-    host_repo: Path | None = None  # enclosing repo the wiki lives in; None when init made its own repo or only re-registered
+    host_repo: Path | None = (
+        None  # enclosing repo the wiki lives in; None when init made its own repo or only re-registered
+    )
 
 
 def slug(text: str) -> str:
@@ -59,15 +69,29 @@ def sections_table(sections: list[Section]) -> str:
         "| ------- | ---- | ------------- | ----------------- |",
     ]
     for s in sections:
-        rows.append(f"| `{s.name}/` | {s.kind} | {_KIND_RULE[s.kind]} | {_cell(s.description)} |")
+        rows.append(
+            f"| `{s.name}/` | {s.kind} | {_KIND_RULE[s.kind]} | {_cell(s.description)} |"
+        )
     return "\n".join(rows)
 
 
-def _top_page(page_id: Literal["overview", "glossary"], title: str, summary: str, body: str, today: date) -> str:
+def _top_page(
+    page_id: Literal["overview", "glossary"],
+    title: str,
+    summary: str,
+    body: str,
+    today: date,
+) -> str:
     fm = Frontmatter(
-        id=page_id, title=title, type=page_id, status="as-is", summary=summary,
-        confidence="high", review_status="draft",
-        last_verified=today, review_after=today + timedelta(days=REVIEW_DAYS),
+        id=page_id,
+        title=title,
+        type=page_id,
+        status="as-is",
+        summary=summary,
+        confidence="high",
+        review_status="draft",
+        last_verified=today,
+        review_after=today + timedelta(days=REVIEW_DAYS),
     )
     return render_frontmatter(fm) + body
 
@@ -92,14 +116,32 @@ def _create(root: Path, cfg: WikiConfig, today: date) -> None:
     _write(root, "AGENTS.md", _render(_template("AGENTS.md"), values))
     _write(root, "CLAUDE.md", _template("CLAUDE.md"))
     _write(root, ".gitignore", _template("gitignore"))
-    _write(root, "wiki/overview.md", _top_page(
-        "overview", "Overview", f"Entry point of the {cfg.name} wiki.",
-        _render(_template("pages/overview.md"), values), today))
-    _write(root, "wiki/glossary.md", _top_page(
-        "glossary", "Glossary", f"Terms used in the {cfg.name} wiki.",
-        _render(_template("pages/glossary.md"), values), today))
+    _write(
+        root,
+        "wiki/overview.md",
+        _top_page(
+            "overview",
+            "Overview",
+            f"Entry point of the {cfg.name} wiki.",
+            _render(_template("pages/overview.md"), values),
+            today,
+        ),
+    )
+    _write(
+        root,
+        "wiki/glossary.md",
+        _top_page(
+            "glossary",
+            "Glossary",
+            f"Terms used in the {cfg.name} wiki.",
+            _render(_template("pages/glossary.md"), values),
+            today,
+        ),
+    )
     _write(root, "wiki/open-questions.md", "# Open questions\n")
-    _write(root, "wiki/log.md", f"# Log\n\n## [{today.isoformat()}] init | {cfg.name}\n")
+    _write(
+        root, "wiki/log.md", f"# Log\n\n## [{today.isoformat()}] init | {cfg.name}\n"
+    )
     Manifest().save(root)
     build_indexes(root, cfg)
 
@@ -120,7 +162,9 @@ def _check_name_free(name: str, root: Path) -> None:
     """Refuse a name another live wiki is registered under (a stale entry may be taken over)."""
     other = registered_path(name)
     if other is not None and other.resolve() != root and (other / WIKI_FILE).is_file():
-        raise WikiError(f"wiki name '{name}' is already registered at {other}; pass --name")
+        raise WikiError(
+            f"wiki name '{name}' is already registered at {other}; pass --name"
+        )
 
 
 def init_wiki(
@@ -134,7 +178,9 @@ def init_wiki(
     if (root / WIKI_FILE).is_file():
         cfg = load_config(root)
         if name is not None and name != cfg.name:
-            raise WikiError(f"{root} is already the wiki '{cfg.name}'; drop --name or pass --name {cfg.name}")
+            raise WikiError(
+                f"{root} is already the wiki '{cfg.name}'; drop --name or pass --name {cfg.name}"
+            )
         _check_name_free(cfg.name, root)
         register(cfg.name, root)
         return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
@@ -143,13 +189,21 @@ def init_wiki(
     if name is None:
         name = slug(root.name)
         if not name:
-            raise WikiError(f"cannot derive a wiki name from '{root.name}': pass --name")
+            raise WikiError(
+                f"cannot derive a wiki name from '{root.name}': pass --name"
+            )
     if not NAME_RE.fullmatch(name):
-        raise WikiError(f"invalid wiki name '{name}': use lowercase letters, digits and single hyphens, "
-                        f"e.g. '{slug(name) or 'my-wiki'}'")
+        raise WikiError(
+            f"invalid wiki name '{name}': use lowercase letters, digits and single hyphens, "
+            f"e.g. '{slug(name) or 'my-wiki'}'"
+        )
     _check_name_free(name, root)
-    cfg = WikiConfig(name=name, description=" ".join(description.split()), profile=profile,
-                     sections=load_profile(profile))
+    cfg = WikiConfig(
+        name=name,
+        description=" ".join(description.split()),
+        profile=profile,
+        sections=load_profile(profile),
+    )
     if gitops.inside_git_dir(root):
         raise WikiError(f"{root} is inside a .git directory")
     host_repo = gitops.enclosing_repo(root)
@@ -163,8 +217,11 @@ def init_wiki(
         _create(root, cfg, today)
         report = lint(root, cfg, today=today)
         if report.errors:
-            details = "; ".join(f"{f.code} {f.path}: {f.message}" for f in report.findings
-                                if f.severity == "error")
+            details = "; ".join(
+                f"{f.code} {f.path}: {f.message}"
+                for f in report.findings
+                if f.severity == "error"
+            )
             raise WikiError(f"new wiki fails lint: {details}")
         if host_repo is None:
             gitops.init_repo(root)
@@ -173,4 +230,6 @@ def init_wiki(
         _clean(root, created_dir)
         raise
     register(name, root)
-    return InitResult(WikiRef(name, root, "registry"), created=True, host_repo=host_repo)
+    return InitResult(
+        WikiRef(name, root, "registry"), created=True, host_repo=host_repo
+    )

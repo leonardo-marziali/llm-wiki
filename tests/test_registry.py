@@ -62,7 +62,9 @@ def test_resolve_from_cwd_inside_wiki(tmp_path):
 
 def test_env_path_discovery(tmp_path, monkeypatch):
     root = make_wiki(tmp_path / "e", "envy")
-    monkeypatch.setenv("LLM_WIKI_PATH", os.pathsep.join([str(root), str(tmp_path / "nope")]))
+    monkeypatch.setenv(
+        "LLM_WIKI_PATH", os.pathsep.join([str(root), str(tmp_path / "nope")])
+    )
     refs = known_wikis()
     assert [(r.name, r.origin) for r in refs] == [("envy", "env")]
 
@@ -78,7 +80,9 @@ def test_registry_entry_wins_over_env_duplicate(tmp_path, monkeypatch):
 def test_resolve_nothing_raises_wikinotfound(tmp_path):
     with pytest.raises(WikiNotFound, match="wiki init") as e:
         resolve(None, tmp_path)
-    assert str(e.value) == "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
+    assert (
+        str(e.value) == "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
+    )
 
 
 def test_broken_env_wiki_is_skipped(tmp_path, monkeypatch):
@@ -94,9 +98,9 @@ def test_broken_env_wiki_is_skipped(tmp_path, monkeypatch):
 
 
 def test_non_bmp_names_round_trip(tmp_path):
-    root = make_wiki(tmp_path / "wiki-\U0001F600", "smile-\U0001F600")
-    register("smile-\U0001F600", root)
-    assert resolve("smile-\U0001F600", tmp_path).path == root
+    root = make_wiki(tmp_path / "wiki-\U0001f600", "smile-\U0001f600")
+    register("smile-\U0001f600", root)
+    assert resolve("smile-\U0001f600", tmp_path).path == root
 
 
 def test_corrupt_registry_raises_config_error():

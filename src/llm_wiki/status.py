@@ -33,7 +33,11 @@ class WikiStatus:
 def _count_files(d: Path, skip: tuple[str, ...]) -> int:
     if not d.is_dir():
         return 0
-    return sum(1 for p in d.iterdir() if p.is_file() and not p.name.endswith(skip) and p.name != ".gitkeep")
+    return sum(
+        1
+        for p in d.iterdir()
+        if p.is_file() and not p.name.endswith(skip) and p.name != ".gitkeep"
+    )
 
 
 def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
@@ -61,7 +65,11 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
     entries = []
     if log.is_file():
         try:
-            entries = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.startswith("## [")]
+            entries = [
+                ln
+                for ln in log.read_text(encoding="utf-8").splitlines()
+                if ln.startswith("## [")
+            ]
         except UnicodeDecodeError:
             entries = [LOG_NOT_UTF8]
         except OSError as e:
@@ -79,6 +87,10 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
         stale=stale,
         inbox=_count_files(root / "inbox", ()),
         quarantined=_count_files(root / ".wiki" / "quarantine", (".reason.json",)),
-        pending={"new": len(scan.new), "changed": len(scan.changed), "deleted": len(scan.deleted)},
+        pending={
+            "new": len(scan.new),
+            "changed": len(scan.changed),
+            "deleted": len(scan.deleted),
+        },
         last_log=entries[-LOG_LINES:],
     )

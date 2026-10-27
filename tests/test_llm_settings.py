@@ -1,7 +1,14 @@
 import pytest
 
 from llm_wiki.config import (
-    LlmOverrides, WikiConfig, dump_config, home_dir, load_config, load_llm_settings, load_profile, user_config_file,
+    LlmOverrides,
+    WikiConfig,
+    dump_config,
+    home_dir,
+    load_config,
+    load_llm_settings,
+    load_profile,
+    user_config_file,
 )
 from llm_wiki.errors import ConfigError
 
@@ -74,7 +81,9 @@ def test_invalid_user_config_toml_is_error():
 
 
 def test_dump_config_round_trips_llm(tmp_path):
-    base = dict(name="d", description="d", profile="general", sections=load_profile("general"))
+    base = dict(
+        name="d", description="d", profile="general", sections=load_profile("general")
+    )
     cfg = WikiConfig(**base, llm=LlmOverrides(deep_model="x", edit_budget_usd=1.5))
     (tmp_path / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
     assert load_config(tmp_path).llm == cfg.llm

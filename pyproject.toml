@@ -39,3 +39,17 @@ llm_wiki = ["templates/*", "templates/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+# Ruff >= 0.16 defaults already cover F, B, UP, SIM, RUF, PL*, FURB, PT and more
+extend-select = ["E", "W", "I", "UP", "B", "SIM", "RUF"]
+# ‹› delimit redaction marks; – and — appear in user-facing prose on purpose
+allowed-confusables = ["‹", "›", "–"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer reads parameter specs from defaults; they are never mutated
+extend-immutable-calls = ["typer.Argument", "typer.Option"]

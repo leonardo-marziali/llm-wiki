@@ -8,12 +8,30 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 PageType = Literal[
-    "concept", "component", "system", "integration", "environment", "process",
-    "convention", "decision", "requirement", "howto", "reference", "glossary",
-    "source-summary", "overview", "hub",
+    "concept",
+    "component",
+    "system",
+    "integration",
+    "environment",
+    "process",
+    "convention",
+    "decision",
+    "requirement",
+    "howto",
+    "reference",
+    "glossary",
+    "source-summary",
+    "overview",
+    "hub",
 ]
 Status = Literal["as-is", "to-be", "deprecated", "superseded"]
 AdrStatus = Literal["proposed", "accepted", "rejected", "superseded"]
@@ -93,7 +111,7 @@ def split_frontmatter(text: str) -> tuple[dict | None, str]:
     for i in range(1, len(lines)):
         if lines[i].rstrip("\r") == "---":
             raw = "\n".join(lines[1:i])
-            body = "\n".join(lines[i + 1:])
+            body = "\n".join(lines[i + 1 :])
             try:
                 data = yaml.safe_load(raw)
             except yaml.YAMLError as exc:
@@ -124,9 +142,18 @@ def read_page(root: Path, path: Path) -> Page:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return Page(path=path, rel=rel, fm=None, body="", error="not valid UTF-8", line_count=0)
+        return Page(
+            path=path, rel=rel, fm=None, body="", error="not valid UTF-8", line_count=0
+        )
     except OSError as exc:
-        return Page(path=path, rel=rel, fm=None, body="", error=f"unreadable: {exc}", line_count=0)
+        return Page(
+            path=path,
+            rel=rel,
+            fm=None,
+            body="",
+            error=f"unreadable: {exc}",
+            line_count=0,
+        )
     line_count = len(text.splitlines())
     fm: Frontmatter | None = None
     error: str | None = None
@@ -140,14 +167,19 @@ def read_page(root: Path, path: Path) -> Page:
     except ValueError as exc:
         # ValidationError is a ValueError subclass.
         error = _format_errors(exc) if isinstance(exc, ValidationError) else str(exc)
-    return Page(path=path, rel=rel, fm=fm, body=body, error=error, line_count=line_count)
+    return Page(
+        path=path, rel=rel, fm=fm, body=body, error=error, line_count=line_count
+    )
 
 
 def iter_pages(root: Path) -> Iterator[Page]:
     wiki = root / "wiki"
     paths = [
-        p for p in wiki.rglob("*.md")
-        if p.is_file() and p.name not in SYSTEM_FILES and "_archive" not in p.relative_to(wiki).parts[:-1]
+        p
+        for p in wiki.rglob("*.md")
+        if p.is_file()
+        and p.name not in SYSTEM_FILES
+        and "_archive" not in p.relative_to(wiki).parts[:-1]
     ]
     for p in sorted(paths, key=lambda p: p.relative_to(wiki).as_posix()):
         yield read_page(root, p)
@@ -155,5 +187,7 @@ def iter_pages(root: Path) -> Iterator[Page]:
 
 def render_frontmatter(fm: Frontmatter) -> str:
     data = fm.model_dump(mode="json")
-    body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    body = yaml.safe_dump(
+        data, sort_keys=False, allow_unicode=True, default_flow_style=False
+    )
     return f"---\n{body}---\n"

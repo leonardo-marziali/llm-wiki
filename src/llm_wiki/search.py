@@ -32,7 +32,11 @@ def tokenize(text: str) -> list[str]:
 def _virtual_doc(fm, body: str) -> list[str]:
     tokens: list[str] = []
     for text, weight in (
-        (fm.title, 3), (fm.summary, 2), (" ".join(fm.tags), 2), (fm.id, 2), (body, 1),
+        (fm.title, 3),
+        (fm.summary, 2),
+        (" ".join(fm.tags), 2),
+        (fm.id, 2),
+        (body, 1),
     ):
         tokens += tokenize(text) * weight
     return tokens
@@ -59,9 +63,14 @@ def search(
                 continue
             tokens = _virtual_doc(fm, page.body)
             hit = SearchHit(
-                wiki=ref.name, path=str(page.path), id=fm.id, title=fm.title,
-                summary=fm.summary, status=fm.status,
-                last_verified=fm.last_verified.isoformat(), score=0.0,
+                wiki=ref.name,
+                path=str(page.path),
+                id=fm.id,
+                title=fm.title,
+                summary=fm.summary,
+                status=fm.status,
+                last_verified=fm.last_verified.isoformat(),
+                score=0.0,
             )
             docs.append((hit, Counter(tokens), len(tokens)))
     if not docs or not q_terms:

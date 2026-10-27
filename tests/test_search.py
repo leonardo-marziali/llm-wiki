@@ -10,19 +10,31 @@ from llm_wiki.registry import WikiRef
 from llm_wiki.search import SearchHit, search, tokenize
 
 CFG = WikiConfig(
-    name="w", description="d", profile="general",
+    name="w",
+    description="d",
+    profile="general",
     sections=[Section(name="sys", kind="as-is", description="x")],
 )
 
 
 def make_wiki(root: Path, name: str = "w") -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "wiki.toml").write_text(dump_config(CFG.model_copy(update={"name": name})), encoding="utf-8")
+    (root / "wiki.toml").write_text(
+        dump_config(CFG.model_copy(update={"name": name})), encoding="utf-8"
+    )
     return root
 
 
-def put(root: Path, rel: str, id_: str, title: str, body: str = "body", summary: str = "S.",
-        status: str = "as-is", tags: str = "[]") -> None:
+def put(
+    root: Path,
+    rel: str,
+    id_: str,
+    title: str,
+    body: str = "body",
+    summary: str = "S.",
+    status: str = "as-is",
+    tags: str = "[]",
+) -> None:
     p = root / "wiki" / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
@@ -96,7 +108,9 @@ def test_top_limits_results(tmp_path):
 def test_cli_search_json(tmp_path):
     w = make_wiki(tmp_path / "w")
     put(w, "sys/a.md", "a", "Kafka")
-    r = CliRunner().invoke(app, ["search", "kafka", "--wiki", str(w), "--format", "json"])
+    r = CliRunner().invoke(
+        app, ["search", "kafka", "--wiki", str(w), "--format", "json"]
+    )
     assert r.exit_code == 0, r.output
     data = json.loads(r.stdout)
     assert isinstance(data, list) and len(data) == 1

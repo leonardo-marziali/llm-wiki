@@ -31,7 +31,9 @@ def triage(path: Path) -> ImageInfo:
     return ImageInfo(width, height, phash, reason)
 
 
-def near_duplicate(phash: str, others: dict[str, str], max_distance: int = 5) -> str | None:
+def near_duplicate(
+    phash: str, others: dict[str, str], max_distance: int = 5
+) -> str | None:
     """Key of the closest entry in `others` within max_distance (Hamming), else None."""
     mine = imagehash.hex_to_hash(phash)
     best: tuple[int, str] | None = None

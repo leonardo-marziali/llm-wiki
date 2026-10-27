@@ -17,7 +17,8 @@ MARK = "‹REDACTED:{kind}›"
 _MARK_PREFIX = "‹REDACTED:"
 
 _PLACEHOLDER = re.compile(
-    r"^(<.*>|\$[({].*|\{\{.*\}\}|\*+|x{3,}|\.{3,}|changeme|your[_-]?\w*|null|none|n/?a|example\w*)$", re.I
+    r"^(<.*>|\$[({].*|\{\{.*\}\}|\*+|x{3,}|\.{3,}|changeme|your[_-]?\w*|null|none|n/?a|example\w*)$",
+    re.I,
 )
 # `$(cmd)` / `${VAR}` (shell substitution) fetch a secret at run time; they are not one
 _SHELL_SUBST = ("$(", "${")
@@ -36,21 +37,46 @@ def _looks_secret(value: str) -> bool:
 
 # (kind, pattern, group holding the secret value or 0 for the whole match)
 _RULES: list[tuple[str, re.Pattern[str], int]] = [
-    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S), 0),
-    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), 0),
+    (
+        "private_key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+            re.S,
+        ),
+        0,
+    ),
+    (
+        "jwt",
+        re.compile(
+            r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+        ),
+        0,
+    ),
     ("aws_access_key_id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), 0),
     ("jfrog_api_key", re.compile(r"\bAKC[a-zA-Z0-9]{20,}\b"), 0),
     (
         "github_token",
-        re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"),
+        re.compile(
+            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"
+        ),
         0,
     ),
     ("slack_token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b"), 0),
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), 0),
     ("bearer", re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9\-._~+/]{20,}=*)"), 2),
     ("basic_auth", re.compile(r"(?i)\b(basic\s+)([A-Za-z0-9+/]{16,}={0,2})"), 2),
-    ("url_credentials", re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s/:@]+:)([^\s/@]{3,})(@)"), 2),
-    ("aws_secret", re.compile(r"(?i)(aws_secret_access_key\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"']{20,})"), 2),
+    (
+        "url_credentials",
+        re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s/:@]+:)([^\s/@]{3,})(@)"),
+        2,
+    ),
+    (
+        "aws_secret",
+        re.compile(
+            r"(?i)(aws_secret_access_key\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"']{20,})"
+        ),
+        2,
+    ),
     (
         "token",
         re.compile(
@@ -59,7 +85,13 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
         ),
         2,
     ),
-    ("password", re.compile(r"(?i)((?<![A-Za-z0-9])(?:password|passwd|pwd|pass)\b\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"'<>,;|]{4,})"), 2),
+    (
+        "password",
+        re.compile(
+            r"(?i)((?<![A-Za-z0-9])(?:password|passwd|pwd|pass)\b\s*[\"']?\s*[:=]\s*[\"']?)([^\s\"'<>,;|]{4,})"
+        ),
+        2,
+    ),
     ("conn_string_password", re.compile(r"(?i)(password|pwd)(=)([^;\s]{4,})"), 3),
 ]
 
@@ -80,8 +112,12 @@ def redact(text: str) -> tuple[str, Counter[str]]:
                 return m.group(0)
             if kind == "conn_string_password" and value.startswith(_SHELL_SUBST):
                 return m.group(0)
-            if kind == "token" and _ARN.search(m.string, max(0, m.start() - 80), m.start() + 1):
-                return m.group(0)  # `arn:aws:secretsmanager:...:secret:<name>` names a secret, it is not one
+            if kind == "token" and _ARN.search(
+                m.string, max(0, m.start() - 80), m.start() + 1
+            ):
+                return m.group(
+                    0
+                )  # `arn:aws:secretsmanager:...:secret:<name>` names a secret, it is not one
             counts[kind] += 1
             start, end = m.start(group) - m.start(0), m.end(group) - m.start(0)
             whole = m.group(0)
@@ -115,7 +151,9 @@ INJECTION_RULES: dict[str, list[str]] = {
 }
 _COMPILED = {k: [re.compile(p) for p in ps] for k, ps in INJECTION_RULES.items()}
 _B64 = re.compile(INJECTION_RULES["base64_blob"][0])
-_HIDDEN = re.compile("[\u200b-\u200f\u061c\u2060\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f\ufeff]")
+_HIDDEN = re.compile(
+    "[\u200b-\u200f\u061c\u2060\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f\ufeff]"
+)
 _EXCERPT_MAX = 80
 
 
@@ -145,7 +183,9 @@ def find_injection(text: str) -> list[Hit]:
         return lo + 1
 
     # every excerpt is built from lines with all base64 blobs masked
-    masked = [_B64.sub(lambda m: f"<base64 {len(m.group(0))} chars>", ln) for ln in lines]
+    masked = [
+        _B64.sub(lambda m: f"<base64 {len(m.group(0))} chars>", ln) for ln in lines
+    ]
     for kind, rxs in _COMPILED.items():
         for rx in rxs:
             for m in rx.finditer(text):
@@ -180,9 +220,20 @@ def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         src.write_text(text, encoding="utf-8")
         proc = subprocess.run(
-            [binary, "detect", "--no-git", "--source", str(src), "--report-format", "json",
-             "--report-path", str(report)],
-            capture_output=True, timeout=120, check=False,
+            [
+                binary,
+                "detect",
+                "--no-git",
+                "--source",
+                str(src),
+                "--report-format",
+                "json",
+                "--report-path",
+                str(report),
+            ],
+            capture_output=True,
+            timeout=120,
+            check=False,
         )
         if proc.returncode not in (0, 1):  # 1 = leaks found
             return ["gitleaks-error"]
@@ -197,10 +248,14 @@ def _run_gitleaks(text: str, binary: str, tmp_dir: Path) -> list[str]:
                 f.unlink(missing_ok=True)
             except OSError:
                 pass
-    return sorted({str(f["RuleID"]) for f in findings if isinstance(f, dict) and "RuleID" in f})
+    return sorted(
+        {str(f["RuleID"]) for f in findings if isinstance(f, dict) and "RuleID" in f}
+    )
 
 
-def screen_text(text: str, gitleaks_path: Path | None = None, tmp_dir: Path | None = None) -> ScreenResult:
+def screen_text(
+    text: str, gitleaks_path: Path | None = None, tmp_dir: Path | None = None
+) -> ScreenResult:
     """Gitleaks runs only when a binary exists AND tmp_dir (inside the wiki root) is given."""
     binary = str(gitleaks_path) if gitleaks_path else shutil.which("gitleaks")
     leaks = _run_gitleaks(text, binary, tmp_dir) if binary and tmp_dir else []
@@ -216,7 +271,9 @@ def quarantine(root: Path, raw_path: Path, reason: dict) -> Path:
     while dest.exists() or (qdir / f"{dest.name}.reason.json").exists():
         dest = qdir / f"{raw_path.stem}-{n}{raw_path.suffix}"
         n += 1
-    payload = json.dumps(reason, indent=2, ensure_ascii=False)  # fail before moving anything
+    payload = json.dumps(
+        reason, indent=2, ensure_ascii=False
+    )  # fail before moving anything
     reason_path = qdir / f"{dest.name}.reason.json"
     reason_path.write_text(payload, encoding="utf-8")
     try:
