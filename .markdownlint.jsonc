@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint/main/schema/markdownlint-config-schema.json",
+  "default": true,
+  // Prettier wraps prose at 80 (.prettierrc.json) but cannot wrap tables or code
+  "MD013": {
+    "line_length": 80,
+    "tables": false,
+    "code_blocks": false,
+  },
+  // The CLAUDE.md template is just an `@AGENTS.md` import, with no heading
+  "MD041": {
+    "allow_preamble": true,
+  },
+}
