@@ -1,4 +1,14 @@
 {
+  "enabledPlugins": {
+    "git@agentic-development-kit": true,
+    "github@agentic-development-kit": true,
+    "sonarqube@agentic-development-kit": true,
+    "markdown@agentic-development-kit": true,
+    "prettier@agentic-development-kit": true,
+    "python@agentic-development-kit": true,
+    "github@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true
+  },
   "extraKnownMarketplaces": {
     "agentic-development-kit": {
       "source": {
@@ -6,15 +16,5 @@
         "repo": "leonardo-marziali/agentic-development-kit"
       }
     }
-  },
-  "enabledPlugins": {
-    "git@agentic-development-kit": true,
-    "github@agentic-development-kit": true,
-    "sonar@agentic-development-kit": true,
-    "markdown@agentic-development-kit": true,
-    "prettier@agentic-development-kit": true,
-    "python@agentic-development-kit": true,
-    "github@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true
   }
 }
