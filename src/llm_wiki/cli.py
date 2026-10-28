@@ -337,5 +337,39 @@ def ingest(
         raise typer.Exit(report.exit_code)
 
 
+skill_app = typer.Typer(no_args_is_help=True, help="Manage the wiki-lookup skill.")
+app.add_typer(skill_app, name="skill")
+
+
+@skill_app.command("install")
+def skill_install(
+    project: Path | None = typer.Option(
+        None,
+        "--project",
+        help="Install into DIR/.claude/skills instead of the user-level skills dir.",
+    ),
+    pointer: bool = typer.Option(
+        False, "--pointer", help="Also write the wiki pointer block into DIR/CLAUDE.md."
+    ),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+    force: bool = typer.Option(
+        False, "--force", help="Replace a wiki-lookup skill llm-wiki did not write."
+    ),
+) -> None:
+    """Install the read-only wiki-lookup skill (idempotent)."""
+    from llm_wiki import registry, skill
+
+    if pointer and project is None:
+        raise WikiError("--pointer needs --project DIR")
+    ref = registry.resolve(wiki, project) if pointer and project else None
+    target = project / ".claude" / "skills" if project else skill.user_skills_dir()
+    path, changed = skill.install_skill(target, force=force)
+    state = "installed" if changed else "already installed"
+    typer.echo(f"{skill.SKILL_NAME} {__version__} {state} at {path}")
+    if ref is not None and project is not None:
+        claude_md, _ = skill.write_pointer(project, ref.name)
+        typer.echo(f"pointer to wiki {ref.name} written to {claude_md}")
+
+
 def main() -> None:
     app()
