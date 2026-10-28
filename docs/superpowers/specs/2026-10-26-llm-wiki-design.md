@@ -399,6 +399,10 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    here).
 3. **Ingest:** plan → validate → edit → post-check → finalize → gate; changed
    and deleted sources; `--note`.
+   _Done 2026-10-28: 621 offline tests; a real `wiki ingest --yes` of an AWS
+   diagram, an annotated Jira screenshot and a docx produced an architecture
+   page, a three-step howto in marker order and a conventions page, accepted
+   with 0 lint errors for $0.39._
 4. **Lookup skill + packaging:** `wiki skill install`; build the wheel and
    install it in a clean venv, where `wiki doctor` passes; run 5 evaluation
    questions from an unrelated repo.
