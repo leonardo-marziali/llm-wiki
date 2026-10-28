@@ -758,3 +758,26 @@ def test_changed_source_plan_injection_keeps_last_ingested_version(wiki, fake_cl
     assert gitops.changed_paths(wiki) == []
     assert gitops.git(wiki, "diff", "--name-only", "HEAD~1", "HEAD").strip() == ""
     assert marker not in gitops.git(wiki, "log", "-p", "--all")
+
+
+# ---- final-review fix wave ----
+
+
+def test_image_edit_prompt_reads_no_raw_file(wiki, make_png):
+    # C1: the edit session never reads the raw image: the plan's claims, which
+    # were screened, are the only facts it may write
+    from llm_wiki.ingest import build_edit_prompt
+    from llm_wiki.schemas import Plan
+
+    ctx = context(wiki)
+    rel = "raw/arch/diagram.png"
+    (wiki / "raw/arch").mkdir(parents=True)
+    make_png(wiki / rel)
+    prepared = prepare_source(wiki, ctx.cfg, ctx.manifest, rel, TODAY)
+    assert prepared.image is not None
+    low = {**claim(rel), "confidence": "low"}
+    p = Plan.model_validate(plan(plan_page(claims=[low])))
+    prompt = build_edit_prompt(ctx, prepared, p, prepared.parts[0])
+    reads = prompt.split("- read:\n", 1)[1].split("\n\n", 1)[0]
+    assert "raw/" not in reads
+    assert prepared.parts[0] in reads

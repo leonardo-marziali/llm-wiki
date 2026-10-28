@@ -622,3 +622,74 @@ def test_deleted_source_open_questions_rewrite_reverted(wiki, fake_claude):
     text = (wiki / "wiki" / "open-questions.md").read_bytes()
     assert text.startswith(original)
     assert OPEN_QUESTION in text.decode("utf-8")
+
+
+# --- final-review fix wave ---
+
+BRANCHING = "wiki/concepts/branching.md"
+
+
+def branching(digest, text="We branch from main."):
+    body = (
+        f"# Branching\n\n**TL;DR** Branch from main.\n\n{text}[^1]\n\n"
+        f"[^1]: {RAW_REL} — §1\n"
+    )
+    return page_text(
+        "concepts.branching",
+        "Branching",
+        body,
+        type_="concept",
+        sources=[(RAW_REL, digest)],
+    )
+
+
+def with_branching_page(root):
+    """The guide also backs concepts.branching, which a changed plan leaves out."""
+    (root / BRANCHING).write_text(branching(sha(OLD_TEXT)), encoding="utf-8")
+    m = Manifest.load(root)
+    e = m.entries[RAW_REL]
+    touched = sorted({*e.pages_touched, "concepts.branching"})
+    m.record(e.model_copy(update={"pages_touched": touched}))
+    m.save(root)
+    build_indexes(root, load_config(root))
+    gitops.commit_all(root, "branching page")
+
+
+def test_changed_source_verifies_unplanned_pages(wiki, fake_claude):
+    # I2 / R21: a page the changed source backs but did not re-plan is verified
+    from llm_wiki.lint import lint
+
+    with_branching_page(wiki)
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    new = sha(NEW_TEXT)
+    response = changed_edit()
+    response["write"][BRANCHING] = branching(new, "We rebase first.")
+    fake_claude.queue(good, response)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    stdin = fake_claude.calls()[1]["stdin"]
+    assert f"`{BRANCHING}`: verify `concepts.branching`" in stdin
+    assert "update its sha256 for this source to the new value" in stdin
+    assert "> [!unverified]" in stdin
+    (out,) = report.outcomes
+    assert "concepts.branching" in out.pages_updated
+    cfg = load_config(wiki)
+    after = [f for f in lint(wiki, cfg, today=TODAY).findings if f.severity == "error"]
+    assert after == []
+
+
+def test_changed_source_skipped_verify_page_repaired_then_fails(wiki, fake_claude):
+    # the reproduction: the edit leaves the unplanned page's old sha behind
+    with_branching_page(wiki)
+    before = (wiki / BRANCHING).read_bytes()
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    fake_claude.queue(good, changed_edit(), edit({}))
+    report = ingest(wiki)
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert f"{BRANCHING} sha-mismatch" in out.reason
+    repair = fake_claude.calls()[2]["stdin"]
+    assert f"`{BRANCHING}` sha-mismatch" in repair
+    assert (wiki / BRANCHING).read_bytes() == before

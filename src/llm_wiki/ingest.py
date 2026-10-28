@@ -45,6 +45,12 @@ _TOP_LEVEL = {"overview", "glossary"}
 _FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all sources
 STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)
 DELETE_CLAIM = "source deleted: mark its claims unverified per AGENTS.md"
+VERIFY = (
+    "update its sha256 for this source to the new value and refresh "
+    "last_verified/review_after; any claim citing this source that the new "
+    "version no longer supports goes inside `> [!unverified]` with its footnote "
+    "removed"
+)
 
 OutcomeStatus = Literal["ingested", "quarantined", "failed", "refused", "deleted"]
 
@@ -130,10 +136,9 @@ def _reads(prepared: Prepared, part: str) -> list[str]:
     conv = prepared.conversion
     assert conv is not None
     extra = conv.outputs[1 + conv.parts :] if conv.parts > 1 else conv.outputs[1:]
-    reads = [part, *extra]
-    if prepared.image is not None:
-        reads.append(prepared.rel)  # the edit session can read the image itself
-    return reads
+    # never a raw/ original, not even an image: only the plan's screened claims
+    # may reach the pages
+    return [part, *extra]
 
 
 def build_edit_prompt(
@@ -142,8 +147,14 @@ def build_edit_prompt(
     plan: Plan,
     part: str,
     findings: list[Finding] | None = None,
+    verify: list[str] | None = None,
 ) -> str:
-    """The edit session's stdin prompt: everything that varies per source and run."""
+    """The edit session's stdin prompt: everything that varies per source and run.
+
+    ``verify`` holds the pages a changed source backs that the plan leaves out:
+    each gets the new sha and fresh dates, and loses what the new version no
+    longer supports (R21).
+    """
     root = Path(ctx.root)
     today = ctx.today.isoformat()
     label, _ = _part_info(prepared, part)
@@ -154,6 +165,12 @@ def build_edit_prompt(
         f"- `{page_rel(p.id)}`: {p.action} `{p.id}`; last_verified: {today}, "
         f"review_after: {review_after(p.id, ctx.today).isoformat()}"
         for p in plan.pages
+    ]
+    allowed += [
+        f"- `{page_rel(id_)}`: verify `{id_}` against the new version: {VERIFY}; "
+        f"last_verified: {today}, "
+        f"review_after: {review_after(id_, ctx.today).isoformat()}"
+        for id_ in verify or []
     ]
     allowed += [
         (
@@ -330,6 +347,7 @@ class _Source:
         self.oq_before: bytes | None = None  # open-questions.md before an edit
         self.planned: dict[str, str] = {}  # id -> its first planned action
         self.reviewed: set[str] = set()  # ids whose page was reviewed before
+        self.verified: set[str] = set()  # unplanned pages a changed source backs
         run_dir = Path(ctx.run_dir).resolve()
         root = self.root.resolve()
         # the run's own files are never strays, gitignored or not
@@ -366,20 +384,40 @@ class _Source:
         if hits:
             raise _Injected(hits)
         _, suffix = _part_info(prepared, part)
+        verify = self._to_verify(plan)
         self.apply(
             plan,
-            lambda found: build_edit_prompt(ctx, prepared, plan, part, found),
+            lambda found: build_edit_prompt(ctx, prepared, plan, part, found, verify),
             suffix,
+            verify,
         )
+
+    def _to_verify(self, plan: Plan) -> list[str]:
+        """The pages a changed source backs and still cites that no plan of this
+        source has covered yet (R21).
+        """
+        if self.prepared.kind != "changed":
+            return []
+        rel = self.prepared.rel
+        skip = {self.src_id, *self.planned, *self.verified, *(p.id for p in plan.pages)}
+        out = []
+        for id_ in self.ctx.manifest.pages_for(rel):
+            if id_ in skip or not _valid_id(id_):
+                continue
+            path = self.root / page_rel(id_)
+            if path.is_file() and rel in cited_paths(read_page(self.root, path)):
+                out.append(id_)
+        return out
 
     def apply(
         self,
         plan: Plan,
         prompt: Callable[[list[Finding] | None], str],
         suffix: str,
+        verify: list[str] | None = None,
     ) -> None:
         """The edit session, the post-check, then one repair of any lint errors."""
-        self._record(plan)
+        self._record(plan, verify or [])
         self._edit(prompt(None), suffix, "edit")
         errors_found = self._check()
         if errors_found:
@@ -391,7 +429,7 @@ class _Source:
                 + "; ".join(f"{f.path} {f.code}: {f.message}" for f in errors_found)
             )
 
-    def _record(self, plan: Plan) -> None:
+    def _record(self, plan: Plan, verify: list[str]) -> None:
         if not self.planned:
             self.out.title = plan.source_title
         self.out.contradictions += len(plan.contradictions)
@@ -399,7 +437,9 @@ class _Source:
         for p in plan.pages:
             self.planned.setdefault(p.id, p.action)
             self.allowed.add(page_rel(p.id))
-        for id_ in [*(p.id for p in plan.pages), self.src_id]:
+        self.verified.update(verify)
+        self.allowed.update(page_rel(i) for i in verify)
+        for id_ in [*(p.id for p in plan.pages), *verify, self.src_id]:
             path = self.root / page_rel(id_)
             if path.is_file():
                 fm = read_page(self.root, path).fm
@@ -470,6 +510,8 @@ class _Source:
             # an untouched planned page still cites the deleted file: lint it too
             pages = wanted
             findings += self._deleted_citations(wanted)
+        else:  # an untouched verify page keeps the old sha: lint it too
+            pages = sorted({*pages, *(page_rel(i) for i in self.verified)})
         pages = [p for p in pages if (self.root / p).is_file()]
         if pages:
             report = lint(
@@ -536,6 +578,7 @@ class _Source:
         stage_commit(self.root, [*staged, MANIFEST], f"ingest: {self.out.title}")
         created = {i for i, a in self.planned.items() if a == "create"}
         updated = {i for i, a in self.planned.items() if a == "update"}
+        updated |= {i for i in self.verified if page_rel(i) in staged}
         (updated if self.src_existed else created).add(self.src_id)
         self.out.pages_created = sorted(created)
         self.out.pages_updated = sorted(updated - created)

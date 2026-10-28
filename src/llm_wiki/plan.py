@@ -8,6 +8,7 @@ import json
 import re
 import secrets
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -218,7 +219,21 @@ def validate_plan(
             manifest=manifest,
             allowed_updates=allowed_updates,
         )
+    planned = {p.id for p in plan.pages}
+    errors += [
+        err
+        for c in plan.contradictions
+        if (err := _contradiction_error(c.page_id, Path(root), planned))
+    ]
     return errors + _cap_errors(plan, Path(root), cfg, kinds, source)
+
+
+def _contradiction_error(id_: str, root: Path, planned: set[str]) -> str | None:
+    """Why a contradiction's ``page_id`` names no existing or planned page."""
+    grammar = _ID.fullmatch(id_) and (id_ in _TOP_LEVEL or id_.count(".") == 1)
+    if grammar and (id_ in planned or _page_file(root, id_).is_file()):
+        return None
+    return f"contradiction page_id {id_!r}: not an existing page or a planned id"
 
 
 # --- candidates and the plan prompt ---
@@ -557,13 +572,23 @@ def plan_source(
     return None, errors, cost
 
 
+def plan_strings(value: object) -> Iterator[str]:
+    """Every string in a dumped plan (``Plan.model_dump()``), depth first."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from plan_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from plan_strings(v)
+
+
 def screen_plan(plan: Plan) -> list[Hit]:
-    """Injection hits in the plan's own text, which an image source can smuggle."""
-    texts = [plan.source_title, plan.source_summary, *plan.open_questions]
-    for p in plan.pages:
-        texts += [p.title, p.summary, p.reason]
-        for c in p.claims:
-            texts += [c.text, c.locator]
-    for c in plan.contradictions:
-        texts += [c.existing, c.new, c.locator]
-    return [hit for text in texts for hit in find_injection(text)]
+    """Injection hits in the plan's own text, which an image source can smuggle.
+
+    Every string is screened, so a field added later cannot be missed.
+    """
+    return [
+        hit for text in plan_strings(plan.model_dump()) for hit in find_injection(text)
+    ]
