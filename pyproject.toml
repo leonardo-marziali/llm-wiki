@@ -5,7 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llm-wiki"
 dynamic = ["version"]
-description = "Deterministic core for an LLM-maintained wiki"
+description = "CLI that keeps small, capped, LLM-maintained wikis for coding agents"
+readme = "README.md"
+keywords = ["wiki", "llm", "claude", "knowledge-base", "coding-agents"]
 requires-python = ">=3.12"
 dependencies = [
     "typer~=0.27",

@@ -1,0 +1,62 @@
+# llm-wiki
+
+`wiki` keeps small, capped, LLM-maintained wikis that coding agents read. You
+drop source files (documents, slides, sheets, PDFs, images, notes) into a wiki;
+`wiki ingest` has headless Claude Code plan and write cited pages on a branch,
+and you accept or reject the result at one gate. Agents read the wiki through
+the read-only `wiki-lookup` skill, at no LLM cost.
+
+## Requirements
+
+- Python 3.12 or later
+- git, with `user.name` and `user.email` configured
+- [Claude Code](https://code.claude.com) logged in with a subscription
+  (`claude /login`); `wiki` never uses an API key
+
+## Install
+
+```sh
+pip install llm-wiki            # or: pip install 'llm-wiki[docling]'
+wiki doctor                     # checks claude, its flags, login and image input
+```
+
+## Quick start
+
+```sh
+wiki init ~/wikis/payments --description "Payments team conventions and architecture"
+cp design.docx diagram.png ~/wikis/payments/inbox/
+wiki ingest --wiki payments     # plan, write on a branch, then accept or reject
+wiki search "refund flow" --wiki payments
+wiki status --all
+wiki skill install              # the wiki-lookup skill, for every repo
+```
+
+A wiki is either its own git repo or a folder inside an existing repo. Wikis are
+found through `--wiki NAME|PATH`, the current directory, the registry
+(`$LLM_WIKI_HOME/wikis.toml`, written by `wiki init`) or `LLM_WIKI_PATH`, a
+list of wiki directories separated by the platform path separator. Running
+`wiki init` on an existing or cloned wiki only registers it.
+
+To make one repo prefer a wiki, run
+`wiki skill install --project <repo> --pointer --wiki <name>`. It writes a
+short marked block into `<repo>/CLAUDE.md`.
+
+## Commands
+
+| Command              | What it does                                                |
+| -------------------- | ----------------------------------------------------------- |
+| `wiki init`          | Create or register a wiki                                   |
+| `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate     |
+| `wiki search`        | Ranked page search for agents (`--format json`)             |
+| `wiki status`        | Usage against caps, stale pages, pending and quarantined    |
+| `wiki lint`          | Deterministic checks of pages, links, citations and caps    |
+| `wiki skill install` | Install the read-only `wiki-lookup` skill                   |
+| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation      |
+
+## Upgrading existing wikis
+
+`wiki init` writes a wiki's `AGENTS.md` (its rules for the model) once, and the
+tool never rewrites it. Wikis created by an older version keep their old rules.
+To pick up new rules, compare your `AGENTS.md` with the packaged template
+(`llm_wiki/templates/AGENTS.md` in the installed package) and copy the changes
+by hand, keeping your wiki's own name, description and sections table.

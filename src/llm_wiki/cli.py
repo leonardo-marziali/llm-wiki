@@ -57,7 +57,7 @@ def _root(
         help="Show the version and exit.",
     ),
 ) -> None:
-    """LLM-maintained wiki: deterministic core."""
+    """Small, capped, LLM-maintained wikis for coding agents."""
 
 
 @app.command()
