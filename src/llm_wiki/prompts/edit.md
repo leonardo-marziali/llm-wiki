@@ -38,6 +38,16 @@ under "Contradictions / open points" and add an entry to
 `wiki/open-questions.md`. Add the plan's open questions to
 `wiki/open-questions.md` too.
 
+## Deleted sources
+
+When the message says the source was deleted, there is nothing to read, and the
+plan's claims say what to do rather than text to write. On each allowed page,
+follow `AGENTS.md` "Updates, changed and deleted sources", rules 4 and 5: keep
+every claim that cites the deleted path inside a `> [!unverified]` block without
+footnotes, remove the path from `sources` with its footnote markers and
+definitions, lower `confidence`, and set the status the message gives. Never
+delete a page. Add the plan's open questions to `wiki/open-questions.md`.
+
 ## Repair
 
 When the message lists lint errors, this is a repair: fix exactly those errors

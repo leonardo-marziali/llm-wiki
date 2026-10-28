@@ -35,6 +35,7 @@ from llm_wiki.init import slug
 from llm_wiki.intake import (
     QUARANTINE_DIR,
     TMP_DIR,
+    Prepared,
     check_paths,
     copy_paths,
     intake_inbox,
@@ -307,6 +308,18 @@ def _fresh_branch(root: Path, name: str) -> str:
 # --- processing and finalize ---
 
 
+def _prepare(ctx: RunContext, item: _Item, undo: _Undo) -> Prepared:
+    root = Path(ctx.root)
+    prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
+    if prepared.status == "refused" and prepared.kind == "changed":
+        # the old version comes back; the refused one goes where the user
+        # sees it, and the next run retries it
+        dest = item.origin or root / "inbox" / Path(item.rel).relative_to("raw")
+        prepared.origin = _free(dest)
+        undo.own(prepared.origin.relative_to(root).as_posix())
+    return prepared
+
+
 def _process(
     ctx: RunContext, items: list[_Item], report: IngestReport, undo: _Undo
 ) -> None:
@@ -318,19 +331,13 @@ def _process(
             move_into_raw(root, item.origin, item.rel)
         if not needs_work(ctx.manifest, root, item.rel):
             continue  # an inbox copy of a source the wiki already holds
-        if not (root / item.rel).exists():
-            report.outcomes.append(process_deleted(ctx, item.rel))
-            continue
-        prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
-        redactions.update(prepared.redactions)
-        if prepared.status == "refused" and prepared.kind == "changed":
-            # the old version comes back; the refused one goes where the user
-            # sees it, and the next run retries it
-            dest = item.origin or root / "inbox" / Path(item.rel).relative_to("raw")
-            prepared.origin = _free(dest)
-            undo.own(prepared.origin.relative_to(root).as_posix())
         try:
-            out = process_source(ctx, prepared)
+            if (root / item.rel).exists():
+                prepared = _prepare(ctx, item, undo)
+                redactions.update(prepared.redactions)
+                out = process_source(ctx, prepared)
+            else:
+                out = process_deleted(ctx, item.rel)
         except STOP as exc:  # this source is rolled back; the rest stay pending
             report.outcomes.append(
                 SourceOutcome(

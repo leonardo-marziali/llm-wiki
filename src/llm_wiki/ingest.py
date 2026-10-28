@@ -7,6 +7,7 @@ limit, an auth failure or a missing CLI rolls back this source and stops the run
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -31,9 +32,9 @@ from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, source_slug, src_page_id
 from llm_wiki.lint import Finding, lint
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
-from llm_wiki.pages import SYSTEM_FILES, read_page
+from llm_wiki.pages import SOURCELESS_TYPES, SYSTEM_FILES, read_page
 from llm_wiki.plan import plan_source, screen_plan, system_prompt
-from llm_wiki.schemas import Plan
+from llm_wiki.schemas import Claim, PagePlan, Plan
 from llm_wiki.screen import Hit, quarantine
 
 OPEN_QUESTIONS = "wiki/open-questions.md"
@@ -42,6 +43,7 @@ SHORT_REVIEW_SECTIONS = {"conventions", "operations"}
 _TOP_LEVEL = {"overview", "glossary"}
 _FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all sources
 STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)
+DELETE_CLAIM = "source deleted: mark its claims unverified per AGENTS.md"
 
 OutcomeStatus = Literal["ingested", "quarantined", "failed", "refused", "deleted"]
 
@@ -179,6 +181,10 @@ def build_edit_prompt(
         "## Allowed files\n\nChange only these files:\n\n" + "\n".join(allowed),
         "## Plan\n\n```json\n" + plan.model_dump_json(indent=2) + "\n```",
     ]
+    return _with_repair(blocks, findings)
+
+
+def _with_repair(blocks: list[str], findings: list[Finding] | None) -> str:
     if findings:
         blocks.append(
             "## Lint errors to fix\n\n"
@@ -189,18 +195,122 @@ def build_edit_prompt(
     return "\n\n".join(blocks) + "\n"
 
 
+def deleted_plan(ctx: RunContext, rel: str) -> Plan | None:
+    """The plan for deleted source ``rel``, built without a plan call: each page
+    it backs as an update. None when no page file of it is left.
+
+    A page that loses its last source is planned ``deprecated`` (AGENTS.md
+    "Updates", rule 5); so is the source page.
+    """
+    root = Path(ctx.root)
+    src_id = src_page_id(ctx.cfg, rel)
+    pages: list[PagePlan] = []
+    for id_ in ctx.manifest.pages_for(rel):
+        path = root / page_rel(id_)
+        fm = read_page(root, path).fm if path.is_file() else None
+        if fm is None:  # a missing page needs no edit; lint reports a broken one
+            continue
+        others = [s for s in fm.sources if s.path != rel]
+        orphaned = (
+            len(others) < len(fm.sources)
+            and not others
+            and fm.type not in SOURCELESS_TYPES
+        )
+        pages.append(
+            PagePlan(
+                id=id_,
+                action="update",
+                type=fm.type,
+                status="deprecated" if orphaned or id_ == src_id else fm.status,
+                adr_status=fm.adr_status,
+                title=fm.title,
+                summary=fm.summary,
+                claims=[
+                    Claim(text=DELETE_CLAIM, source=rel, locator="", confidence="low")
+                ],
+                reason=f"its source {rel} was deleted",
+            )
+        )
+    if not pages:
+        return None
+    return Plan(
+        source_title=rel,
+        source_summary=f"{rel} was deleted from raw/.",
+        pages=pages,
+        contradictions=[],
+        open_questions=[f"{rel} was deleted; are its facts still valid?"],
+    )
+
+
+def build_delete_prompt(
+    ctx: RunContext,
+    rel: str,
+    plan: Plan,
+    findings: list[Finding] | None = None,
+) -> str:
+    """The edit session's stdin prompt for a deleted source: no source to read."""
+    root = Path(ctx.root)
+    today = ctx.today.isoformat()
+    src_id = src_page_id(ctx.cfg, rel)
+
+    def dates(id_: str) -> str:
+        after = review_after(id_, ctx.today).isoformat()
+        return f"last_verified: {today}, review_after: {after}"
+
+    allowed = [
+        f"- `{page_rel(p.id)}`: update `{p.id}`"
+        + (" (the source page)" if p.id == src_id else "")
+        + f"; status: {p.status}; {dates(p.id)}"
+        for p in plan.pages
+    ]
+    if src_id not in {p.id for p in plan.pages} and (root / page_rel(src_id)).is_file():
+        allowed.append(
+            f"- `{page_rel(src_id)}`: update `{src_id}` (the source page); "
+            f"status: deprecated; {dates(src_id)}"
+        )
+    allowed.append(f"- `{OPEN_QUESTIONS}`: append entries only")
+    blocks = [
+        f"Today is {today}.",
+        "\n".join(
+            [
+                "## Deleted source",
+                "",
+                f"- raw path: {rel} (deleted from raw/: there is nothing to read)",
+                (
+                    '- follow AGENTS.md "Updates, changed and deleted sources", '
+                    "rules 4 and 5, on every allowed page: keep each claim that "
+                    "cites this path inside `> [!unverified]` without footnotes, "
+                    "remove the path from `sources` and its footnote markers and "
+                    "definitions, lower `confidence`, and set the status given below"
+                ),
+            ]
+        ),
+        "## Allowed files\n\nChange only these files:\n\n" + "\n".join(allowed),
+        "## Plan\n\n```json\n" + plan.model_dump_json(indent=2) + "\n```",
+    ]
+    return _with_repair(blocks, findings)
+
+
 class _Source:
     """One ready source between its prep commit and its outcome."""
 
     def __init__(
-        self, ctx: RunContext, prepared: Prepared, out: SourceOutcome, prep: str
+        self,
+        ctx: RunContext,
+        prepared: Prepared,
+        out: SourceOutcome,
+        prep: str | None,
     ):
         self.ctx, self.prepared, self.out = ctx, prepared, out
-        self.prep = prep  # the prep commit's sha: the only commit ever amended
+        # the prep commit's sha: the only commit ever amended (None: no prep
+        # commit, as for a deleted source)
+        self.prep = prep
         self.root = Path(ctx.root)
         self.src_id = src_page_id(ctx.cfg, prepared.rel)
         self.src_existed = (self.root / page_rel(self.src_id)).is_file()
-        self.allowed = {page_rel(self.src_id), OPEN_QUESTIONS}
+        self.allowed = {OPEN_QUESTIONS}
+        if self.src_existed or prepared.kind != "deleted":  # never created then
+            self.allowed.add(page_rel(self.src_id))
         self.planned: dict[str, str] = {}  # id -> its first planned action
         self.reviewed: set[str] = set()  # ids whose page was reviewed before
         run_dir = Path(ctx.run_dir).resolve()
@@ -238,13 +348,25 @@ class _Source:
         hits = [] if trusted else screen_plan(plan)
         if hits:
             raise _Injected(hits)
-        self._record(plan)
         _, suffix = _part_info(prepared, part)
-        self._edit(build_edit_prompt(ctx, prepared, plan, part), suffix, "edit")
+        self.apply(
+            plan,
+            lambda found: build_edit_prompt(ctx, prepared, plan, part, found),
+            suffix,
+        )
+
+    def apply(
+        self,
+        plan: Plan,
+        prompt: Callable[[list[Finding] | None], str],
+        suffix: str,
+    ) -> None:
+        """The edit session, the post-check, then one repair of any lint errors."""
+        self._record(plan)
+        self._edit(prompt(None), suffix, "edit")
         errors_found = self._check()
         if errors_found:
-            prompt = build_edit_prompt(ctx, prepared, plan, part, errors_found)
-            self._edit(prompt, suffix, "repair")
+            self._edit(prompt(errors_found), suffix, "repair")
             errors_found = self._check()
         if errors_found:
             raise _Failed(
@@ -374,6 +496,21 @@ class _Source:
         )
         self.out.status = "ingested"
 
+    def commit_deleted(self) -> None:
+        """One commit: the edited pages, the raw file's deletion, the manifest."""
+        ctx, rel = self.ctx, self.prepared.rel
+        staged = [p for p in self._changed() if p in self.allowed]
+        ctx.manifest.mark_deleted(rel)
+        ctx.manifest.save(self.root)
+        stage_commit(self.root, [*staged, rel, MANIFEST], f"ingest(delete): {rel}")
+        self.out.pages_updated = sorted(
+            i for i in {*self.planned, self.src_id} if page_rel(i) in staged
+        )
+        self.out.reviewed_touched = sorted(
+            i for i in self.reviewed if page_rel(i) in staged
+        )
+        self.out.status = "deleted"
+
 
 def _set_status(ctx: RunContext, rel: str, **update) -> None:
     entry = ctx.manifest.entries[rel]
@@ -470,21 +607,34 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
 
 
 def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
-    """Record a source removed from raw/; its deletion is committed.
+    """Record a source removed from raw/, its deletion committed with the edit.
 
-    Pages that cite it need an edit session (marking their claims unverified),
-    which this version does not run yet: such a source fails and stays pending.
+    No plan call: ``deleted_plan`` lists the pages the source backs, and an edit
+    session marks their claims unverified (AGENTS.md "Updates", rules 4 and 5).
+    A failed edit rolls back and leaves the deletion pending for the next run.
     """
     root = Path(ctx.root)
     out = SourceOutcome(rel=rel, title=rel, status="deleted")
-    pages = ctx.manifest.pages_for(rel)
-    if pages:
-        out.status = "failed"
-        out.reason = "deleted source still backs pages: " + ", ".join(pages)
+    plan = deleted_plan(ctx, rel)
+    if plan is None:  # it backs no page: only the manifest and the log change
+        ctx.manifest.mark_deleted(rel)
+        ctx.manifest.save(root)
+        stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
         return out
-    ctx.manifest.mark_deleted(rel)
-    ctx.manifest.save(root)
-    stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
+    prepared = Prepared(rel=rel, sha=ctx.manifest.entries[rel].sha256, kind="deleted")
+    source = _Source(ctx, prepared, out, None)
+    try:
+        source.apply(plan, lambda found: build_delete_prompt(ctx, rel, plan, found), "")
+    except STOP as exc:
+        exc.cost_usd += out.cost_usd
+        source.undo()
+        raise
+    except (_Failed, ClaudeError) as exc:
+        out.cost_usd += getattr(exc, "cost_usd", 0.0)
+        source.undo()
+        out.status, out.reason = "failed", str(exc)
+        return out
+    source.commit_deleted()
     return out
 
 
@@ -537,6 +687,7 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
     """Roll back to the prep commit and record the source as failed in it."""
     source.undo()
     _set_status(ctx, source.prepared.rel, status="failed")
+    assert source.prep is not None
     stage_commit(
         Path(ctx.root),
         [MANIFEST],
