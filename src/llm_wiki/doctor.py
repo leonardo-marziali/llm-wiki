@@ -2,8 +2,10 @@
 
 import importlib.util
 import os
+import random
 import re
 import shutil
+import string
 import subprocess
 import tempfile
 import uuid
@@ -282,6 +284,68 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
     return Check(name, "ok", f"{model} replied (${result.cost_usd:.4f})")
 
 
+VISION_SCHEMA = {
+    "type": "object",
+    "properties": {"canary": {"type": "string"}},
+    "required": ["canary"],
+    "additionalProperties": False,
+}
+_VISION_SYSTEM = "You are a health check for the wiki CLI."
+_VISION_PROMPT = (
+    "The image shows one word in capital letters. Copy that word exactly into canary."
+)
+
+
+def _word_png(path: Path, word: str) -> None:
+    # Local imports keep PIL off the path of every other doctor run.
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (460, 140), "white")
+    font = ImageFont.load_default(size=64)
+    ImageDraw.Draw(img).text((20, 30), word, fill="black", font=font)
+    img.save(path)
+
+
+def probe_vision(settings: LlmSettings) -> Check:
+    name = "vision"
+    word = "".join(random.choices(string.ascii_uppercase, k=5))
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="llm-wiki-probe-", ignore_cleanup_errors=True
+        ) as tmp:
+            png = Path(tmp) / "word.png"
+            _word_png(png, word)
+            call = _probe_call(
+                make_call(
+                    "plan",
+                    settings,
+                    prompt=_VISION_PROMPT,
+                    system_prompt=_VISION_SYSTEM,
+                    json_schema=VISION_SCHEMA,
+                    images=(png,),
+                ),
+                "plan",
+                settings,
+            )
+            try:
+                result = run(call)
+            except ClaudeAuthError:
+                return Check(name, "fail", "not logged in: run `claude /login`")
+            except OSError as e:  # a spawn failure, not a temp-file one
+                return _spawn_fail(name, e)
+            except ClaudeSchemaError:
+                return Check(name, "fail", "structured output unsupported")
+            except ClaudeError as e:
+                return Check(name, "fail", str(e))
+    except OSError as e:
+        return _temp_fail(name, e)
+    if (result.structured or {}).get("canary") != word:
+        return Check(name, "fail", "images do not reach the plan call")
+    return Check(
+        name, "ok", f"{settings.model('plan')} read the image (${result.cost_usd:.4f})"
+    )
+
+
 def _denied(result: Result, path: Path) -> bool:
     """True if claude reports refusing a tool call that targeted path."""
     denials = result.raw.get("permission_denials")
@@ -368,4 +432,5 @@ def run_doctor(
                 roles.append(role)
         checks.extend(probe_model(r, settings) for r in roles)
         checks.append(probe_edit_confinement(settings))
+        checks.append(probe_vision(settings))
     return checks

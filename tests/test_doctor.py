@@ -14,6 +14,7 @@ from llm_wiki.doctor import (
     parse_version,
     probe_edit_confinement,
     probe_model,
+    probe_vision,
     run_doctor,
 )
 
@@ -272,18 +273,28 @@ def test_probe_model_usage_limit_fails_cleanly(fake_claude):
     assert "usage limit" in c.detail
 
 
-def test_probes_dedupe_models(fake_claude):
-    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
+def test_probes_dedupe_models(fake_claude, monkeypatch):
+    _vision_word(monkeypatch)
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK, VISION_RESP)
     checks = run_doctor(S, probe=True)
     names = [c.name for c in checks]
-    assert names[-3:] == [
+    assert names[-4:] == [
         f"model:{S.model('plan')}",
         f"model:{S.model('deep')}",
         "edit-confinement",
+        "vision",
     ]
-    assert len(fake_claude.calls()) == 3
+    assert len(fake_claude.calls()) == 4
+    assert {c.name: c.status for c in checks}["vision"] == "ok"
 
 
+def _vision_word(monkeypatch, word="KIWIS"):
+    """Pin the probe's random word, and what the fake 'reads' from the image."""
+    monkeypatch.setattr(doctor_mod.random, "choices", lambda pop, k: list(word))
+    monkeypatch.setenv("FAKE_CLAUDE_IMAGE_WORD", word)
+
+
+VISION_RESP = {"stdout": ok(structured={"canary": ""}), "echo_image_word": True}
 EDIT_OK = {"stdout": ok(), "write": {"inside.txt": "ok"}, "deny_abs_from_prompt": True}
 
 
@@ -437,7 +448,7 @@ def test_doctor_skips_probes_when_config_fails(fake_claude):
     # `config` row comes from the user config.
     user_config_file().parent.mkdir(parents=True, exist_ok=True)
     user_config_file().write_text("[llm\n", encoding="utf-8")
-    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK, VISION_RESP)
     res = _doctor()
     checks = _by_name(res)
     assert res.exit_code == 1
@@ -445,6 +456,7 @@ def test_doctor_skips_probes_when_config_fails(fake_claude):
     assert checks["claude"]["status"] == "ok"
     assert not [n for n in checks if n.startswith("model:")]
     assert "edit-confinement" not in checks
+    assert "vision" not in checks
     assert fake_claude.calls() == []
 
 
@@ -458,3 +470,76 @@ def test_doctor_oserror_label(fake_claude, monkeypatch):
         assert c.detail.startswith("cannot run claude: ")
         assert "Argument list too long" in c.detail
         assert "temp" not in c.detail
+
+
+def test_doctor_vision_probe_ok_and_fail(fake_claude, monkeypatch):
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    _vision_word(monkeypatch)
+    fake_claude.queue(VISION_RESP)
+    c = probe_vision(S)
+    assert (c.name, c.status) == ("vision", "ok")
+    (call,) = fake_claude.calls()
+    assert call["argv"][call["argv"].index("--max-budget-usd") + 1] == "0.25"
+    assert call["argv"][call["argv"].index("--tools") + 1] == ""
+    assert "--json-schema" in call["argv"]
+    block = call["stdin_message"]["message"]["content"][1]
+    with Image.open(BytesIO(base64.b64decode(block["source"]["data"]))) as im:
+        assert im.format in ("PNG", "JPEG")
+
+    fake_claude.queue(VISION_RESP)
+    monkeypatch.setenv("FAKE_CLAUDE_IMAGE_WORD", "WRONG")  # the model misreads it
+    c = probe_vision(S)
+    assert c.status == "fail"
+    assert "images do not reach the plan call" in c.detail
+
+
+def test_vision_probe_draws_a_random_five_letter_word(monkeypatch):
+    import llm_wiki.doctor as d
+
+    seen = []
+    monkeypatch.setattr(
+        d,
+        "run",
+        lambda call: seen.append(call) or (_ for _ in ()).throw(d.ClaudeError("x")),
+    )
+    c = probe_vision(S)
+    assert c.status == "fail" and c.detail == "x"
+    (call,) = seen
+    assert call.images and call.images[0].suffix == ".png"
+    assert (call.timeout_s, call.max_retries, call.role) == (120, 0, None)
+    assert call.tools == ()
+
+
+def test_vision_probe_failure_modes(fake_claude, monkeypatch):
+    import llm_wiki.doctor as d
+    from llm_wiki.errors import ClaudeAuthError
+
+    def boom(exc):
+        def _run(call):
+            raise exc
+
+        return _run
+
+    monkeypatch.setattr(d, "run", boom(ClaudeAuthError("x")))
+    assert "claude /login" in probe_vision(S).detail
+    monkeypatch.setattr(d, "run", boom(OSError(7, "Argument list too long")))
+    assert probe_vision(S).detail.startswith("cannot run claude: ")
+    monkeypatch.setattr(d, "run", boom(d.ClaudeSchemaError("x")))
+    assert probe_vision(S).status == "fail"
+
+
+def test_vision_probe_is_not_retried(fake_claude, monkeypatch):
+    _vision_word(monkeypatch)
+    fake_claude.queue(OVERLOADED, VISION_RESP)
+    assert probe_vision(S).status == "fail"
+    assert len(fake_claude.calls()) == 1
+
+
+def test_vision_probe_skipped_when_claude_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("LLM_WIKI_CLAUDE", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert "vision" not in [c.name for c in run_doctor(S, probe=True)]

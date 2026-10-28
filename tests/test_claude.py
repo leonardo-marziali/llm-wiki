@@ -24,6 +24,7 @@ from llm_wiki.errors import (
     ClaudeUsageLimit,
     WikiError,
 )
+from llm_wiki.images import prepare_for_vision
 
 
 def _call(role: Role = "plan", **kw):
@@ -565,3 +566,220 @@ def test_llm_wiki_claude_bare_name_resolved_via_path(fake_claude, monkeypatch):
     monkeypatch.setenv("PATH", str(fake_dir.parent))
     with pytest.raises(ClaudeNotInstalled, match="not found on PATH"):
         claude_binary()
+
+
+IMG_HEAD = [
+    "claude",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+]
+
+
+def _image_call(path, **kw):
+    return _call(images=(path,), **kw)
+
+
+def test_image_call_argv(tmp_path):
+    img = tmp_path / "a.png"
+    argv = build_argv(_image_call(img, json_schema={"a": 1}), "claude", Path("/s"))
+    assert argv[: len(IMG_HEAD)] == IMG_HEAD
+    # Everything after the output/input flags is the text-only argv, unchanged.
+    assert argv[len(IMG_HEAD) :] == [
+        *BASE[4:],
+        "--json-schema",
+        '{"a":1}',
+    ]
+    assert {a for a in argv if a.startswith("--")} <= set(REQUIRED_FLAGS)
+
+
+def test_text_only_call_unchanged():
+    assert build_argv(_call(), "claude", Path("/s")) == BASE
+    assert "--input-format" not in BASE and "--verbose" not in BASE
+
+
+def test_make_call_defaults_to_no_images():
+    assert _call().images == ()
+
+
+def test_image_call_stdin_is_stream_json(fake_claude, make_png, tmp_path):
+    import base64
+
+    src = make_png(tmp_path / "src.png", size=(300, 200))
+    fake_claude.queue({"stdout": ok(structured={"a": 1})})
+    run(_image_call(src, json_schema={"a": 1}))
+    (c,) = fake_claude.calls()
+    assert c["stdin"].count("\n") == 1 and c["stdin"].endswith("\n")
+    msg = c["stdin_message"]
+    assert msg["type"] == "user"
+    assert msg["message"]["role"] == "user"
+    text, image = msg["message"]["content"]
+    assert text == {"type": "text", "text": "P"}
+    assert image["type"] == "image"
+    assert image["source"]["type"] == "base64"
+    assert image["source"]["media_type"] == "image/png"
+    sent = base64.b64decode(image["source"]["data"])
+    assert sent.startswith(b"\x89PNG")
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(sent)) as im:
+        assert im.size == (300, 200)
+
+
+def test_image_temp_files_are_removed(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    fake_claude.queue({"stdout": ok()})
+    run(_call("edit", cwd=wiki, images=(src,)))
+    (c,) = fake_claude.calls()
+    assert c["cwd"] == str(wiki)
+    assert c["listdir"] == []  # prepared images never land in the model's cwd
+    assert list(wiki.iterdir()) == []
+    assert src.exists()
+
+
+def test_image_schema_retry_resends_images(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    fake_claude.queue({"stdout": ok()}, {"stdout": ok(structured={"a": 1})})
+    run(_image_call(src, json_schema={"a": 1}))
+    first, second = fake_claude.calls()
+    assert len(second["stdin_message"]["message"]["content"]) == 2
+    assert "did not match" in second["stdin_message"]["message"]["content"][0]["text"]
+    assert (
+        first["stdin_message"]["message"]["content"][1]
+        == (second["stdin_message"]["message"]["content"][1])
+    )
+
+
+def test_stream_output_last_result_line_parsed(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    fake_claude.queue(
+        {
+            "stdout_lines": [
+                {"type": "system", "subtype": "init"},
+                ok("early", cost=0.5),
+                {"type": "assistant", "message": {}},
+                ok("final", structured={"a": 1}, cost=0.02),
+            ]
+        }
+    )
+    res = run(_image_call(src, json_schema={"a": 1}))
+    assert res.text == "final"
+    assert res.structured == {"a": 1}
+    assert res.cost_usd == pytest.approx(0.02)
+
+
+def test_stream_output_without_result_is_transient(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    fake_claude.queue(
+        {"stdout_lines": [{"type": "system", "subtype": "init"}]},
+        {"stdout": ok("fine")},
+    )
+    res = run(_image_call(src), sleep=lambda s: None)
+    assert res.text == "fine"
+    assert len(fake_claude.calls()) == 2
+
+
+def test_stream_output_without_result_exhausts_retries(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    fake_claude.queue(*[{"stdout_lines": [{"type": "system"}]}] * 4)
+    with pytest.raises(ClaudeError):
+        run(_image_call(src), sleep=lambda s: None)
+    assert len(fake_claude.calls()) == 4
+
+
+def test_stream_error_result_is_classified(fake_claude, make_png, tmp_path):
+    src = make_png(tmp_path / "src.png")
+    fake_claude.queue(
+        {
+            "stdout_lines": [
+                {"type": "system"},
+                {
+                    "type": "result",
+                    "subtype": "error_max_budget_usd",
+                    "is_error": True,
+                    "total_cost_usd": 0.11,
+                },
+            ],
+            "exit": 1,
+        }
+    )
+    with pytest.raises(ClaudeBudgetExceeded) as ei:
+        run(_image_call(src))
+    assert ei.value.cost_usd == pytest.approx(0.11)
+
+
+def test_unreadable_image_is_refused(fake_claude, tmp_path):
+    from llm_wiki.errors import RefusedSource
+
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not an image")
+    with pytest.raises(RefusedSource):
+        run(_image_call(bad))
+    assert fake_claude.calls() == []
+
+
+def _noise(path, size, fmt):
+    import os
+
+    from PIL import Image
+
+    Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3)).save(path, fmt)
+    return path
+
+
+def test_prepare_for_vision_downscales_2000px_webp(tmp_path):
+    from PIL import Image, ImageDraw
+
+    src = tmp_path / "big.webp"
+    img = Image.new("RGB", (2000, 1000), "white")
+    ImageDraw.Draw(img).rectangle((100, 100, 900, 600), fill="black")
+    img.save(src, "WEBP")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    out = prepare_for_vision(src, out_dir)
+    assert out.parent == out_dir
+    with Image.open(out) as im:
+        assert im.format in ("PNG", "JPEG")
+        assert max(im.size) <= 1568
+        assert im.size == (1568, 784)
+    assert out.stat().st_size <= 3_750_000
+    assert src.exists()
+
+
+def test_prepare_for_vision_keeps_small_png_as_png(tmp_path):
+    from PIL import Image
+
+    src = _noise(tmp_path / "small.png", (100, 80), "PNG")
+    out = prepare_for_vision(src, tmp_path)
+    with Image.open(out) as im:
+        assert im.format == "PNG"
+        assert im.size == (100, 80)
+
+
+def test_prepare_for_vision_uses_jpeg_when_png_too_big(tmp_path):
+    from PIL import Image
+
+    src = _noise(tmp_path / "noise.png", (1600, 1200), "PNG")
+    out = prepare_for_vision(src, tmp_path)
+    with Image.open(out) as im:
+        assert im.format == "JPEG"
+        assert max(im.size) <= 1568
+    assert out.suffix == ".jpg"
+    assert out.stat().st_size <= 3_750_000
+
+
+def test_prepare_for_vision_keeps_alpha_png(tmp_path):
+    from PIL import Image
+
+    src = tmp_path / "alpha.png"
+    Image.new("RGBA", (40, 40), (0, 0, 0, 0)).save(src)
+    out = prepare_for_vision(src, tmp_path)
+    with Image.open(out) as im:
+        assert im.format == "PNG"

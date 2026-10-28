@@ -1,5 +1,7 @@
 """Headless `claude -p` runner. The only module that spells CLI flags."""
 
+import base64
+import contextlib
 import dataclasses
 import json
 import os
@@ -23,12 +25,15 @@ from llm_wiki.errors import (
     ClaudeSchemaError,
     ClaudeUsageLimit,
 )
+from llm_wiki.images import prepare_for_vision
 
 EDIT_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
 # Every flag build_argv can emit; `wiki doctor` checks them against `claude --help`.
 REQUIRED_FLAGS = (
     "--output-format",
+    "--input-format",
+    "--verbose",
     "--model",
     "--system-prompt-file",
     "--tools",
@@ -70,6 +75,7 @@ class Call:
     timeout_s: float = 600
     role: Role | None = None  # names the settings key in budget errors
     max_retries: int = 3  # transient retries; the one schema retry is separate
+    images: tuple[Path, ...] = ()  # raw files; `run` prepares them for the model
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,7 @@ def make_call(
     system_prompt: str,
     cwd: Path | None = None,
     json_schema: dict | None = None,
+    images: tuple[Path, ...] = (),
 ) -> Call:
     edit = role == "edit"
     # Edit sessions are never re-run: a half-applied edit is ingest's
@@ -106,6 +113,7 @@ def make_call(
         timeout_s=900 if edit else 300,
         role=role,
         max_retries=0 if edit else 3,
+        images=images,
     )
 
 
@@ -130,12 +138,23 @@ def claude_binary() -> str:
     return found
 
 
+# Images travel as stream-json blocks on stdin; its documented pairing is stream-json
+# output, which needs --verbose.
+_TEXT_IO = ("--output-format", "json")
+_IMAGE_IO = (
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+)
+
+
 def build_argv(call: Call, binary: str, system_prompt_file: Path) -> list[str]:
     argv = [
         binary,
         "-p",
-        "--output-format",
-        "json",
+        *(_IMAGE_IO if call.images else _TEXT_IO),
         "--model",
         call.model,
         "--system-prompt-file",
@@ -282,6 +301,37 @@ def _write_prompt_file(text: str) -> Path:
     return path
 
 
+_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _stdin_text(call: Call) -> str:
+    """The prompt, or for an image call one stream-json user message line."""
+    if not call.images:
+        return call.prompt
+    content: list[dict] = [{"type": "text", "text": call.prompt}]
+    for path in call.images:
+        media_type = _MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            raise ClaudeError(f"image was not prepared for the model: {path.name}")
+        try:
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            raise ClaudeError(f"cannot read image {path.name}: {exc}") from None
+        source = {"type": "base64", "media_type": media_type, "data": data}
+        content.append({"type": "image", "source": source})
+    message = {"type": "user", "message": {"role": "user", "content": content}}
+    return json.dumps(message, separators=(",", ":")) + "\n"
+
+
+def _final_result(stdout: str) -> str:
+    """The last `type: result` line of a stream-json stdout, or "" if there is none."""
+    for line in reversed(stdout.splitlines()):
+        data = _json_object(line)
+        if data is not None and data.get("type") == "result":
+            return line
+    return ""
+
+
 def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
     """One subprocess; None on timeout (subprocess.run has already killed the child)."""
     # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv
@@ -291,7 +341,7 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
         return subprocess.run(
             build_argv(call, binary, prompt_file),
             check=False,  # every exit code is classified by the caller
-            input=call.prompt,
+            input=_stdin_text(call),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -358,6 +408,10 @@ def _attempt(
     proc = _spawn(call, binary, cwd)
     if proc is None:
         return "transient", f"claude timed out after {call.timeout_s}s", 0.0, None
+    if call.images:  # stream-json: only the final result line is the reply
+        proc = subprocess.CompletedProcess(
+            proc.args, proc.returncode, _final_result(proc.stdout), proc.stderr
+        )
     data = _json_object(proc.stdout)
     cost = _num(data.get("total_cost_usd"), float, 0.0) if data else 0.0
     kind = classify(
@@ -415,17 +469,28 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
         raise
 
 
+def _temp_dir(stack: contextlib.ExitStack, prefix: str) -> Path:
+    try:
+        tmp = tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
+    except OSError as exc:
+        raise ClaudeError(f"cannot create a temp directory: {exc}") from None
+    return Path(stack.enter_context(tmp))
+
+
 def run(
     call: Call, *, binary: str | None = None, sleep=time.sleep, rand=random.random
 ) -> Result:
     binary = binary or claude_binary()
-    if call.cwd is not None:
-        return _execute(call, binary, call.cwd, sleep, rand)
-    try:
-        tmp = tempfile.TemporaryDirectory(
-            prefix="llm-wiki-", ignore_cleanup_errors=True
-        )
-    except OSError as exc:
-        raise ClaudeError(f"cannot create a temp directory: {exc}") from None
-    with tmp as path:  # plan calls see no files
-        return _execute(call, binary, Path(path), sleep, rand)
+    with contextlib.ExitStack() as stack:
+        if call.images:
+            # Prepared copies stay out of the cwd, which an edit call shows the model.
+            img_dir = _temp_dir(stack, "llm-wiki-img-")
+            try:
+                prepared = tuple(prepare_for_vision(p, img_dir) for p in call.images)
+            except OSError as exc:
+                raise ClaudeError(f"cannot prepare images: {exc}") from None
+            # Sonar types dataclasses.replace() as DataclassInstance; it returns a Call
+            call = dataclasses.replace(call, images=prepared)  # NOSONAR
+        # Plan calls see no files: a fresh empty temp dir.
+        cwd = call.cwd if call.cwd is not None else _temp_dir(stack, "llm-wiki-")
+        return _execute(call, binary, cwd, sleep, rand)

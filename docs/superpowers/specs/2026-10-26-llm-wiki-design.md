@@ -192,8 +192,9 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - xlsx sheets over 200×30: CSV plus a profile instead of inline tables.
    - PDF: MarkItDown first. If the text layer is thin (< 200 chars/page),
      escalate to Docling when installed; otherwise flag it "needs-vision".
-   - Images: no conversion; the plan call views them, and the resulting facts
-     are `confidence: low`.
+   - Images: no conversion; they are sent to the plan call as image blocks
+     (stream-json stdin; the plan call stays tool-less), and the resulting
+     facts are `confidence: low`.
    - Unknown types fail loudly.
 4. **Screen** (`screen.py`), on the converted text:
    - **Secrets:** the regex set (from kbpipe `secrets.py`, extended) plus
@@ -266,6 +267,18 @@ instead of hanging; `--restricted` confines edits to the cwd).
 
 - The prompt goes in on stdin. The plan call's cwd is an empty directory; the
   edit session's cwd is the wiki.
+- A call with images uses the stream-json variant. `--output-format json`
+  becomes `--output-format stream-json --verbose`, `--input-format stream-json`
+  follows it, and everything else is unchanged. stdin is then one JSON line,
+  `{"type":"user","message":{"role":"user","content":[{"type":"text",...},
+  {"type":"image","source":{"type":"base64","media_type":...,"data":...}}]}}`.
+  The runner reduces the stdout stream to its last `type:"result"` line (none
+  counts as a transient failure) and parses it as usual. Each image is first
+  downscaled to a long side of at most 1568 px and re-encoded as PNG, or as JPEG
+  (quality 85) when the PNG would exceed 3.75 MB. The copies live in a per-call
+  temp dir, outside the call's cwd, and are deleted afterwards. `wiki doctor`'s
+  `vision` probe checks that a random word drawn in a PNG comes back from a plan
+  call.
 - The child env strips API-key variables and disables auto memory
   (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`). `--bare` is never passed.
 - Error handling: transient errors get 3 jittered retries; usage limits pause
