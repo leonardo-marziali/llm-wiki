@@ -38,6 +38,8 @@ from llm_wiki.intake import (
     Prepared,
     check_paths,
     copy_paths,
+    free_path,
+    inbox_home,
     intake_inbox,
     move_into_raw,
     prepare_source,
@@ -191,15 +193,6 @@ class _Undo:
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(copy), dest)
-
-
-def _free(path: Path) -> Path:
-    """``path``, or ``<stem>-2<suffix>`` and so on when a file is there."""
-    out, n = path, 2
-    while out.exists():
-        out = path.with_name(f"{path.stem}-{n}{path.suffix}")
-        n += 1
-    return out
 
 
 # --- preflight ---
@@ -356,7 +349,7 @@ def _within_source_cap(
         if item.origin is not None:
             where = item.origin.relative_to(root).as_posix()
         elif item.made:
-            dest = _free(root / "inbox" / Path(item.rel).relative_to("raw"))
+            dest = inbox_home(root, item.rel)
             undo.own(dest.relative_to(root).as_posix())
             move_into_raw(root, root / item.rel, dest.relative_to(root).as_posix())
             where = dest.relative_to(root).as_posix()
@@ -388,11 +381,11 @@ def _fresh_branch(root: Path, name: str) -> str:
 def _prepare(ctx: RunContext, item: _Item, undo: _Undo) -> Prepared:
     root = Path(ctx.root)
     prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
-    if prepared.status == "refused" and prepared.kind == "changed":
-        # the old version comes back; the refused one goes where the user
-        # sees it, and the next run retries it
-        dest = item.origin or root / "inbox" / Path(item.rel).relative_to("raw")
-        prepared.origin = _free(dest)
+    if prepared.kind == "changed":
+        # a refused or failed new version goes back where the user sees it,
+        # the old version comes back, and the next run retries it (R13, R25)
+        origin = item.origin
+        prepared.origin = free_path(origin) if origin else inbox_home(root, item.rel)
         undo.own(prepared.origin.relative_to(root).as_posix())
     return prepared
 
@@ -416,12 +409,13 @@ def _process(
             else:
                 out = process_deleted(ctx, item.rel)
         except STOP as exc:  # this source is rolled back; the rest stay pending
+            notes = getattr(exc, "__notes__", [])  # e.g. where a new version went
             report.outcomes.append(
                 SourceOutcome(
                     rel=item.rel,
                     title=item.rel,
                     status="failed",
-                    reason=str(exc),
+                    reason="; ".join([str(exc), *notes]),
                     cost_usd=exc.cost_usd,
                 )
             )

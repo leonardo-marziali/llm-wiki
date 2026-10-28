@@ -696,3 +696,110 @@ def test_changed_source_skipped_verify_page_repaired_then_fails(wiki, fake_claud
     repair = fake_claude.calls()[2]["stdin"]
     assert f"`{BRANCHING}` sha-mismatch" in repair
     assert (wiki / BRANCHING).read_bytes() == before
+
+
+# --- R25: a failed changed source keeps its last ingested version ---
+
+INBOX_GUIDE = "inbox/docs/guide.md"
+
+
+def assert_last_version_kept(root, old_entry):
+    from llm_wiki.lint import lint
+
+    assert (root / RAW_REL).read_text(encoding="utf-8") == OLD_TEXT
+    assert Manifest.load(root).entries[RAW_REL] == old_entry
+    assert (root / INBOX_GUIDE).read_text(encoding="utf-8") == NEW_TEXT
+    assert gitops.changed_paths(root) == [INBOX_GUIDE]
+    report = lint(root, load_config(root), today=TODAY)
+    assert [f for f in report.findings if f.severity == "error"] == []
+
+
+def test_changed_source_skipped_page_keeps_main_lint_clean(wiki, fake_claude):
+    # the scratch reproduction: after the source fails, main still lints clean
+    with_branching_page(wiki)
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    fake_claude.queue(good, changed_edit(), edit({}))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert f"the new version is back at {INBOX_GUIDE}" in out.reason
+    assert f"the new version is back at {INBOX_GUIDE}" in report.summary
+    assert_last_version_kept(wiki, old_entry)
+
+
+def test_changed_source_plan_fail_open_keeps_last_version(wiki, fake_claude):
+    # the new version came through the inbox: it goes back there
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / INBOX_GUIDE).parent.mkdir(parents=True)
+    (wiki / INBOX_GUIDE).write_text(NEW_TEXT, encoding="utf-8")
+    fake_claude.queue(failing("plan boom", cost=0.1))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "plan boom" in out.reason
+    assert f"the new version is back at {INBOX_GUIDE}" in out.reason
+    assert_last_version_kept(wiki, old_entry)
+
+
+def test_changed_source_edit_failure_keeps_last_version(wiki, fake_claude):
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")  # edited in place
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    fake_claude.queue(good, failing("edit boom"))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "edit boom" in out.reason
+    assert_last_version_kept(wiki, old_entry)
+    again = ingest(wiki)  # the new version is picked up from the inbox again
+    assert [o.rel for o in again.outcomes] == [RAW_REL]
+
+
+def test_changed_source_usage_limit_keeps_last_version(wiki, fake_claude):
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    limit = {
+        "stdout": {**ok(cost=0.0), "is_error": True, "result": "usage limit reached"},
+        "exit": 1,
+    }
+    fake_claude.queue(good, limit)
+    report = ingest(wiki)
+    assert "usage limit" in report.stopped
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert f"the new version is back at {INBOX_GUIDE}" in out.reason
+    assert report.decision == "accept", report.summary
+    assert_last_version_kept(wiki, old_entry)
+
+
+@pytest.mark.parametrize("message", ["ingest: Guide", f"ingest(prep): {RAW_REL}"])
+def test_changed_source_git_error_keeps_last_version(
+    wiki, fake_claude, monkeypatch, message
+):
+    from llm_wiki import ingest as ingest_mod
+    from llm_wiki.errors import GitError
+
+    real = ingest_mod.stage_commit
+
+    def stage_commit(root, rels, msg, **kw):
+        if msg == message:
+            raise GitError("git commit: refused")
+        return real(root, rels, msg, **kw)
+
+    monkeypatch.setattr(ingest_mod, "stage_commit", stage_commit)
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    fake_claude.queue(good, changed_edit())
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "refused" in out.reason
+    assert_last_version_kept(wiki, old_entry)

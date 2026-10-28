@@ -26,7 +26,7 @@ from llm_wiki.gitops import (
     unstage,
 )
 from llm_wiki.init import REVIEW_DAYS
-from llm_wiki.intake import Prepared, source_slug, src_id_for
+from llm_wiki.intake import Prepared, inbox_home, source_slug, src_id_for
 from llm_wiki.lint import Finding, cited_paths, lint
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
@@ -667,6 +667,18 @@ def _quarantine_plan(
     return reason
 
 
+def _move_new_version(ctx: RunContext, prepared: Prepared) -> str:
+    """Move a failed changed source's new version from raw/ to its inbox origin
+    (default: ``inbox/<path under raw/>``); returns the reason's suffix.
+    """
+    root = Path(ctx.root)
+    dest = prepared.origin or inbox_home(root, prepared.rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(root / prepared.rel), dest)
+    where = dest.relative_to(root).as_posix()
+    return f"; kept the last ingested version; the new version is back at {where}"
+
+
 def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
     """Settle the tree for a quarantined or refused source; returns the reason.
 
@@ -774,9 +786,12 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
         prep = stage_commit(
             root, [rel, *outputs, MANIFEST], prep_message, allow_empty=True
         )
-    except WikiError as exc:  # no prep commit: the source stays pending in raw/
+    except WikiError as exc:  # no prep commit: a new source stays pending in raw/
         _drop_uncommitted(ctx, [rel, *outputs, MANIFEST], [*outputs, MANIFEST])
         out.status, out.reason = "failed", str(exc)
+        if prepared.kind == "changed" and exists_at(root, "HEAD", rel):
+            out.reason += _move_new_version(ctx, prepared)
+            restore(root, [rel])  # the last ingested version, as committed
         return out
     source = _Source(ctx, prepared, out, prep)
     try:
@@ -793,6 +808,9 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     except STOP as exc:
         exc.cost_usd += out.cost_usd
         _fail(ctx, source, str(exc))
+        kept = out.reason.removeprefix(str(exc)).removeprefix("; ")
+        if kept:
+            exc.add_note(kept)
         raise
     except (_Failed, WikiError) as exc:  # a ClaudeError, a GitError, a refused image
         out.cost_usd += getattr(exc, "cost_usd", 0.0)
@@ -801,18 +819,30 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
 
 
 def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
-    """Roll back to the prep commit and record the source as failed in it."""
+    """Roll back to the prep commit and record the source as failed in it.
+
+    A changed source gets its last ingested version back, raw file, conversion
+    and manifest entry, and its new version goes back to the inbox (R25): the
+    pages it backs keep valid citations. A new source stays, marked failed.
+    """
     source.undo()
     root = Path(ctx.root)
+    prepared, prep = source.prepared, source.prep
+    assert prep is not None and prepared.conversion is not None
     ctx.manifest.entries = Manifest.load(root).entries  # the prep commit's
-    _set_status(ctx, source.prepared.rel, status="failed")
-    assert source.prep is not None
-    stage_commit(
-        Path(ctx.root),
-        [MANIFEST],
-        f"ingest(prep): {source.prepared.rel}",
-        amend=source.prep,
-    )
+    rel, outputs = prepared.rel, prepared.conversion.outputs
+    old = _entry_at(root, f"{prep}^", rel) if prepared.kind == "changed" else None
+    if old is None:
+        _set_status(ctx, rel, status="failed")
+        stage_commit(root, [MANIFEST], f"ingest(prep): {rel}", amend=prep)
+    else:
+        reason += _move_new_version(ctx, prepared)
+        restore(root, [rel, *outputs], rev=f"{prep}^")
+        ctx.manifest.record(old)
+        ctx.manifest.save(root)
+        stage_commit(
+            root, [rel, *outputs, MANIFEST], f"ingest(prep): {rel}", amend=prep
+        )
     out = source.out
     out.status, out.reason = "failed", reason
     out.pages_created, out.pages_updated, out.reviewed_touched = [], [], []

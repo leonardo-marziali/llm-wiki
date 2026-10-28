@@ -47,7 +47,8 @@ class Prepared:
     rel: str  # the raw path
     sha: str
     kind: Kind
-    origin: Path | None = None  # where a refused changed version goes (absolute)
+    # where a changed version goes when it is refused or fails (absolute)
+    origin: Path | None = None
     conversion: Conversion | None = None
     parts: list[str] = field(default_factory=list)  # converted paths to plan in turn
     image: Path | None = None  # the raw image, sent to the plan call
@@ -158,6 +159,20 @@ def intake_inbox(root: Path) -> list[tuple[Path, str]]:
         (p, _unclaimed(Path(root), _raw_rel(p.relative_to(inbox).parts), claimed))
         for p in _visible_files(inbox)
     ]
+
+
+def free_path(path: Path) -> Path:
+    """``path``, or ``<stem>-2<suffix>`` and so on when a file is there."""
+    out, n = path, 2
+    while out.exists():
+        out = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        n += 1
+    return out
+
+
+def inbox_home(root: Path, rel: str) -> Path:
+    """A free inbox path for raw source ``rel``: ``inbox/<path under raw/>``."""
+    return free_path(Path(root) / "inbox" / Path(rel).relative_to("raw"))
 
 
 def move_into_raw(root: Path, src: Path, rel: str) -> None:
