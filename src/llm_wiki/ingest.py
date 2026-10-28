@@ -40,7 +40,7 @@ SHORT_REVIEW_DAYS = 60
 SHORT_REVIEW_SECTIONS = {"conventions", "operations"}
 _TOP_LEVEL = {"overview", "glossary"}
 _FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all sources
-_STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)
+STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)
 
 OutcomeStatus = Literal["ingested", "quarantined", "failed", "refused", "deleted"]
 
@@ -95,7 +95,7 @@ def review_after(id_: str, today: date) -> date:
     return today + timedelta(days=SHORT_REVIEW_DAYS if short else REVIEW_DAYS)
 
 
-def _is_page(rel: str) -> bool:
+def is_page(rel: str) -> bool:
     parts = rel.split("/")
     return (
         parts[0] == "wiki"
@@ -317,13 +317,13 @@ class _Source:
         strays = [p for p in changed if p not in self.allowed]
         self._revert(strays)
         self.out.reverted = sorted({*self.out.reverted, *strays})
-        wanted = sorted(p for p in self.allowed if _is_page(p))
+        wanted = sorted(p for p in self.allowed if is_page(p))
         findings = [
             Finding("error", "missing-page", p, "planned page was not written")
             for p in wanted
             if not (self.root / p).is_file()
         ]
-        pages = [p for p in changed if p in self.allowed and _is_page(p)]
+        pages = [p for p in changed if p in self.allowed and is_page(p)]
         pages = [p for p in pages if (self.root / p).is_file()]
         if pages:
             report = lint(
@@ -380,10 +380,10 @@ def _set_status(ctx: RunContext, rel: str, **update) -> None:
     ctx.manifest.save(Path(ctx.root))
 
 
-def _entry_before(root: Path, prep: str, rel: str) -> SourceEntry | None:
-    """``rel``'s manifest entry before the prep commit, when its raw file was there."""
-    text = show_text(root, f"{prep}^", MANIFEST)
-    if text is None or not exists_at(root, f"{prep}^", rel):
+def _entry_at(root: Path, rev: str, rel: str) -> SourceEntry | None:
+    """``rel``'s manifest entry in commit ``rev``, when its raw file was there."""
+    text = show_text(root, rev, MANIFEST)
+    if text is None or not exists_at(root, rev, rel):
         return None
     try:
         data = json.loads(text)["sources"][rel]
@@ -404,7 +404,7 @@ def _quarantine_plan(
     root, rel = Path(ctx.root), prepared.rel
     assert prepared.conversion is not None
     reason = "plan-text injection: " + ", ".join(sorted({h.kind for h in hits}))
-    old = _entry_before(root, prep, rel) if prepared.kind == "changed" else None
+    old = _entry_at(root, f"{prep}^", rel) if prepared.kind == "changed" else None
     record: dict = {
         "source": rel,
         "sha256": prepared.sha,
@@ -432,6 +432,53 @@ def _quarantine_plan(
     return reason
 
 
+def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
+    """Settle the tree for a quarantined or refused source; returns the reason.
+
+    A changed source gets its last ingested version back, raw file and manifest
+    entry, so the pages it backs keep valid citations. A new refused source is
+    kept in raw/ flagged ``refused``: it is retried only once its file changes.
+    """
+    root, rel = Path(ctx.root), prepared.rel
+    old = _entry_at(root, "HEAD", rel) if prepared.kind == "changed" else None
+    if old is not None:
+        restore(root, [rel])
+        ctx.manifest.record(old)
+        if prepared.held is not None:  # the reason file records the restore
+            reason_file = prepared.held.with_name(prepared.held.name + ".reason.json")
+            record = json.loads(reason_file.read_text(encoding="utf-8"))
+            record["restored_sha256"] = old.sha256
+            reason_file.write_text(
+                json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        ctx.manifest.save(root)
+        return prepared.reason + "; kept the last ingested version"
+    if prepared.status == "refused":
+        entry = ctx.manifest.entries[rel]
+        flags = [*entry.flags, *(["refused"] if "refused" not in entry.flags else [])]
+        _set_status(ctx, rel, flags=flags)
+    return prepared.reason
+
+
+def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
+    """Record a source removed from raw/; its deletion is committed.
+
+    Pages that cite it need an edit session (marking their claims unverified),
+    which this version does not run yet: such a source fails and stays pending.
+    """
+    root = Path(ctx.root)
+    out = SourceOutcome(rel=rel, title=rel, status="deleted")
+    pages = ctx.manifest.pages_for(rel)
+    if pages:
+        out.status = "failed"
+        out.reason = "deleted source still backs pages: " + ", ".join(pages)
+        return out
+    ctx.manifest.mark_deleted(rel)
+    ctx.manifest.save(root)
+    stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
+    return out
+
+
 def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     """Ingest one prepared source on the checked-out branch.
 
@@ -443,8 +490,8 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
     if prepared.status != "ready":  # screened out or refused: record it, no LLM
-        stage_commit(root, [MANIFEST], prep_message, allow_empty=True)
-        out.status, out.reason = prepared.status, prepared.reason
+        out.status, out.reason = prepared.status, _record_unready(ctx, prepared)
+        stage_commit(root, [rel, MANIFEST], prep_message, allow_empty=True)
         return out
     assert prepared.conversion is not None
     # always a commit of its own: a later amend can never rewrite another commit
@@ -465,7 +512,7 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
             _quarantine_plan(ctx, prepared, exc.hits, prep),
         )
         return out
-    except _STOP as exc:
+    except STOP as exc:
         exc.cost_usd += out.cost_usd
         _fail(ctx, source, str(exc))
         raise

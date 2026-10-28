@@ -52,6 +52,7 @@ class Prepared:
     redactions: dict[str, int] = field(default_factory=dict)
     status: Literal["ready", "quarantined", "refused"] = "ready"
     reason: str = ""
+    held: Path | None = None  # where quarantine put the raw file
 
 
 def source_slug(rel: str) -> str:
@@ -178,7 +179,11 @@ def write_note(root: Path, text: str, today: date) -> str:
 
 
 def trust(root: Path, name: str) -> str:
-    """Release a quarantined source back to its raw path, flagged ``trusted``."""
+    """Release a quarantined source back to its raw path, flagged ``trusted``.
+
+    A raw file at that path (the last ingested version of a changed source)
+    is overwritten: git keeps the old version, and the source is then changed.
+    """
     root = Path(root)
     qdir = root / QUARANTINE_DIR
     name = name.removesuffix(_REASON)
@@ -200,8 +205,8 @@ def trust(root: Path, name: str) -> str:
     if not isinstance(rel, str) or not rel.startswith("raw/") or ".." in rel:
         raise WikiError(f"{reason_file.name} records no raw path")
     dest = root / rel
-    if dest.exists():
-        raise WikiError(f"{rel} exists again; remove it before trusting {name}")
+    if dest.is_dir():
+        raise WikiError(f"{rel} is a folder; remove it before trusting {name}")
     manifest = Manifest.load(root)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(held), dest)
@@ -213,6 +218,8 @@ def trust(root: Path, name: str) -> str:
         entry.model_copy(
             update={
                 "status": "new",
+                # pages built from the last ingested version make it a change
+                "supersedes_sha": _last_ingested_sha(entry),
                 "flags": _merged_flags(entry.flags, ["trusted"]),
                 "converted": [],
             }
@@ -352,7 +359,7 @@ def prepare_source(
     why, reason = _quarantine_reason(trusted, cfg.strict_secrets, counts, hits, leaks)
     prepared.redactions = dict(counts)
     if reason:
-        quarantine(
+        prepared.held = quarantine(
             root,
             raw_path,
             {"source": rel, "sha256": sha, "kind": why, "reason": reason, "hits": hits},

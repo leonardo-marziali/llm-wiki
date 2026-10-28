@@ -218,3 +218,32 @@ def delete_branch(root: Path, branch: str) -> None:
 
 def ff_merge(root: Path, branch: str) -> None:
     git(root, "merge", "-q", "--ff-only", branch)
+
+
+def branch_exists(root: Path, branch: str) -> bool:
+    try:
+        git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}")
+    except GitError:
+        return False
+    return True
+
+
+def staged_paths(root: Path) -> list[str]:
+    """Paths staged anywhere in the repository, relative to its toplevel."""
+    top, _ = _scope(root)
+    out = git(top, "diff", "--cached", "--name-only", "-z")
+    return [p for p in out.split("\0") if p]
+
+
+def changed_since(root: Path, rev: str) -> list[str]:
+    """The wiki's files that differ between commit ``rev`` and HEAD."""
+    top, prefix = _scope(root)
+    out = _pgit(
+        top, "diff", "--name-only", "-z", "--no-renames", rev, "HEAD", "--", prefix
+    )
+    paths = [p for p in out.split("\0") if p]
+    return sorted(p if prefix == "." else p.removeprefix(prefix + "/") for p in paths)
+
+
+def reset_soft(root: Path, rev: str) -> None:
+    git(root, "reset", "-q", "--soft", rev)

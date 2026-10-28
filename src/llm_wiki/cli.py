@@ -294,5 +294,48 @@ def doctor(
         raise typer.Exit(1)
 
 
+@app.command()
+def ingest(
+    paths: list[Path] | None = typer.Argument(
+        None, help="Files or folders to copy into raw/ and ingest."
+    ),
+    note: str | None = typer.Option(
+        None,
+        "--note",
+        help="Save this text as raw/notes/<date>-<slug>.md and ingest it.",
+    ),
+    trust: str | None = typer.Option(
+        None,
+        "--trust",
+        help="Release this quarantined file (an injection false positive).",
+    ),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+    yes: bool = typer.Option(
+        False, "--yes", help="Accept without asking when lint passes."
+    ),
+) -> None:
+    """Ingest the inbox, new paths and every new, changed or deleted raw source,
+    on a branch, then accept or reject the result at one gate.
+    """
+    from llm_wiki import registry
+    from llm_wiki.ingest_run import run_ingest
+
+    ref = registry.resolve(wiki, Path.cwd())
+    try:
+        report = run_ingest(
+            ref,
+            paths=paths or None,
+            note=note,
+            trust=trust,
+            yes=yes,
+            interactive=sys.stdin.isatty(),
+        )
+    except KeyboardInterrupt:
+        typer.echo("interrupted: the ingest was rolled back", err=True)
+        raise typer.Exit(130) from None
+    if report.exit_code:
+        raise typer.Exit(report.exit_code)
+
+
 def main() -> None:
     app()

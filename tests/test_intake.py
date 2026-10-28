@@ -396,3 +396,23 @@ def test_inbox_dedupe_never_takes_an_unrelated_raw_path(root):
     write(root, "raw/a-b.md", "existing")
     # an exact same-name match is still a changed source
     assert [rel for _, rel in intake_inbox(root)] == ["raw/a-b.md", "raw/a-b-3.md"]
+
+
+def test_trust_overwrites_an_existing_raw_path_as_changed(root):
+    # R16: a quarantined new version of an ingested source replaces the raw file
+    m = Manifest.load(root)
+    old_sha = m.entries[RAW_REL].sha256
+    qdir = root / ".wiki" / "quarantine"
+    write(root, ".wiki/quarantine/guide.md", INJECTION)
+    reason = {"source": RAW_REL, "sha256": "0" * 64, "kind": "injection"}
+    (qdir / "guide.md.reason.json").write_text(json.dumps(reason), encoding="utf-8")
+    assert trust(root, "guide.md") == RAW_REL
+    assert (root / RAW_REL).read_text(encoding="utf-8") == INJECTION
+    assert not list(qdir.iterdir())
+    m = Manifest.load(root)
+    entry = m.entries[RAW_REL]
+    assert "trusted" in entry.flags
+    assert entry.supersedes_sha == old_sha
+    p = prep(root, RAW_REL, manifest=m)
+    assert (p.status, p.kind) == ("ready", "changed")
+    assert m.entries[RAW_REL].supersedes_sha == old_sha
