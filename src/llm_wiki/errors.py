@@ -51,3 +51,7 @@ class ClaudeBudgetExceeded(ClaudeError):
 
 class ClaudeSchemaError(ClaudeError):
     pass
+
+
+# the errors that stop an ingest run: no later call can succeed
+STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)

@@ -533,3 +533,14 @@ def test_agents_md_annotated_screenshot_row(tmp_path):
         "| Annotated screenshot (numbered markers) | The numbered steps in marker "
         "order, each with the UI element and action |"
     ) in text
+
+
+def test_init_empty_clone_on_master_commits_to_main(tmp_path):
+    # m3: an empty clone's unborn branch (here master) becomes main, which
+    # ingest requires
+    root = tmp_path / "w"
+    root.mkdir()
+    gitops.git(root, "init", "-q", "-b", "master")
+    init_wiki(root, today=TODAY)
+    assert gitops.current_branch(root) == "main"
+    assert gitops.git(root, "branch", "--format=%(refname:short)").split() == ["main"]

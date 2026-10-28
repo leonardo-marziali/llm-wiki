@@ -16,12 +16,7 @@ from typing import Literal
 
 from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
-from llm_wiki.errors import (
-    ClaudeAuthError,
-    ClaudeNotInstalled,
-    ClaudeUsageLimit,
-    WikiError,
-)
+from llm_wiki.errors import STOP, WikiError
 from llm_wiki.gitops import (
     changed_paths,
     exists_at,
@@ -44,7 +39,6 @@ SHORT_REVIEW_DAYS = 60
 SHORT_REVIEW_SECTIONS = {"conventions", "operations"}
 _TOP_LEVEL = {"overview", "glossary"}
 _FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all sources
-STOP = (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled)
 DELETE_CLAIM = "source deleted: mark its claims unverified per AGENTS.md"
 VERIFY = (
     "update its sha256 for this source to the new value and refresh "
@@ -359,10 +353,11 @@ class _Source:
             else None
         )
         # what was already uncommitted (e.g. inbox files of later sources), with
-        # its bytes so a stray edit to it can be undone; None: it was missing
+        # its bytes so a stray edit to it can be undone; None: it was missing.
+        # Gitignored files count too: a stray may hide there (m6)
         self.baseline = {
             p: _content(self.root / p)
-            for p in changed_paths(self.root)
+            for p in changed_paths(self.root, ignored=True)
             if not _under(p, self.run_rel)
         }
 
@@ -377,6 +372,7 @@ class _Source:
             ctx.today,
             ctx.run_dir,
             manifest=ctx.manifest,
+            also_allowed=set(self.planned),  # pages earlier parts planned
         )
         self.out.cost_usd += cost
         if plan is None:
@@ -474,7 +470,7 @@ class _Source:
         """Paths changed since the prep commit, beyond what was uncommitted then."""
         now = {
             p
-            for p in changed_paths(self.root)
+            for p in changed_paths(self.root, ignored=True)
             if p not in self.baseline and not _under(p, self.run_rel)
         }
         now |= {
@@ -498,10 +494,15 @@ class _Source:
                 path.write_bytes(data)
 
     def _check(self) -> list[Finding]:
-        """Revert stray changes, then the errors on the changed and planned pages."""
-        changed = self._changed()
+        """Revert stray changes, then the errors on the changed and planned pages.
+
+        A changed .gitignore goes back first, so it cannot hide a stray.
+        """
+        ignores = [p for p in self._changed() if Path(p).name == ".gitignore"]
+        self._revert(ignores)
+        changed = sorted({*self._changed(), *ignores})
         strays = [p for p in changed if p not in self.allowed]
-        self._revert(strays)
+        self._revert([p for p in strays if p not in ignores])
         self.out.reverted = sorted({*self.out.reverted, *strays})
         wanted = sorted(p for p in self.allowed if is_page(p))
         findings = [

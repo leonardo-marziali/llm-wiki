@@ -275,6 +275,10 @@ def init_wiki(
         if host_repo is None:
             if not empty_clone:
                 gitops.init_repo(root)
+            elif not gitops.has_commits(root):
+                # an empty clone keeps the remote's unborn branch name (e.g.
+                # master); ingest runs on main
+                gitops.git(root, "symbolic-ref", "HEAD", "refs/heads/main")
             gitops.commit_all(root, f"chore: init wiki {name}")
     except BaseException:
         _clean(root, created_top, empty_clone)

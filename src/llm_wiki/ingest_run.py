@@ -63,6 +63,16 @@ _LOG_OP = {
 _MAX_TITLES = 5
 _HINT = "run `wiki consolidate` or start a new wiki"
 _UNVERIFIED = re.compile(r"^\s*>\s*\[!unverified\]", re.IGNORECASE | re.MULTILINE)
+# terminal escapes: CSI, OSC (with its payload) and the two-character ones
+_ESCAPE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]?"
+)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _plain(text: str) -> str:
+    """``text`` without terminal escapes; other control characters become spaces."""
+    return _CONTROL.sub(" ", _ESCAPE.sub("", text))
 
 
 @dataclass
@@ -146,17 +156,29 @@ class _Undo:
         return rel in self.owned or not rel.startswith(_DIRT_OK)
 
     def rollback(self, base: str, branch: str | None) -> None:
+        """Every step runs even when an earlier one fails; the first error then
+        propagates, and the held copies' index stays for a rollback by hand.
+        """
         root = self.root
-        dirty = [p for p in gitops.changed_paths(root) if self._ours(p)]
-        # a gitignored file is reset only when the run owns it
-        dirty += [
-            p for p in gitops.changed_paths(root, ignored=True) if p in self.owned
-        ]
-        gitops.restore(root, dirty)  # nothing the run left half-done survives
-        if branch is not None:
-            if gitops.current_branch(root) != base:
-                gitops.switch(root, base)
-            gitops.delete_branch(root, branch)
+        try:
+            dirty = [p for p in gitops.changed_paths(root) if self._ours(p)]
+            # a gitignored file is reset only when the run owns it
+            ignored = gitops.changed_paths(root, ignored=True)
+            dirty += [p for p in ignored if p in self.owned]
+            gitops.restore(root, dirty)  # nothing the run left half-done survives
+        finally:
+            try:
+                if branch is not None:
+                    if gitops.current_branch(root) != base:
+                        gitops.switch(root, base)
+                    gitops.delete_branch(root, branch)
+            finally:
+                self._put_back()
+        self.discard()
+
+    def _put_back(self) -> None:
+        """Drop the run's quarantine entries; move the held copies back."""
+        root = self.root
         qdir = root / QUARANTINE_DIR
         if qdir.is_dir():
             for p in qdir.iterdir():
@@ -169,7 +191,6 @@ class _Undo:
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(copy), dest)
-        self.discard()
 
 
 def _free(path: Path) -> Path:
@@ -415,7 +436,7 @@ def _process(
 def _log_lines(outcomes: list[SourceOutcome], today: date) -> list[str]:
     lines = []
     for o in outcomes:
-        text = " ".join(o.title.split()) if o.status == "ingested" else o.rel
+        text = " ".join(_plain(o.title).split()) if o.status == "ingested" else o.rel
         lines.append(f"## [{today.isoformat()}] {_LOG_OP[o.status]} | {text or o.rel}")
     return lines
 
@@ -459,7 +480,7 @@ def _page_stats(root: Path, pages: list[str], report: IngestReport) -> None:
 
 def _squash_message(outcomes: list[SourceOutcome]) -> str:
     n = len(outcomes)
-    titles = [" ".join(o.title.split()) for o in outcomes]
+    titles = [" ".join(_plain(o.title).split()) for o in outcomes]
     if len(titles) > _MAX_TITLES:
         titles = [*titles[:_MAX_TITLES], "…"]
     noun = "source" if n == 1 else "sources"
@@ -503,13 +524,17 @@ def summarize(report: IngestReport) -> str:
         lines.append(f"reverted: {', '.join(reverted)}")
     n = len(report.lint_errors)
     lines.append(f"lint: {n} error{'' if n == 1 else 's'}")
-    lines += [f"  {f.code} {f.path}: {f.message}" for f in report.lint_errors]
+    lines += [
+        f"  {f.code} {f.path}: {f.message}" if f.path else f"  {f.code}: {f.message}"
+        for f in report.lint_errors
+    ]
     if report.stopped:
         lines.append(
             f"stopped early: {report.stopped}; the remaining sources stay pending"
         )
     lines.append(f"cost ${report.cost_usd:.2f}")
-    return "\n".join(lines)
+    # titles, reasons and findings carry model text: never a terminal escape
+    return "\n".join(_plain(line) for line in lines)
 
 
 def _show_diff(root: Path, base: str, branch: str) -> None:
@@ -582,10 +607,13 @@ def run_ingest(
     interactive: bool,
     today: date | None = None,
     decide: Callable[[str], Decision] | None = None,
+    confirm: Callable[[str], bool] | None = None,
 ) -> IngestReport:
     """Ingest every pending source of the wiki on a branch, then gate it.
 
-    Everything that can refuse the run does so before any paid call.
+    Everything that can refuse the run does so before any paid call. An
+    interactive accept of a run whose lint failed asks ``confirm`` once more
+    (default: no).
     """
     root = Path(ref.path)
     cfg: WikiConfig = load_config(root)
@@ -632,6 +660,12 @@ def run_ingest(
             gate = decide or _prompt_decide(root, base, report.branch)
             # anything but an explicit accept rejects
             accepted = gate(report.summary) == "accept"
+            if accepted and report.lint_errors:
+                n = len(report.lint_errors)
+                ask = confirm or (lambda q: typer.confirm(q, default=False))
+                accepted = ask(
+                    f"lint has {n} error{'' if n == 1 else 's'}; accept anyway?"
+                )
             report.decision = "accept" if accepted else "reject"
     except BaseException:  # Ctrl-C or a crash: the wiki goes back as it was
         _rollback(undo, base, report.branch)

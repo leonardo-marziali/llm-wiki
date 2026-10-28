@@ -781,3 +781,57 @@ def test_image_edit_prompt_reads_no_raw_file(wiki, make_png):
     reads = prompt.split("- read:\n", 1)[1].split("\n\n", 1)[0]
     assert "raw/" not in reads
     assert prepared.parts[0] in reads
+
+
+def test_split_changed_source_updates_a_page_an_earlier_part_created(wiki, fake_claude):
+    # m1: part 2 of a changed source may update the page part 1 created
+    cfg = load_config(wiki).model_copy(update={"caps": {"split_chars": 600}})
+    (wiki / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
+    gitops.commit_all(wiki, "small parts")
+    ctx = context(wiki)
+    body = "Always rebase before merging. " * 10
+    prepared = prepare(ctx, rel=RAW_REL, text=f"# One\n\n{body}\n\n# Two\n\n{body}\n")
+    assert prepared.kind == "changed"
+    assert len(prepared.parts) == 2
+    ctx.manifest.save(wiki)
+    part1 = plan(plan_page(claims=[claim(RAW_REL, locator="#p1 §1")]))
+    part2 = plan(plan_page(action="update", claims=[claim(RAW_REL, locator="#p2")]))
+    src = src_page(wiki, RAW_REL, "docs-guide-md")
+    fake_claude.queue(
+        planned(part1),
+        edit(
+            {PAGE: good_page(wiki, RAW_REL), SRC.replace("docs-new", "docs-guide"): src}
+        ),
+        planned(part2),
+        edit({PAGE: good_page(wiki, RAW_REL) + "\nMore.\n"}),
+    )
+    out = process_source(ctx, prepared)
+    assert out.status == "ingested", out.reason
+    assert [is_edit(c) for c in fake_claude.calls()] == [False, True, False, True]
+
+
+def test_postcheck_reverts_ignored_and_gitignore_strays(wiki, fake_claude):
+    # m6: a gitignored stray is seen, and a .gitignore edit cannot hide one
+    ctx = context(wiki)
+    (wiki / ".wiki" / "tmp").mkdir(parents=True, exist_ok=True)
+    held = wiki / ".wiki" / "tmp" / "held.txt"  # ignored, there before the edit
+    held.write_text("kept\n", encoding="utf-8")
+    prepared = prepare(ctx)
+    ctx.manifest.save(wiki)
+    gitignore = (wiki / ".gitignore").read_text(encoding="utf-8")
+    stray = {
+        ".env.local": "TOKEN=x\n",  # ignored by the init .gitignore
+        ".gitignore": gitignore + "wiki/concepts/hidden.md\n",
+        "wiki/concepts/hidden.md": "# Hidden\n",
+    }
+    fake_claude.queue(
+        planned(plan()), edit({PAGE: good_page(wiki), SRC: src_page(wiki), **stray})
+    )
+    out = process_source(ctx, prepared)
+    assert out.status == "ingested", out.reason
+    assert out.reverted == [".env.local", ".gitignore", "wiki/concepts/hidden.md"]
+    assert not (wiki / ".env.local").exists()
+    assert not (wiki / "wiki" / "concepts" / "hidden.md").exists()
+    assert (wiki / ".gitignore").read_text(encoding="utf-8") == gitignore
+    assert held.read_text(encoding="utf-8") == "kept\n"
+    assert (ctx.run_dir).is_dir()  # the run's own (ignored) files stay

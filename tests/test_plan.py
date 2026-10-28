@@ -699,3 +699,17 @@ def test_image_plan_with_high_confidence_retried(
     assert p is not None and errors == []
     _first, second = fake_claude.calls()
     assert "confidence" in second["stdin_message"]["message"]["content"][0]["text"]
+
+
+def test_stop_errors_defined_once():
+    # m9: the errors that stop a run come from one place
+    from llm_wiki import errors, ingest
+    from llm_wiki import plan as plan_mod
+
+    assert plan_mod.STOP is errors.STOP
+    assert ingest.STOP is errors.STOP
+    assert set(errors.STOP) == {
+        errors.ClaudeUsageLimit,
+        errors.ClaudeAuthError,
+        errors.ClaudeNotInstalled,
+    }

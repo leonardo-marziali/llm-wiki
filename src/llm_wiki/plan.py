@@ -17,13 +17,7 @@ from pydantic import ValidationError
 
 from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
-from llm_wiki.errors import (
-    ClaudeAuthError,
-    ClaudeError,
-    ClaudeNotInstalled,
-    ClaudeUsageLimit,
-    ConfigError,
-)
+from llm_wiki.errors import STOP, ClaudeError, ConfigError
 from llm_wiki.init import sections_table
 from llm_wiki.intake import Prepared, source_slug, src_id_for, src_page_id
 from llm_wiki.lint import routing_error
@@ -526,8 +520,12 @@ def plan_source(
     run_dir: Path,
     *,
     manifest: Manifest | None = None,
+    also_allowed: set[str] | None = None,
 ) -> tuple[Plan | None, list[str], float]:
     """Plan one part of a prepared source: (plan, errors, cost).
+
+    ``also_allowed`` holds the pages earlier parts of a changed source planned:
+    a later part may update them too.
 
     An invalid plan is retried once with its errors appended; a second invalid
     plan, or a failed call, fails open as (None, errors, cost). Usage-limit, auth
@@ -542,6 +540,7 @@ def plan_source(
     old_text, pages_for, allowed = None, None, None
     if prepared.kind == "changed":
         pages_for = manifest.pages_for(prepared.rel)
+        pages_for += sorted((also_allowed or set()) - set(pages_for))
         allowed = set(pages_for)
         old_text = _old_text(root, manifest, prepared.rel)
     images = (prepared.image,) if prepared.image is not None else ()
@@ -570,7 +569,7 @@ def plan_source(
         )
         try:
             result = claude.run(call)
-        except (ClaudeUsageLimit, ClaudeAuthError, ClaudeNotInstalled) as exc:
+        except STOP as exc:
             exc.cost_usd += cost
             raise
         except ClaudeError as exc:

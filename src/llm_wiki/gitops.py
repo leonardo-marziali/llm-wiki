@@ -30,6 +30,15 @@ def init_repo(root: Path) -> None:
     git(root, "init", "-b", "main")
 
 
+def has_commits(root: Path) -> bool:
+    """True when HEAD points at a commit (False on an unborn branch)."""
+    try:
+        git(root, "rev-parse", "--verify", "-q", "HEAD")
+    except GitError:
+        return False
+    return True
+
+
 def commit_all(root: Path, message: str) -> str:
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", message)
@@ -216,7 +225,9 @@ def switch(root: Path, branch: str, create: bool = False) -> None:
 
 
 def delete_branch(root: Path, branch: str) -> None:
-    git(root, "branch", "-q", "-D", branch)
+    """Delete ``branch``; a branch that does not exist is no error."""
+    if branch_exists(root, branch):
+        git(root, "branch", "-q", "-D", branch)
 
 
 def unstage(root: Path, rels: list[str]) -> None:

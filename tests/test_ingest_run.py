@@ -1140,3 +1140,100 @@ def test_refused_image_fails_only_that_source(wiki, fake_claude, monkeypatch, ma
     statuses = {o.rel: (o.status, o.reason) for o in report.outcomes}
     assert statuses["raw/a.png"] == ("failed", "unreadable image: a.png")
     assert statuses["raw/b.md"][0] == "ingested"
+
+
+def _lint_failing_run(wiki, fake_claude):
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new-md")
+    e["write"]["wiki/open-questions.md"] = "# Open questions\n\n- [x](nope.md)\n"
+    fake_claude.queue(p, e)
+
+
+@pytest.mark.parametrize(("answer", "decision"), [(False, "reject"), (True, "accept")])
+def test_interactive_accept_with_lint_errors_asks_again(
+    wiki, fake_claude, answer, decision
+):
+    # m2: accepting a run whose lint failed takes a second, default-no answer
+    _lint_failing_run(wiki, fake_claude)
+    asked = []
+
+    def confirm(question):
+        asked.append(question)
+        return answer
+
+    report = ingest(
+        wiki, yes=False, interactive=True, decide=lambda s: "accept", confirm=confirm
+    )
+    assert asked == ["lint has 1 error; accept anyway?"]
+    assert report.decision == decision
+    assert report.exit_code == 0
+    assert branches(wiki) == ["main"]
+
+
+def test_interactive_clean_accept_asks_once(wiki, fake_claude):
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
+    asked = []
+    report = ingest(
+        wiki,
+        yes=False,
+        interactive=True,
+        decide=lambda s: "accept",
+        confirm=lambda q: asked.append(q) or False,
+    )
+    assert report.decision == "accept"
+    assert asked == []
+
+
+def test_delete_branch_missing_is_a_noop(wiki):
+    # m5
+    gitops.delete_branch(wiki, "wiki/ingest-never-made")
+    assert branches(wiki) == ["main"]
+
+
+def test_rollback_goes_on_after_a_failed_step(wiki, fake_claude, monkeypatch):
+    # m5: a failing first step still leaves base checked out, the branch gone
+    # and the inbox files back; the error then propagates
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
+    from llm_wiki import ingest_run
+    from llm_wiki.errors import GitError
+
+    def restore(root, rels, rev="HEAD"):
+        raise GitError("git checkout: disk on fire")
+
+    monkeypatch.setattr(ingest_run.gitops, "restore", restore)
+    with pytest.raises(GitError):
+        ingest(wiki, yes=False, interactive=True, decide=lambda s: "reject")
+    assert gitops.current_branch(wiki) == "main"
+    assert branches(wiki) == ["main"]
+    assert inbox_files(wiki) == ["inbox/new.md"]
+
+
+def test_model_text_stripped_of_control_characters(wiki, fake_claude):
+    # m7: a title from the model cannot drive the terminal or log.md
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    evil = "\x1b[2J\x1b]0;pwned\x07New\x1b[31m guide\x1b[0m\x08\x7f"
+    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new-md")
+    p["stdout"]["structured_output"]["source_title"] = evil
+    fake_claude.queue(p, e)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    log = (wiki / "wiki" / "log.md").read_text(encoding="utf-8")
+    for text in (report.summary, log, subjects(wiki)[0]):
+        assert not any((ord(c) < 32 and c != "\n") or 127 <= ord(c) < 160 for c in text)
+        assert "pwned" not in text
+    assert "ingested    raw/new.md: New guide" in report.summary
+    assert "ingest | New guide\n" in log
+
+
+def test_wiki_wide_lint_finding_prints_without_empty_path():
+    from llm_wiki.ingest_run import IngestReport, summarize
+    from llm_wiki.lint import Finding
+
+    report = IngestReport(decision="accept", base="main", branch="b")
+    report.lint_errors = [
+        Finding("error", "cap-sources", "", "2 sources exceeds the cap of 1")
+    ]
+    summary = summarize(report)
+    assert "  cap-sources: 2 sources exceeds the cap of 1" in summary.splitlines()
