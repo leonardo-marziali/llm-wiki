@@ -14,7 +14,8 @@
       "source": {
         "source": "github",
         "repo": "leonardo-marziali/agentic-development-kit"
-      }
+      },
+      "autoUpdate": true
     }
   }
 }
