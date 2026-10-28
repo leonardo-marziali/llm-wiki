@@ -406,6 +406,11 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
 4. **Lookup skill + packaging:** `wiki skill install`; build the wheel and
    install it in a clean venv, where `wiki doctor` passes; run 5 evaluation
    questions from an unrelated repo.
+   _Done 2026-10-28: the wheel installs in a fresh venv and `wiki doctor`
+   passes there. From an unrelated repo, Claude Code with the skill answered 4
+   questions with [AS-IS] labels and raw citations, reading 1 page each, and
+   said "not in wiki" for the fifth, for about $0.35 in total. A headless run
+   needs `Skill(wiki-lookup)` allowed; an interactive one asks once._
 5. **Maintenance:** `lint --deep/--fix`, `consolidate`, cap-reached behaviour.
 6. **Real use:** ingest 5–10 real sources one at a time; tune the prompts.
 

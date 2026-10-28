@@ -32,6 +32,10 @@ under `<wiki>/raw/`. Read pages; never write, edit or move anything in a wiki.
 4. Read at most 5 pages in total. Read each page's frontmatter and **TL;DR**
    first; read further only when the TL;DR does not answer the question.
 
+Run each `wiki` command as its own Bash call, with no `;`, `&&` or pipes, and
+read files with the Read tool, not `cat` or `grep`: only those calls are
+pre-approved.
+
 ## Answering
 
 - Label every fact `[AS-IS]` (page `status: as-is`: true now) or `[TO-BE]`

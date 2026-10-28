@@ -33,25 +33,30 @@ wiki skill install              # the wiki-lookup skill, for every repo
 
 A wiki is either its own git repo or a folder inside an existing repo. Wikis are
 found through `--wiki NAME|PATH`, the current directory, the registry
-(`$LLM_WIKI_HOME/wikis.toml`, written by `wiki init`) or `LLM_WIKI_PATH`, a
-list of wiki directories separated by the platform path separator. Running
+(`$LLM_WIKI_HOME/wikis.toml`, written by `wiki init`) or `LLM_WIKI_PATH`, a list
+of wiki directories separated by the platform path separator. Running
 `wiki init` on an existing or cloned wiki only registers it.
 
+Claude Code asks once before it runs the skill. Once you approve, the skill's
+own `allowed-tools` cover `wiki status`, `wiki search` and reading pages. To
+skip the prompt, for example in headless `claude -p` runs, add
+`"Skill(wiki-lookup)"` to `permissions.allow` in your Claude Code settings.
+
 To make one repo prefer a wiki, run
-`wiki skill install --project <repo> --pointer --wiki <name>`. It writes a
-short marked block into `<repo>/CLAUDE.md`.
+`wiki skill install --project <repo> --pointer --wiki <name>`. It writes a short
+marked block into `<repo>/CLAUDE.md`.
 
 ## Commands
 
-| Command              | What it does                                                |
-| -------------------- | ----------------------------------------------------------- |
-| `wiki init`          | Create or register a wiki                                   |
-| `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate     |
-| `wiki search`        | Ranked page search for agents (`--format json`)             |
-| `wiki status`        | Usage against caps, stale pages, pending and quarantined    |
-| `wiki lint`          | Deterministic checks of pages, links, citations and caps    |
-| `wiki skill install` | Install the read-only `wiki-lookup` skill                   |
-| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation      |
+| Command              | What it does                                             |
+| -------------------- | -------------------------------------------------------- |
+| `wiki init`          | Create or register a wiki                                |
+| `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate  |
+| `wiki search`        | Ranked page search for agents (`--format json`)          |
+| `wiki status`        | Usage against caps, stale pages, pending and quarantined |
+| `wiki lint`          | Deterministic checks of pages, links, citations and caps |
+| `wiki skill install` | Install the read-only `wiki-lookup` skill                |
+| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation   |
 
 ## Upgrading existing wikis
 
