@@ -184,13 +184,35 @@ def test_e2e_m3_fixture_batch(
         for p in base.rglob("*"):
             if p.is_file():
                 assert SECRET not in p.read_text(encoding="utf-8", errors="ignore"), p
-    # Every non-quarantined source made it through.
-    assert sum(1 for e in m.entries.values() if e.status == "ingested") >= len(batch)
+    # Only the injection is quarantined; the secret source is ingested, redacted.
+    statuses = {Path(p).name: e.status for p, e in m.entries.items()}
+    assert statuses == {
+        **{name: "ingested" for name, _ in batch},
+        "g-injection.md": "quarantined",
+    }
+    assert not (root / "raw" / "g-injection.md").exists()
+    # raw/ keeps the original bytes by design; the wiki's history must not.
+    assert SECRET not in gitops.git(root, "log", "--all", "-p", "--", "wiki")
+    converted = [p for p in (root / ".wiki" / "converted").rglob("*") if p.is_file()]
+    assert all(
+        "Ignore all previous" not in p.read_text("utf-8", "ignore") for p in converted
+    )
+    secret_sha = _sha(root / "raw" / "f-secret.md")  # converted files are named by sha
+    secret_out = [p for p in converted if p.name.startswith(secret_sha)]
+    assert secret_out
+    text = "".join(p.read_text(encoding="utf-8") for p in secret_out)
+    assert "‹REDACTED:" in text and SECRET not in text
+
+    # The contradiction page keeps both claims; the open question was appended.
+    releases = (root / "wiki/concepts/releases.md").read_text(encoding="utf-8")
+    assert CLAIM_A in releases and CLAIM_B in releases
+    oq = (root / "wiki/open-questions.md").read_text(encoding="utf-8")
+    assert "Which day do releases ship?" in oq
 
     assert runner.invoke(app, ["lint"]).exit_code == 0
     status = runner.invoke(app, ["status"])
     assert status.exit_code == 0, status.output
-    assert "sources" in status.output
+    assert f"sources {len(batch) + 1}/" in status.output
 
     again = runner.invoke(app, ["ingest", "--yes"])
     assert again.exit_code == 0, again.output
