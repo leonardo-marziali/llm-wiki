@@ -17,7 +17,7 @@ AGENTS = "# Acme: wiki rules\n\nFollow the rules.\n"
 NEW_REL = "raw/docs/new.md"
 NEW_TEXT = "# New\n\nAlways rebase before merging.\n"
 PAGE = "wiki/concepts/branching.md"
-SRC = "wiki/sources/src-docs-new.md"
+SRC = "wiki/sources/src-docs-new-md.md"
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def good_page(root, rel=NEW_REL, id_="concepts.branching", title="Branching"):
     )
 
 
-def src_page(root, rel=NEW_REL, slug="docs-new"):
+def src_page(root, rel=NEW_REL, slug="docs-new-md"):
     body = (
         "# New guide\n\n**TL;DR** A new doc.\n\n"
         f"The guide says to rebase.[^1]\n\n[^1]: {rel} — §1\n"
@@ -137,7 +137,7 @@ def test_source_ingested_and_committed(wiki, fake_claude):
     out = process_source(ctx, prepared)
     assert out.status == "ingested", out.reason
     assert out.title == "New guide"
-    assert out.pages_created == ["concepts.branching", "sources.src-docs-new"]
+    assert out.pages_created == ["concepts.branching", "sources.src-docs-new-md"]
     assert out.pages_updated == []
     assert out.reverted == []
     assert out.cost_usd == pytest.approx(0.15)
@@ -154,7 +154,7 @@ def test_source_ingested_and_committed(wiki, fake_claude):
     assert any(f.startswith(".wiki/converted/") for f in prep_files)
     entry = Manifest.load(wiki).entries[NEW_REL]
     assert entry.status == "ingested"
-    assert entry.pages_touched == ["concepts.branching", "sources.src-docs-new"]
+    assert entry.pages_touched == ["concepts.branching", "sources.src-docs-new-md"]
     assert entry.last_ingested == TODAY
     assert entry.converter == "text"
     assert gitops.changed_paths(wiki) == []
@@ -346,7 +346,7 @@ def test_edit_claude_error_rolls_back_and_continues(wiki, fake_claude):
     ctx.manifest.save(wiki)
     pages = {
         PAGE: good_page(wiki, other),
-        "wiki/sources/src-docs-other.md": src_page(wiki, other, "docs-other"),
+        "wiki/sources/src-docs-other-md.md": src_page(wiki, other, "docs-other-md"),
     }
     other_plan = plan(plan_page(claims=[claim(other)]), title="Other")
     fake_claude.queue(planned(other_plan), edit(pages))
@@ -406,7 +406,7 @@ def test_large_source_parts_planned_in_turn(wiki, fake_claude):
     assert prepared.parts[0] in calls[1]["stdin"]
     assert prepared.parts[1] not in calls[1]["stdin"]
     assert prepared.parts[1] in calls[3]["stdin"]
-    assert out.pages_created == ["concepts.branching", "sources.src-docs-new"]
+    assert out.pages_created == ["concepts.branching", "sources.src-docs-new-md"]
     assert out.pages_updated == []  # created by part 1, so not "updated"
     assert out.open_questions == 1
     assert subjects(wiki)[0] == "ingest: New guide"  # one commit for both parts
@@ -473,7 +473,7 @@ def test_reviewed_page_touch_reported(wiki, fake_claude):
     out = process_source(ctx, prepared)
     assert out.status == "ingested", out.reason
     assert out.pages_updated == ["conventions.git-flow"]
-    assert out.pages_created == ["sources.src-docs-new"]
+    assert out.pages_created == ["sources.src-docs-new-md"]
     assert out.reviewed_touched == ["conventions.git-flow"]
 
 

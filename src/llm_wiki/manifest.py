@@ -51,6 +51,7 @@ class SourceEntry(BaseModel):
     supersedes_sha: str | None = None
     flags: list[str] = []
     redactions: dict[str, int] = {}
+    src_page: str | None = None  # the id of its src- page, fixed once assigned
 
 
 @dataclass

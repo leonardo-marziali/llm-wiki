@@ -239,8 +239,11 @@ def test_image_source_points_at_raw_file(root, make_png):
 
 def test_src_page_id(root):
     cfg = load_config(root)
-    assert src_page_id(cfg, RAW_REL) == "sources.src-docs-guide"
-    assert src_page_id(cfg, "raw/My Notes/A B.md") == "sources.src-my-notes-a-b"
+    assert src_page_id(cfg, RAW_REL) == "sources.src-docs-guide-md"
+    assert src_page_id(cfg, "raw/My Notes/A B.md") == "sources.src-my-notes-a-b-md"
+    # R22: the extension is part of the slug
+    assert src_page_id(cfg, "raw/design.pdf") == "sources.src-design-pdf"
+    assert src_page_id(cfg, "raw/design.docx") == "sources.src-design-docx"
 
 
 # ---- fix round 1 ----
@@ -438,3 +441,46 @@ def test_copy_paths_reports_each_raw_path_before_creating_it(root, tmp_path):
     out = copy_paths(root, [tmp_path / "out/a.md", tmp_path / "out/b.md"], owned)
     assert out == ["raw/a.md", "raw/b.md"]
     assert seen == [("raw/a.md", False), ("raw/b.md", False)]
+
+
+# ---- final-review fix wave ----
+
+
+def test_same_stem_sources_get_distinct_src_pages(root):
+    # I3 / R22: raw/design.docx and raw/design.pdf never share a src page
+    cfg, m = load_config(root), Manifest.load(root)
+    write(root, "raw/design.md", "# Design\n")
+    write(root, "raw/design.txt", "Design notes.\n")
+    prep(root, "raw/design.md", cfg, m)
+    prep(root, "raw/design.txt", cfg, m)
+    assert m.entries["raw/design.md"].src_page == "sources.src-design-md"
+    assert m.entries["raw/design.txt"].src_page == "sources.src-design-txt"
+
+
+def test_colliding_src_slugs_numbered_and_stable(root):
+    # residual collisions ('/' and '-' both become '-') get -2 against the manifest
+    cfg, m = load_config(root), Manifest.load(root)
+    write(root, "raw/docs-my/guide.md", "# One\n")
+    write(root, "raw/docs/my-guide.md", "# Two\n")
+    prep(root, "raw/docs-my/guide.md", cfg, m)
+    prep(root, "raw/docs/my-guide.md", cfg, m)
+    first = m.entries["raw/docs-my/guide.md"].src_page
+    second = m.entries["raw/docs/my-guide.md"].src_page
+    assert first == "sources.src-docs-my-guide-md"
+    assert second == "sources.src-docs-my-guide-md-2"
+    m.save(root)
+    # stable across runs: a changed version keeps its recorded id
+    write(root, "raw/docs/my-guide.md", "# Two, changed\n")
+    again = Manifest.load(root)
+    prep(root, "raw/docs/my-guide.md", cfg, again)
+    assert again.entries["raw/docs/my-guide.md"].src_page == second
+    # and the first source keeps its own when it changes too
+    write(root, "raw/docs-my/guide.md", "# One, changed\n")
+    prep(root, "raw/docs-my/guide.md", cfg, again)
+    assert again.entries["raw/docs-my/guide.md"].src_page == first
+
+
+def test_src_page_field_is_optional(root):
+    # an older manifest without src_page still loads
+    m = Manifest.load(root)
+    assert m.entries[RAW_REL].src_page is None

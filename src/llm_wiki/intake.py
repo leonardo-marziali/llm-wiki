@@ -64,9 +64,39 @@ def source_slug(rel: str) -> str:
 
 
 def src_page_id(cfg: WikiConfig, rel: str) -> str:
-    """The id of the tool-written summary page of raw source ``rel``."""
+    """The base id of the tool-written summary page of raw source ``rel``.
+
+    The extension is part of the slug (R22): ``raw/design.pdf`` ->
+    ``sources.src-design-pdf``. ``src_id_for`` gives the id actually in use.
+    """
     section = next((s.name for s in cfg.sections if s.kind == "sources"), "sources")
-    return f"{section}.src-{source_slug(rel)}"
+    return f"{section}.src-{slug(Path(rel).relative_to('raw').as_posix())}"
+
+
+def src_id_for(cfg: WikiConfig, manifest: Manifest, rel: str) -> str:
+    """The src page id of ``rel``: the one its manifest entry records, else the
+    base id.
+    """
+    entry = manifest.entries.get(rel)
+    if entry is not None and entry.src_page:
+        return entry.src_page
+    return src_page_id(cfg, rel)
+
+
+def _assign_src_page(cfg: WikiConfig, manifest: Manifest, rel: str) -> str:
+    """``rel``'s recorded src page id, or a new one: the base id, with ``-2``,
+    ``-3``, … when another manifest entry already owns it.
+    """
+    entry = manifest.entries.get(rel)
+    if entry is not None and entry.src_page:
+        return entry.src_page
+    taken = {src_id_for(cfg, manifest, p) for p in manifest.entries if p != rel}
+    base = src_page_id(cfg, rel)
+    out, n = base, 2
+    while out in taken:
+        out = f"{base}-{n}"
+        n += 1
+    return out
 
 
 def _file_name(name: str) -> str:
@@ -272,6 +302,7 @@ def _entry(
         pages_touched=list(old.pages_touched) if old else [],
         status="new",
         flags=[f for f in (old.flags if old else []) if f in _KEPT_FLAGS],
+        src_page=old.src_page if old else None,
     )
 
 
@@ -365,7 +396,11 @@ def prepare_source(
     old = manifest.entries.get(rel)
     kind, supersedes = _kind(old)
     entry = _entry(root, rel, sha, old, today).model_copy(
-        update={"status": kind, "supersedes_sha": supersedes}
+        update={
+            "status": kind,
+            "supersedes_sha": supersedes,
+            "src_page": _assign_src_page(cfg, manifest, rel),
+        }
     )
     prepared = Prepared(rel=rel, sha=sha, kind=kind)
     try:

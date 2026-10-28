@@ -21,8 +21,8 @@ AGENTS = "# Acme: wiki rules\n\nFollow the rules.\n"
 OLD_TEXT = "# Guide\n\nAlways branch from main.\n"  # make_wiki's raw source
 NEW_TEXT = "# Guide\n\nAlways rebase before merging.\n"
 GIT_FLOW = "wiki/conventions/git-flow.md"
-SRC = "wiki/sources/src-docs-guide.md"
-SRC_ID = "sources.src-docs-guide"
+SRC = "wiki/sources/src-docs-guide-md.md"
+SRC_ID = "sources.src-docs-guide-md"
 OPEN_QUESTION = f"{RAW_REL} was deleted; are its facts still valid?"
 DELETE_CLAIM = "source deleted: mark its claims unverified per AGENTS.md"
 
@@ -366,7 +366,7 @@ def test_failed_source_retried_next_run(wiki, fake_claude):
         f"# A\n\n**TL;DR** A doc.\n\nThe doc says to squash.[^1]\n\n[^1]: {rel} — §1\n"
     )
     new_src = page_text(
-        "sources.src-a",
+        "sources.src-a-md",
         "A",
         src_body,
         type_="source-summary",
@@ -380,7 +380,10 @@ def test_failed_source_retried_next_run(wiki, fake_claude):
     fake_claude.queue(
         planned(plan(create)),
         edit(
-            {"wiki/concepts/squashing.md": new_page, "wiki/sources/src-a.md": new_src}
+            {
+                "wiki/concepts/squashing.md": new_page,
+                "wiki/sources/src-a-md.md": new_src,
+            }
         ),
     )
     second = ingest(wiki)
@@ -389,7 +392,7 @@ def test_failed_source_retried_next_run(wiki, fake_claude):
     assert "Always squash." in fake_claude.calls()[1]["stdin"]  # planned again
     entry = Manifest.load(wiki).entries[rel]
     assert entry.status == "ingested"
-    assert entry.pages_touched == ["concepts.squashing", "sources.src-a"]
+    assert entry.pages_touched == ["concepts.squashing", "sources.src-a-md"]
 
 
 def test_deleted_source_usage_limit_stops_run_and_stays_pending(wiki, fake_claude):

@@ -124,7 +124,7 @@ def test_e2e_m3_fixture_batch(
     for name, id_ in batch:
         rel = f"raw/{name}"
         digest = _sha(inbox / name)
-        slug = Path(name).stem
+        slug = name.replace(".", "-")  # R22: the extension is in the slug
         if name == "i-release-two.md":
             plan = _plan(
                 _page_plan(rel, id_, CLAIM_B, action="update"),

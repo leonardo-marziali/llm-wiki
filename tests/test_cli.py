@@ -80,7 +80,7 @@ def test_cli_ingest_yes_exit_codes(tmp_path, make_wiki, fake_claude):
     assert fake_claude.calls() == []
 
     # a broken link in open-questions.md fails finalize's lint: --yes rejects, exit 1
-    plan, edit = ingest_responses("raw/new.md", "# New\n\nRebase.\n", "new")
+    plan, edit = ingest_responses("raw/new.md", "# New\n\nRebase.\n", "new-md")
     edit["write"]["wiki/open-questions.md"] = "# Open questions\n\n- [x](nope.md)\n"
     fake_claude.queue(plan, edit)
     r = runner.invoke(app, ["ingest", "--wiki", str(root), "--yes"])

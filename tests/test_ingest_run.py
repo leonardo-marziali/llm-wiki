@@ -188,7 +188,7 @@ def test_noop_ingest_nothing_to_do(wiki, fake_claude, capsys):
 
 def test_inbox_ingest_accept(wiki, fake_claude, capsys):
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     report = ingest(wiki)
     assert report.decision == "accept", capsys.readouterr().out
     assert report.exit_code == 0
@@ -199,7 +199,7 @@ def test_inbox_ingest_accept(wiki, fake_claude, capsys):
     assert gitops.current_branch(wiki) == "main"
     assert branches(wiki) == ["main"]
     assert (wiki / PAGE).is_file()
-    assert (wiki / "wiki/sources/src-new.md").is_file()
+    assert (wiki / "wiki/sources/src-new-md.md").is_file()
     assert subjects(wiki) == ["wiki ingest: 1 source (New guide)", "init"]
     assert gitops.changed_paths(wiki) == []
     log = (wiki / "wiki" / "log.md").read_text(encoding="utf-8")
@@ -209,9 +209,9 @@ def test_inbox_ingest_accept(wiki, fake_claude, capsys):
     ).read_text(encoding="utf-8")
     entry = Manifest.load(wiki).entries["raw/new.md"]
     assert entry.status == "ingested"
-    assert entry.pages_touched == ["concepts.branching", "sources.src-new"]
+    assert entry.pages_touched == ["concepts.branching", "sources.src-new-md"]
     out = capsys.readouterr().out
-    assert "created: concepts.branching, sources.src-new" in out
+    assert "created: concepts.branching, sources.src-new-md" in out
     assert "cost $0.15" in out
     assert not any((wiki / ".wiki" / "tmp").glob("*"))  # the holding dir is gone
 
@@ -223,11 +223,11 @@ def test_reject_restores_inbox_and_main(wiki, fake_claude):
     before = snapshot(wiki)
     head = gitops.git(wiki, "rev-parse", "HEAD")
     fake_claude.queue(
-        *ingest_responses("raw/new.md", NEW_TEXT, "new"),
+        *ingest_responses("raw/new.md", NEW_TEXT, "new-md"),
         *ingest_responses(
             "raw/docs/dropped.md",
             "# Dropped\n\nAlways squash.\n",
-            "docs-dropped",
+            "docs-dropped-md",
             title="Dropped",
             page_id="concepts.squashing",
         ),
@@ -253,7 +253,7 @@ def test_note_reject_lands_in_inbox_notes(wiki, fake_claude):
     rel = "raw/notes/2026-10-28-decided-always-rebase-before-merging.md"
     fake_claude.queue(
         *ingest_responses(
-            rel, note + "\n", "notes-2026-10-28-decided-always-rebase-before-merging"
+            rel, note + "\n", "notes-2026-10-28-decided-always-rebase-before-merging-md"
         )
     )
     report = ingest(
@@ -275,7 +275,7 @@ def test_interrupt_rolls_back(wiki, fake_claude, monkeypatch):
     drop(wiki, "inbox/b.md", "# B\n\nAlways squash.\n")
     before = snapshot(wiki)
     head = gitops.git(wiki, "rev-parse", "HEAD")
-    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a"))
+    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a-md"))
     real_run = claude.run
 
     def run(call, **kw):
@@ -300,7 +300,7 @@ def test_crash_mid_edit_rolls_back(wiki, fake_claude, monkeypatch):
     # an unexpected error after the edit session wrote files: same rollback
     drop(wiki, "inbox/a.md", NEW_TEXT)
     before = snapshot(wiki)
-    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a"))
+    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a-md"))
     real_run = claude.run
 
     def run(call, **kw):
@@ -361,7 +361,7 @@ def test_dirty_wiki_refused(wiki, fake_claude):
 
 def test_yes_refuses_when_lint_fails(wiki, fake_claude, capsys):
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new")
+    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new-md")
     # open-questions.md is a system file: only finalize's wiki-wide lint sees it
     e["write"]["wiki/open-questions.md"] = "# Open questions\n\n- [x](nope.md)\n"
     fake_claude.queue(p, e)
@@ -384,7 +384,7 @@ def test_host_repo_commits_only_wiki_paths(host, fake_claude):
     top, root = host
     (top / "app.py").write_text("x = 2\n", encoding="utf-8")
     drop(root, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     report = ingest(root)
     assert report.decision == "accept"
     assert report.base == "trunk"
@@ -415,7 +415,7 @@ def test_host_repo_rollback(host, fake_claude):
     (top / "app.py").write_text("x = 2\n", encoding="utf-8")
     drop(root, "inbox/new.md", NEW_TEXT)
     before = snapshot(root)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     report = ingest(root, yes=False, interactive=True, decide=lambda s: "reject")
     assert report.decision == "reject"
     assert gitops.current_branch(top) == "trunk"
@@ -509,8 +509,8 @@ def test_contradiction_fixture_records_both_and_open_question(
         edit(
             {
                 GIT_FLOW: both,
-                "wiki/sources/src-release.md": src_page(
-                    rel, sha(text), "release", "Release notes"
+                "wiki/sources/src-release-md.md": src_page(
+                    rel, sha(text), "release-md", "Release notes"
                 ),
                 "wiki/open-questions.md": f"# Open questions\n\n- {question}\n",
             }
@@ -626,7 +626,7 @@ def test_failed_source_retried_next_run(wiki, fake_claude):
     fake_claude.queue(failing("boom", cost=0.1))
     first = ingest(wiki)
     assert [o.status for o in first.outcomes] == ["failed"]
-    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a"))
+    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a-md"))
     second = ingest(wiki)
     assert [(o.rel, o.status) for o in second.outcomes] == [("raw/a.md", "ingested")]
 
@@ -636,7 +636,7 @@ def test_trust_releases_quarantined_source_in_run(wiki, fake_claude):
     drop(wiki, "inbox/evil.md", INJECTION)
     first = ingest(wiki)
     assert [o.status for o in first.outcomes] == ["quarantined"]
-    fake_claude.queue(*ingest_responses("raw/evil.md", INJECTION, "evil", "Notes"))
+    fake_claude.queue(*ingest_responses("raw/evil.md", INJECTION, "evil-md", "Notes"))
     second = ingest(wiki, trust="evil.md")
     assert [(o.rel, o.status) for o in second.outcomes] == [("raw/evil.md", "ingested")]
     assert "Ignore all previous instructions" in fake_claude.calls()[0]["stdin"]
@@ -650,7 +650,7 @@ def test_trust_rejected_puts_quarantine_back(wiki, fake_claude):
     ingest(wiki)
     qdir = wiki / ".wiki" / "quarantine"
     held = sorted(p.name for p in qdir.iterdir())
-    fake_claude.queue(*ingest_responses("raw/evil.md", INJECTION, "evil", "Notes"))
+    fake_claude.queue(*ingest_responses("raw/evil.md", INJECTION, "evil-md", "Notes"))
     report = ingest(
         wiki, trust="evil.md", yes=False, interactive=True, decide=lambda s: "reject"
     )
@@ -663,7 +663,7 @@ def test_trust_rejected_puts_quarantine_back(wiki, fake_claude):
 def test_copied_paths_ingested(wiki, fake_claude, tmp_path):
     outside = tmp_path / "outside" / "Team Notes.md"
     drop(outside.parent, "Team Notes.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/team-notes.md", NEW_TEXT, "team-notes"))
+    fake_claude.queue(*ingest_responses("raw/team-notes.md", NEW_TEXT, "team-notes-md"))
     report = ingest(wiki, paths=[outside])
     assert [(o.rel, o.status) for o in report.outcomes] == [
         ("raw/team-notes.md", "ingested")
@@ -674,7 +674,7 @@ def test_copied_paths_ingested(wiki, fake_claude, tmp_path):
 def test_branch_name_and_collision(wiki, fake_claude):
     gitops.git(wiki, "branch", "wiki/ingest-20261028-new")
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     report = ingest(wiki)
     assert report.branch == "wiki/ingest-20261028-new-2"
     assert branches(wiki) == ["main", "wiki/ingest-20261028-new"]
@@ -682,7 +682,7 @@ def test_branch_name_and_collision(wiki, fake_claude):
 
 def test_diff_then_accept(wiki, fake_claude, monkeypatch):
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     answers = iter(["d", "x", "a"])
     shown = []
     monkeypatch.setattr("typer.prompt", lambda *a, **kw: next(answers))
@@ -698,7 +698,7 @@ def test_diff_then_accept(wiki, fake_claude, monkeypatch):
 
 def test_manifest_file_committed(wiki, fake_claude):
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     ingest(wiki)
     shown = gitops.git(wiki, "show", f"HEAD:{MANIFEST}")
     assert json.loads(shown)["sources"]["raw/new.md"]["status"] == "ingested"
@@ -757,7 +757,7 @@ def test_refused_raw_edit_rejected_restores_raw_edit(wiki, fake_claude, monkeypa
 def test_files_dropped_mid_run_survive_reject(wiki, fake_claude):
     # I1: user files the run never touched are never deleted
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
 
     def decide(summary):
         drop(wiki, "inbox/later.md", "# Later\n")
@@ -822,7 +822,7 @@ def test_recorded_deletion_is_a_noop(wiki, fake_claude):
 def test_accept_interrupted_prints_recovery(wiki, fake_claude, monkeypatch, capsys):
     # R17(b)
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
 
     def ff_merge(root, branch):
         raise KeyboardInterrupt
@@ -843,7 +843,7 @@ def test_accept_interrupted_prints_recovery(wiki, fake_claude, monkeypatch, caps
 def test_reject_failure_prints_recovery(wiki, fake_claude, monkeypatch, capsys):
     # R17(b)
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
 
     def delete_branch(root, branch):
         raise RuntimeError("disk on fire")
@@ -862,7 +862,7 @@ def test_reject_failure_prints_recovery(wiki, fake_claude, monkeypatch, capsys):
 def test_unknown_decision_rejects(wiki, fake_claude):
     # R17(c)
     drop(wiki, "inbox/new.md", NEW_TEXT)
-    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
     report = ingest(wiki, yes=False, interactive=True, decide=lambda s: "maybe")
     assert report.decision == "reject"
     assert branches(wiki) == ["main"]

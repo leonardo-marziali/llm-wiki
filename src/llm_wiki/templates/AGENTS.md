@@ -224,8 +224,9 @@ may raise them.
   `meeting-notes-march.md`.
 - Name decision pages `adr-NNNN-<slug>.md`, numbered after the highest existing
   number, such as `adr-0007-use-postgres.md`.
-- Name source summaries `src-<slug>.md`, where `<slug>` comes from the raw file
-  name.
+- Name source summaries `src-<slug>.md`, where `<slug>` comes from the raw path
+  under `raw/`, extension included (`raw/design.pdf` -> `src-design-pdf.md`).
+  The tool gives each source's exact id.
 
 ## Citations and linking
 

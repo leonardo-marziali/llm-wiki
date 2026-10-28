@@ -30,7 +30,7 @@ from llm_wiki.gitops import (
     stage_commit,
 )
 from llm_wiki.init import REVIEW_DAYS
-from llm_wiki.intake import Prepared, source_slug, src_page_id
+from llm_wiki.intake import Prepared, source_slug, src_id_for
 from llm_wiki.lint import Finding, cited_paths, lint
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
@@ -158,7 +158,7 @@ def build_edit_prompt(
     root = Path(ctx.root)
     today = ctx.today.isoformat()
     label, _ = _part_info(prepared, part)
-    src_id = src_page_id(ctx.cfg, prepared.rel)
+    src_id = src_id_for(ctx.cfg, ctx.manifest, prepared.rel)
     src_action = "update" if (root / page_rel(src_id)).is_file() else "create"
     reads = "\n".join(f"  - `{r}`" for r in _reads(prepared, part))
     allowed = [
@@ -226,7 +226,7 @@ def deleted_plan(ctx: RunContext, rel: str) -> Plan | None:
     a page whose frontmatter cannot be read fails the source (``_Failed``).
     """
     root = Path(ctx.root)
-    src_id = src_page_id(ctx.cfg, rel)
+    src_id = src_id_for(ctx.cfg, ctx.manifest, rel)
     pages: list[PagePlan] = []
     for id_ in ctx.manifest.pages_for(rel):
         if not _valid_id(id_):
@@ -284,7 +284,7 @@ def build_delete_prompt(
     """The edit session's stdin prompt for a deleted source: no source to read."""
     root = Path(ctx.root)
     today = ctx.today.isoformat()
-    src_id = src_page_id(ctx.cfg, rel)
+    src_id = src_id_for(ctx.cfg, ctx.manifest, rel)
 
     def dates(id_: str) -> str:
         after = review_after(id_, ctx.today).isoformat()
@@ -339,7 +339,7 @@ class _Source:
         # commit, as for a deleted source)
         self.prep = prep
         self.root = Path(ctx.root)
-        self.src_id = src_page_id(ctx.cfg, prepared.rel)
+        self.src_id = src_id_for(ctx.cfg, ctx.manifest, prepared.rel)
         self.src_existed = (self.root / page_rel(self.src_id)).is_file()
         self.allowed = {OPEN_QUESTIONS}
         if self.src_existed or prepared.kind != "deleted":  # never created then

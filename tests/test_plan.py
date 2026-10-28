@@ -183,7 +183,7 @@ def set_caps(root, **caps):
     return load_config(root)
 
 
-def write_src(root, name="src-docs-guide"):
+def write_src(root, name="src-docs-guide-md"):
     (root / f"wiki/sources/{name}.md").write_text(
         page_text(f"sources.{name}", "Src", "# Src\n", type_="source-summary"),
         encoding="utf-8",
@@ -194,7 +194,7 @@ def test_cap_blocks_creates_but_allows_updates(root):
     cfg = set_caps(root, max_pages=1)
     update = page("conventions.git-flow", action="update", type="convention")
     errors = check(root, update, cfg=cfg)  # the src page would still be created
-    assert any("sources.src-docs-guide" in e and "source page" in e for e in errors)
+    assert any("sources.src-docs-guide-md" in e and "source page" in e for e in errors)
     write_src(root)
     assert check(root, update, cfg=cfg) == []
     errors = check(root, page(), cfg=cfg)
@@ -280,10 +280,10 @@ def test_cap_reserves_the_src_page(root):
 
 
 def test_full_sources_section_blocks_the_src_page(root):
-    write_src(root, "src-other")
+    write_src(root, "src-other-md")
     update = page("conventions.git-flow", action="update", type="convention")
     errors = check(root, update, cfg=set_caps(root, max_section_pages=1))
-    assert any("sources.src-docs-guide" in e and "sources" in e for e in errors)
+    assert any("sources.src-docs-guide-md" in e and "sources" in e for e in errors)
     assert check(root, update, cfg=set_caps(root, max_section_pages=2)) == []
 
 

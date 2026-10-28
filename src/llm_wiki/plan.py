@@ -25,7 +25,7 @@ from llm_wiki.errors import (
     ConfigError,
 )
 from llm_wiki.init import sections_table
-from llm_wiki.intake import Prepared, source_slug, src_page_id
+from llm_wiki.intake import Prepared, source_slug, src_id_for, src_page_id
 from llm_wiki.lint import routing_error
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import ID_RE, SYSTEM_FILES, Page, iter_pages, read_page
@@ -113,7 +113,7 @@ def _section_cap_errors(
 
 
 def _cap_errors(
-    plan: Plan, root: Path, cfg: WikiConfig, kinds: dict, source: str
+    plan: Plan, root: Path, cfg: WikiConfig, kinds: dict, src_id: str
 ) -> list[str]:
     """Creates are blocked once a cap would be exceeded; updates never are.
 
@@ -122,7 +122,6 @@ def _cap_errors(
     """
     caps = cfg.effective_caps()
     total, per_section = _page_counts(root)
-    src_id = src_page_id(cfg, source)
     reserve = 0 if _page_file(root, src_id).is_file() else 1
     creates = [p for p in plan.pages if p.action == "create"]
     errors: list[str] = []
@@ -225,7 +224,8 @@ def validate_plan(
         for c in plan.contradictions
         if (err := _contradiction_error(c.page_id, Path(root), planned))
     ]
-    return errors + _cap_errors(plan, Path(root), cfg, kinds, source)
+    src_id = src_id_for(cfg, manifest, source)
+    return errors + _cap_errors(plan, Path(root), cfg, kinds, src_id)
 
 
 def _contradiction_error(id_: str, root: Path, planned: set[str]) -> str | None:
@@ -293,8 +293,13 @@ def candidates(root: Path, text: str, exclude: set[str]) -> list[Page]:
 
 
 def _source_block(
-    cfg: WikiConfig, prepared: Prepared, part_label: str, flags: list[str]
+    cfg: WikiConfig,
+    prepared: Prepared,
+    part_label: str,
+    flags: list[str],
+    src_id: str | None,
 ) -> str:
+    src_id = src_id or src_page_id(cfg, prepared.rel)
     lines = [
         "## Source",
         "",
@@ -307,7 +312,7 @@ def _source_block(
             "pages in this plan (the source page does not count)"
         ),
         (
-            f"- source page: {src_page_id(cfg, prepared.rel)} (written by the tool "
+            f"- source page: {src_id} (written by the tool "
             "from source_title and source_summary; never plan it)"
         ),
     ]
@@ -406,14 +411,18 @@ def build_plan_prompt(
     old_text: str | None = None,
     pages_for: list[str] | None = None,
     errors: list[str] | None = None,
+    src_id: str | None = None,
 ) -> str:
-    """The plan call's stdin prompt: everything that varies per source and run."""
+    """The plan call's stdin prompt: everything that varies per source and run.
+
+    ``src_id`` is the source's src page id (default: its base id).
+    """
     root = Path(root)
     nonce = secrets.token_hex(8)
     conv = prepared.conversion
     blocks = [
         f"Today is {today.isoformat()}.",
-        _source_block(cfg, prepared, part_label, conv.flags if conv else []),
+        _source_block(cfg, prepared, part_label, conv.flags if conv else [], src_id),
         "## Allowed sections\n\n" + sections_table(cfg.sections),
         _indexes_block(root, cfg),
         _candidates_block(root, cfg, part_text),
@@ -539,6 +548,7 @@ def plan_source(
             old_text=old_text,
             pages_for=pages_for,
             errors=errors or None,
+            src_id=src_id_for(cfg, manifest, prepared.rel),
         )
         call = claude.make_call(
             "plan",
