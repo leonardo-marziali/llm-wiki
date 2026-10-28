@@ -19,11 +19,17 @@ from llm_wiki.errors import (
     ClaudeNotInstalled,
     ClaudeUsageLimit,
 )
-from llm_wiki.gitops import changed_paths, restore, stage_commit
+from llm_wiki.gitops import (
+    changed_paths,
+    exists_at,
+    restore,
+    show_text,
+    stage_commit,
+)
 from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, source_slug, src_page_id
 from llm_wiki.lint import Finding, lint
-from llm_wiki.manifest import MANIFEST, Manifest
+from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
 from llm_wiki.pages import SYSTEM_FILES, read_page
 from llm_wiki.plan import plan_source, screen_plan, system_prompt
 from llm_wiki.schemas import Plan
@@ -99,23 +105,12 @@ def _is_page(rel: str) -> bool:
     )
 
 
-Snapshot = dict[str, tuple[int, int] | None]
+def _content(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
 
 
-def _snapshot(root: Path) -> Snapshot:
-    """Each uncommitted path with its (size, mtime), None when it is deleted."""
-    out: Snapshot = {}
-    for rel in changed_paths(root):
-        p = root / rel
-        st = p.stat() if p.exists() else None
-        out[rel] = (st.st_size, st.st_mtime_ns) if st else None
-    return out
-
-
-def _since(root: Path, before: Snapshot) -> list[str]:
-    """Uncommitted paths that are new or changed since ``before``."""
-    now = _snapshot(root)
-    return sorted(p for p, sig in now.items() if p not in before or before[p] != sig)
+def _under(rel: str, folder: str | None) -> bool:
+    return folder is not None and (rel == folder or rel.startswith(folder + "/"))
 
 
 def _part_info(prepared: Prepared, part: str) -> tuple[str, str]:
@@ -196,15 +191,32 @@ def build_edit_prompt(
 class _Source:
     """One ready source between its prep commit and its outcome."""
 
-    def __init__(self, ctx: RunContext, prepared: Prepared, out: SourceOutcome):
+    def __init__(
+        self, ctx: RunContext, prepared: Prepared, out: SourceOutcome, prep: str
+    ):
         self.ctx, self.prepared, self.out = ctx, prepared, out
+        self.prep = prep  # the prep commit's sha: the only commit ever amended
         self.root = Path(ctx.root)
         self.src_id = src_page_id(ctx.cfg, prepared.rel)
         self.src_existed = (self.root / page_rel(self.src_id)).is_file()
         self.allowed = {page_rel(self.src_id), OPEN_QUESTIONS}
         self.planned: dict[str, str] = {}  # id -> its first planned action
         self.reviewed: set[str] = set()  # ids whose page was reviewed before
-        self.baseline = _snapshot(self.root)  # what was already uncommitted
+        run_dir = Path(ctx.run_dir).resolve()
+        root = self.root.resolve()
+        # the run's own files are never strays, gitignored or not
+        self.run_rel = (
+            run_dir.relative_to(root).as_posix()
+            if run_dir.is_relative_to(root)
+            else None
+        )
+        # what was already uncommitted (e.g. inbox files of later sources), with
+        # its bytes so a stray edit to it can be undone; None: it was missing
+        self.baseline = {
+            p: _content(self.root / p)
+            for p in changed_paths(self.root)
+            if not _under(p, self.run_rel)
+        }
 
     def run_part(self, part: str) -> None:
         ctx, prepared = self.ctx, self.prepared
@@ -273,21 +285,38 @@ class _Source:
         )
 
     def _changed(self) -> list[str]:
-        return _since(self.root, self.baseline)
+        """Paths changed since the prep commit, beyond what was uncommitted then."""
+        now = {
+            p
+            for p in changed_paths(self.root)
+            if p not in self.baseline and not _under(p, self.run_rel)
+        }
+        now |= {
+            p
+            for p, data in self.baseline.items()
+            if _content(self.root / p) != data  # changed, deleted or recreated
+        }
+        return sorted(now)
+
+    def _revert(self, paths: list[str]) -> None:
+        """Committed paths go back to the prep commit, the others to their bytes."""
+        restore(self.root, [p for p in paths if p not in self.baseline])
+        for p in paths:
+            if p not in self.baseline:
+                continue
+            path, data = self.root / p, self.baseline[p]
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
 
     def _check(self) -> list[Finding]:
         """Revert stray changes, then the errors on the changed and planned pages."""
         changed = self._changed()
         strays = [p for p in changed if p not in self.allowed]
-        # a path that was uncommitted before the edit has nothing to go back to
-        revertible = [p for p in strays if p not in self.baseline]
-        restore(self.root, revertible)
-        self.out.reverted = sorted({*self.out.reverted, *revertible})
-        kept = [p for p in strays if p in self.baseline]
-        if kept:
-            self.out.reason = "changed outside the plan, already uncommitted " + (
-                "before the edit, left as is: " + ", ".join(kept)
-            )
+        self._revert(strays)
+        self.out.reverted = sorted({*self.out.reverted, *strays})
         wanted = sorted(p for p in self.allowed if _is_page(p))
         findings = [
             Finding("error", "missing-page", p, "planned page was not written")
@@ -313,8 +342,8 @@ class _Source:
         return findings
 
     def undo(self) -> None:
-        """Put the wiki back to the prep commit (untouched pre-existing files aside)."""
-        restore(self.root, [p for p in self._changed() if p not in self.baseline])
+        """Put the wiki back to the prep commit and the files uncommitted then."""
+        self._revert(self._changed())
 
     def commit(self) -> None:
         ctx, rel = self.ctx, self.prepared.rel
@@ -351,37 +380,55 @@ def _set_status(ctx: RunContext, rel: str, **update) -> None:
     ctx.manifest.save(Path(ctx.root))
 
 
-def _quarantine_plan(ctx: RunContext, prepared: Prepared, hits: list[Hit]) -> str:
+def _entry_before(root: Path, prep: str, rel: str) -> SourceEntry | None:
+    """``rel``'s manifest entry before the prep commit, when its raw file was there."""
+    text = show_text(root, f"{prep}^", MANIFEST)
+    if text is None or not exists_at(root, f"{prep}^", rel):
+        return None
+    try:
+        data = json.loads(text)["sources"][rel]
+        return SourceEntry.model_validate(data)
+    except (ValueError, KeyError, TypeError):  # ValidationError is a ValueError
+        return None
+
+
+def _quarantine_plan(
+    ctx: RunContext, prepared: Prepared, hits: list[Hit], prep: str
+) -> str:
     """Move the raw file to quarantine and take it and its conversion out of the
     prep commit, so the injected text never reaches the wiki or its history.
+
+    A changed source gets its last ingested version back, raw file and manifest
+    entry, so the pages it backs keep valid citations.
     """
-    root = Path(ctx.root)
+    root, rel = Path(ctx.root), prepared.rel
     assert prepared.conversion is not None
     reason = "plan-text injection: " + ", ".join(sorted({h.kind for h in hits}))
-    quarantine(
-        root,
-        root / prepared.rel,
-        {
-            "source": prepared.rel,
-            "sha256": prepared.sha,
-            "kind": "injection",
-            "reason": reason,
-            "hits": [
-                {"file": "plan", "kind": h.kind, "line": h.line, "excerpt": h.excerpt}
-                for h in hits
-            ],
-        },
-    )
+    old = _entry_before(root, prep, rel) if prepared.kind == "changed" else None
+    record: dict = {
+        "source": rel,
+        "sha256": prepared.sha,
+        "kind": "injection",
+        "reason": reason,
+        "hits": [
+            {"file": "plan", "kind": h.kind, "line": h.line, "excerpt": h.excerpt}
+            for h in hits
+        ],
+    }
+    if old is not None:
+        record["restored_sha256"] = old.sha256
+    quarantine(root, root / rel, record)
     outputs = prepared.conversion.outputs
     for out in outputs:
         (root / out).unlink(missing_ok=True)
-    _set_status(ctx, prepared.rel, status="quarantined", converted=[])
-    stage_commit(
-        root,
-        [prepared.rel, *outputs, MANIFEST],
-        f"ingest(prep): {prepared.rel}",
-        amend=True,
-    )
+    if old is not None:
+        restore(root, [rel], rev=f"{prep}^")
+        ctx.manifest.record(old)
+        ctx.manifest.save(root)
+        reason += "; kept the last ingested version"
+    else:
+        _set_status(ctx, rel, status="quarantined", converted=[])
+    stage_commit(root, [rel, *outputs, MANIFEST], f"ingest(prep): {rel}", amend=prep)
     return reason
 
 
@@ -396,12 +443,18 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
     if prepared.status != "ready":  # screened out or refused: record it, no LLM
-        stage_commit(root, [MANIFEST], prep_message)
+        stage_commit(root, [MANIFEST], prep_message, allow_empty=True)
         out.status, out.reason = prepared.status, prepared.reason
         return out
     assert prepared.conversion is not None
-    stage_commit(root, [rel, *prepared.conversion.outputs, MANIFEST], prep_message)
-    source = _Source(ctx, prepared, out)
+    # always a commit of its own: a later amend can never rewrite another commit
+    prep = stage_commit(
+        root,
+        [rel, *prepared.conversion.outputs, MANIFEST],
+        prep_message,
+        allow_empty=True,
+    )
+    source = _Source(ctx, prepared, out, prep)
     try:
         for part in prepared.parts:
             source.run_part(part)
@@ -409,7 +462,7 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
         source.undo()
         out.status, out.reason = (
             "quarantined",
-            _quarantine_plan(ctx, prepared, exc.hits),
+            _quarantine_plan(ctx, prepared, exc.hits, prep),
         )
         return out
     except _STOP as exc:
@@ -429,7 +482,10 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
     source.undo()
     _set_status(ctx, source.prepared.rel, status="failed")
     stage_commit(
-        Path(ctx.root), [MANIFEST], f"ingest(prep): {source.prepared.rel}", amend=True
+        Path(ctx.root),
+        [MANIFEST],
+        f"ingest(prep): {source.prepared.rel}",
+        amend=source.prep,
     )
     source.out.status = "failed"
     source.out.reason = reason

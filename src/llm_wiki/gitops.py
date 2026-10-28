@@ -81,6 +81,13 @@ def has_identity(root: Path) -> bool:
 # --- ingest helpers: every path is relative to the wiki root, scoped to the wiki ---
 
 
+def _pgit(top: Path, *args: str) -> str:
+    """git with literal pathspecs: a file named ``*.md`` or ``[A]GENTS.md`` (which
+    an edit session can create) never matches other files.
+    """
+    return git(top, "--literal-pathspecs", *args)
+
+
 def _scope(root: Path) -> tuple[Path, str]:
     """(the repo toplevel, the wiki's path in it: "." when the wiki is the repo)."""
     top = enclosing_repo(root)
@@ -91,6 +98,15 @@ def _scope(root: Path) -> tuple[Path, str]:
 
 def _repo_paths(prefix: str, rels: list[str]) -> list[str]:
     return [r if prefix == "." else f"{prefix}/{r}" for r in rels]
+
+
+def _tracked_at(top: Path, rev: str, paths: list[str]) -> list[str]:
+    """The ``paths`` that exist in commit ``rev``."""
+    if not paths:
+        return []
+    listed = _pgit(top, "ls-tree", "-r", "-z", "--name-only", rev, "--", *paths)
+    found = set(listed.split("\0"))
+    return [p for p in paths if p in found]
 
 
 def wiki_rel(root: Path) -> str:
@@ -110,7 +126,7 @@ def changed_paths(root: Path) -> list[str]:
     excluded), relative to the wiki root.
     """
     top, prefix = _scope(root)
-    out = git(top, "status", "--porcelain=v1", "-z", "-uall", "--", prefix)
+    out = _pgit(top, "status", "--porcelain=v1", "-z", "-uall", "--", prefix)
     fields = out.split("\0")
     paths: list[str] = []
     i = 0
@@ -126,50 +142,69 @@ def changed_paths(root: Path) -> list[str]:
     return sorted(paths)
 
 
-def restore(root: Path, rels: list[str]) -> None:
-    """A file tracked at HEAD goes back to it; any other file is deleted."""
+def restore(root: Path, rels: list[str], rev: str = "HEAD") -> None:
+    """A file tracked at ``rev`` goes back to it (index too); any other is deleted."""
     if not rels:
         return
     top, prefix = _scope(root)
-    paths = dict(zip(_repo_paths(prefix, list(rels)), rels, strict=True))
-    listed = git(top, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *paths)
-    tracked = [p for p in listed.split("\0") if p in paths]
+    paths = _repo_paths(prefix, list(dict.fromkeys(rels)))
+    tracked = _tracked_at(top, rev, paths)
     if tracked:
-        git(top, "checkout", "HEAD", "--", *tracked)
+        _pgit(top, "checkout", rev, "--", *tracked)
     untracked = [p for p in paths if p not in tracked]
     if untracked:  # drop it from the index too, in case it was staged
-        git(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *untracked)
+        _pgit(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *untracked)
         for p in untracked:
             (top / p).unlink(missing_ok=True)
 
 
-def stage_commit(
-    root: Path, rels: list[str], message: str, *, amend: bool = False
-) -> str:
-    """Stage exactly ``rels`` (a missing file stages its deletion) and commit.
+def exists_at(root: Path, rev: str, rel: str) -> bool:
+    top, prefix = _scope(root)
+    return bool(_tracked_at(top, rev, _repo_paths(prefix, [rel])))
 
-    Nothing staged and no ``amend``: no commit. Returns the HEAD sha.
+
+def show_text(root: Path, rev: str, rel: str) -> str | None:
+    """The text of ``rel`` in commit ``rev``, or None when it has none."""
+    top, prefix = _scope(root)
+    try:
+        return git(top, "show", f"{rev}:{_repo_paths(prefix, [rel])[0]}")
+    except GitError:
+        return None
+
+
+def stage_commit(
+    root: Path,
+    rels: list[str],
+    message: str,
+    *,
+    amend: str | None = None,
+    allow_empty: bool = False,
+) -> str:
+    """Commit exactly ``rels`` (a missing file commits its deletion); returns HEAD.
+
+    Only these paths are committed (``--only``), whatever else the index holds.
+    ``amend`` is the sha of the commit to amend: it must still be HEAD. Without
+    ``amend`` or ``allow_empty``, nothing to commit makes no commit.
     """
     top, prefix = _scope(root)
+    head = git(top, "rev-parse", "HEAD").strip()
+    if amend is not None and head != amend:
+        raise GitError(f"refusing to amend {head[:12]}: expected {amend[:12]}")
     root = Path(root)
     rels = list(dict.fromkeys(rels))
-    present = [r for r in rels if (root / r).exists()]
-    gone = [r for r in rels if r not in present]
+    present = _repo_paths(prefix, [r for r in rels if (root / r).exists()])
+    gone = _repo_paths(prefix, [r for r in rels if not (root / r).exists()])
     if present:
-        git(top, "add", "--", *_repo_paths(prefix, present))
+        _pgit(top, "add", "--", *present)
     if gone:
-        git(
-            top,
-            "rm",
-            "--cached",
-            "-q",
-            "--ignore-unmatch",
-            "--",
-            *_repo_paths(prefix, gone),
-        )
-    staged = git(top, "diff", "--cached", "--name-only", "-z", "--", prefix)
-    if staged or amend:
-        git(top, "commit", "-q", "-m", message, *(["--amend"] if amend else []))
+        _pgit(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *gone)
+    # a path neither added nor in HEAD is unknown to git: there is nothing to commit
+    paths = present + _tracked_at(top, "HEAD", gone)
+    staged = paths and _pgit(top, "diff", "--cached", "--name-only", "-z", "--", *paths)
+    if not (staged or amend or allow_empty):
+        return head
+    extra = ["--allow-empty"] + (["--amend"] if amend else [])
+    _pgit(top, "commit", "-q", "--only", *extra, "-m", message, "--", *paths)
     return git(top, "rev-parse", "HEAD").strip()
 
 
