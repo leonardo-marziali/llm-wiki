@@ -167,7 +167,8 @@ def test_e2e_m3_fixture_batch(
     res = runner.invoke(app, ["ingest", "--yes"])
     out = res.output
     assert res.exit_code == 0, out
-    assert "quarantined" in out and "g-injection.md" in out
+    assert "quarantined" in out
+    assert "g-injection.md" in out
     assert "contradictions: 1" in out
     assert "failed" not in out
     assert "open questions: 1" in out
@@ -177,7 +178,8 @@ def test_e2e_m3_fixture_batch(
     # The injection source is quarantined and never reached history.
     m = Manifest.load(root)
     inj = [e for p, e in m.entries.items() if "injection" in p]
-    assert inj and all(e.status == "quarantined" for e in inj)
+    assert inj
+    assert all(e.status == "quarantined" for e in inj)
     history = gitops.git(root, "log", "--all", "-p")
     assert "Ignore all previous instructions" not in history
     # The secret value is nowhere in wiki/ or the converted text.
@@ -202,11 +204,13 @@ def test_e2e_m3_fixture_batch(
     secret_out = [p for p in converted if p.name.startswith(secret_sha)]
     assert secret_out
     text = "".join(p.read_text(encoding="utf-8") for p in secret_out)
-    assert "‹REDACTED:" in text and SECRET not in text
+    assert "‹REDACTED:" in text
+    assert SECRET not in text
 
     # The contradiction page keeps both claims; the open question was appended.
     releases = (root / "wiki/concepts/releases.md").read_text(encoding="utf-8")
-    assert CLAIM_A in releases and CLAIM_B in releases
+    assert CLAIM_A in releases
+    assert CLAIM_B in releases
     oq = (root / "wiki/open-questions.md").read_text(encoding="utf-8")
     assert "Which day do releases ship?" in oq
 

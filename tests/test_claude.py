@@ -527,8 +527,9 @@ def test_failed_call_reports_cost(fake_claude):
         "exit": 1,
     }
     fake_claude.queue(failed, failed, failed, failed)
+    call = _call()
     with pytest.raises(ClaudeError) as ei:
-        run(_call(), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert ei.value.cost_usd == pytest.approx(0.04)
     assert ClaudeError("x").cost_usd == 0.0
 
@@ -544,8 +545,9 @@ def test_budget_error_carries_its_attempt_cost(fake_claude):
             "exit": 1,
         }
     )
+    call = _call()
     with pytest.raises(ClaudeBudgetExceeded) as ei:
-        run(_call())
+        run(call)
     assert ei.value.cost_usd == pytest.approx(1.2)
 
 
@@ -553,8 +555,9 @@ def test_enoexec_is_claude_error(tmp_path):
     bin_ = tmp_path / "claude"
     bin_.write_bytes(b"\x7fELFgarbage")
     bin_.chmod(0o755)
+    call = _call()
     with pytest.raises(ClaudeError, match="cannot execute") as ei:
-        run(_call(), binary=str(bin_))
+        run(call, binary=str(bin_))
     assert not isinstance(ei.value, ClaudeNotInstalled)
 
 
@@ -598,7 +601,8 @@ def test_image_call_argv(tmp_path):
 
 def test_text_only_call_unchanged():
     assert build_argv(_call(), "claude", Path("/s")) == BASE
-    assert "--input-format" not in BASE and "--verbose" not in BASE
+    assert "--input-format" not in BASE
+    assert "--verbose" not in BASE
 
 
 def test_make_call_defaults_to_no_images():
@@ -612,7 +616,8 @@ def test_image_call_stdin_is_stream_json(fake_claude, make_png, tmp_path):
     fake_claude.queue({"stdout": ok(structured={"a": 1})})
     run(_image_call(src, json_schema={"a": 1}))
     (c,) = fake_claude.calls()
-    assert c["stdin"].count("\n") == 1 and c["stdin"].endswith("\n")
+    assert c["stdin"].count("\n") == 1
+    assert c["stdin"].endswith("\n")
     msg = c["stdin_message"]
     assert msg["type"] == "user"
     assert msg["message"]["role"] == "user"
@@ -689,8 +694,9 @@ def test_stream_output_without_result_is_transient(fake_claude, make_png, tmp_pa
 def test_stream_output_without_result_exhausts_retries(fake_claude, make_png, tmp_path):
     src = make_png(tmp_path / "src.png")
     fake_claude.queue(*[{"stdout_lines": [{"type": "system"}]}] * 4)
+    call = _image_call(src)
     with pytest.raises(ClaudeError):
-        run(_image_call(src), sleep=lambda s: None)
+        run(call, sleep=lambda s: None)
     assert len(fake_claude.calls()) == 4
 
 
@@ -710,8 +716,9 @@ def test_stream_error_result_is_classified(fake_claude, make_png, tmp_path):
             "exit": 1,
         }
     )
+    call = _image_call(src)
     with pytest.raises(ClaudeBudgetExceeded) as ei:
-        run(_image_call(src))
+        run(call)
     assert ei.value.cost_usd == pytest.approx(0.11)
 
 
@@ -720,8 +727,9 @@ def test_unreadable_image_is_refused(fake_claude, tmp_path):
 
     bad = tmp_path / "bad.png"
     bad.write_bytes(b"not an image")
+    call = _image_call(bad)
     with pytest.raises(RefusedSource):
-        run(_image_call(bad))
+        run(call)
     assert fake_claude.calls() == []
 
 

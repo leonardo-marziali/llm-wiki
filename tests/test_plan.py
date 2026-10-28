@@ -696,7 +696,8 @@ def test_image_plan_with_high_confidence_retried(
     low = plan_dict(page(claims=[low_claim]))
     fake_claude.queue({"stdout": ok(structured=high)}, {"stdout": ok(structured=low)})
     p, errors, _ = run_plan(agents, prepared, tmp_path)
-    assert p is not None and errors == []
+    assert p is not None
+    assert errors == []
     _first, second = fake_claude.calls()
     assert "confidence" in second["stdin_message"]["message"]["content"][0]["text"]
 

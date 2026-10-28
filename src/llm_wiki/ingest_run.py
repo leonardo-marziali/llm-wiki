@@ -302,27 +302,11 @@ def _work_list(
             if needs_work(manifest, root, rel)
         ]
     for src, rel in intake_inbox(root):
-        target = root / rel
-        entry = manifest.entries.get(rel)
-        if (
-            not target.exists()
-            and entry is not None
-            and entry.status == "failed"
-            and "refused" in entry.flags
-            and entry.sha256 == sha256_file(src)
-        ):
-            name = src.relative_to(root).as_posix()
-            typer.echo(f"refused before: {name} is unchanged; left in inbox/")
-            continue
-        if (
-            target.is_file()
-            and not needs_work(manifest, root, rel)
-            and sha256_file(src) == sha256_file(target)
-        ):
-            name = src.relative_to(root).as_posix()
-            typer.echo(f"unchanged: {name} matches {rel}; left in inbox/")
-            continue
-        items.append(_Item(rel, origin=src))
+        skip = _inbox_skip(root, manifest, src, rel)
+        if skip:
+            typer.echo(skip)
+        else:
+            items.append(_Item(rel, origin=src))
     scan = manifest.scan(root)
     items += [_Item(rel) for rel in [*scan.new, *scan.changed]]
     items += [_Item(rel) for rel in scan.deleted if needs_work(manifest, root, rel)]
@@ -335,6 +319,28 @@ def _work_list(
             undo.own(item.rel)
             out.append(item)
     return out
+
+
+def _inbox_skip(root: Path, manifest: Manifest, src: Path, rel: str) -> str | None:
+    """Why the inbox file src, bound for rel, stays in inbox/; None to take it."""
+    target = root / rel
+    entry = manifest.entries.get(rel)
+    name = src.relative_to(root).as_posix()
+    if (
+        not target.exists()
+        and entry is not None
+        and entry.status == "failed"
+        and "refused" in entry.flags
+        and entry.sha256 == sha256_file(src)
+    ):
+        return f"refused before: {name} is unchanged; left in inbox/"
+    if (
+        target.is_file()
+        and not needs_work(manifest, root, rel)
+        and sha256_file(src) == sha256_file(target)
+    ):
+        return f"unchanged: {name} matches {rel}; left in inbox/"
+    return None
 
 
 def _within_source_cap(
@@ -664,19 +670,7 @@ def run_ingest(
         _finalize(ctx, base, report)
         report.summary = summarize(report)
         typer.echo(report.summary)
-        if yes:
-            report.decision = "reject" if report.lint_errors else "accept"
-        else:
-            gate = decide or _prompt_decide(root, base, report.branch)
-            # anything but an explicit accept rejects
-            accepted = gate(report.summary) == "accept"
-            if accepted and report.lint_errors:
-                n = len(report.lint_errors)
-                ask = confirm or (lambda q: typer.confirm(q, default=False))
-                accepted = ask(
-                    f"lint has {n} error{'' if n == 1 else 's'}; accept anyway?"
-                )
-            report.decision = "accept" if accepted else "reject"
+        report.decision = _gate(root, base, report.branch, report, yes, decide, confirm)
     except BaseException:  # Ctrl-C or a crash: the wiki goes back as it was
         _rollback(undo, base, report.branch)
         raise
@@ -684,6 +678,34 @@ def run_ingest(
         _rollback(undo, base, report.branch)
     else:
         _accept(root, base, report.branch, undo)
+    _announce(report, base, yes)
+    return report
+
+
+def _gate(
+    root: Path,
+    base: str,
+    branch: str,
+    report: IngestReport,
+    yes: bool,
+    decide: Callable[[str], Decision] | None,
+    confirm: Callable[[str], bool] | None,
+) -> Decision:
+    """Accept or reject the finished branch: --yes takes only a clean run."""
+    if yes:
+        return "reject" if report.lint_errors else "accept"
+    gate = decide or _prompt_decide(root, base, branch)
+    # anything but an explicit accept rejects
+    accepted = gate(report.summary) == "accept"
+    if accepted and report.lint_errors:
+        n = len(report.lint_errors)
+        ask = confirm or (lambda q: typer.confirm(q, default=False))
+        accepted = ask(f"lint has {n} error{'' if n == 1 else 's'}; accept anyway?")
+    return "accept" if accepted else "reject"
+
+
+def _announce(report: IngestReport, base: str, yes: bool) -> None:
+    """Print the gate's outcome; a --yes reject exits 1."""
     if report.decision == "accept":
         typer.echo(f"accepted: {report.branch} merged into {base}")
     elif yes:
@@ -694,4 +716,3 @@ def run_ingest(
         )
     else:
         typer.echo(f"rejected: {report.branch} deleted; the inbox files are back")
-    return report

@@ -192,6 +192,7 @@ _PROBE_SYSTEM = (
 )
 _EDIT_PROBE_SYSTEM = "You are a health check for the wiki CLI."
 _ESCAPE = "edit sessions can write outside the wiki"
+_NOT_LOGGED_IN = "not logged in: run `claude /login`"
 _PROBE_BUDGET = 0.25
 _PROBE_TIMEOUT_S = 120
 _MODEL_PROMPT = (
@@ -253,7 +254,7 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
             try:
                 result = run(call)
             except ClaudeAuthError:
-                return Check(name, "fail", "not logged in: run `claude /login`")
+                return Check(name, "fail", _NOT_LOGGED_IN)
             except OSError as e:  # a spawn failure, not a temp-file one
                 return _spawn_fail(name, e)
             except ClaudeSchemaError:
@@ -330,7 +331,7 @@ def probe_vision(settings: LlmSettings) -> Check:
             try:
                 result = run(call)
             except ClaudeAuthError:
-                return Check(name, "fail", "not logged in: run `claude /login`")
+                return Check(name, "fail", _NOT_LOGGED_IN)
             except OSError as e:  # a spawn failure, not a temp-file one
                 return _spawn_fail(name, e)
             except ClaudeSchemaError:
@@ -386,7 +387,7 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
             try:
                 result = run(call)
             except ClaudeAuthError:
-                return Check(name, "fail", "not logged in: run `claude /login`")
+                return Check(name, "fail", _NOT_LOGGED_IN)
             except OSError as e:  # a spawn failure, not a temp-file one
                 return _spawn_fail(name, e)
             except ClaudeError as e:

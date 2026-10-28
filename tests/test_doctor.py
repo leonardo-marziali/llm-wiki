@@ -507,9 +507,11 @@ def test_vision_probe_draws_a_random_five_letter_word(monkeypatch):
         lambda call: seen.append(call) or (_ for _ in ()).throw(d.ClaudeError("x")),
     )
     c = probe_vision(S)
-    assert c.status == "fail" and c.detail == "x"
+    assert c.status == "fail"
+    assert c.detail == "x"
     (call,) = seen
-    assert call.images and call.images[0].suffix == ".png"
+    assert call.images
+    assert call.images[0].suffix == ".png"
     assert (call.timeout_s, call.max_retries, call.role) == (120, 0, None)
     assert call.tools == ()
 
