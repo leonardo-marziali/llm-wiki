@@ -1012,3 +1012,131 @@ def test_plan_strings_redacted_and_counted(wiki, fake_claude):
     assert sum(out.redactions.values()) == 2
     assert sum(report.redactions.values()) == 2
     assert "redactions: " in report.summary
+
+
+FIRST = "# First\n\nWe tag every release.\n"
+SECOND = "Second notes.\n"
+
+
+def _host_ignoring_txt(host):
+    top, root = host
+    (top / ".gitignore").write_text("*.txt\n", encoding="utf-8")
+    gitops.git(top, "add", ".gitignore")
+    gitops.git(top, "commit", "-qm", "ignore txt")
+    drop(root, "inbox/a-first.md", FIRST)
+    drop(root, "inbox/b-second.txt", SECOND)
+    return top, root
+
+
+def _two_responses():
+    return (
+        *ingest_responses("raw/a-first.md", FIRST, "a-first-md"),
+        *ingest_responses(
+            "raw/b-second.txt",
+            SECOND,
+            "b-second-txt",
+            title="Second",
+            page_id="concepts.second",
+        ),
+    )
+
+
+def test_host_gitignored_source_type_ingested(host, fake_claude):
+    # I7 / R23: the reproduction lost the whole batch to the host's *.txt rule
+    top, root = _host_ignoring_txt(host)
+    fake_claude.queue(*_two_responses())
+    report = ingest(root)
+    assert report.decision == "accept", report.summary
+    assert [(o.rel, o.status) for o in report.outcomes] == [
+        ("raw/a-first.md", "ingested"),
+        ("raw/b-second.txt", "ingested"),
+    ]
+    tracked = gitops.git(top, "ls-files", "w/raw").split()
+    assert "w/raw/b-second.txt" in tracked
+    assert inbox_files(root) == []
+    assert gitops.staged_paths(root) == []
+
+
+def test_host_gitignored_inbox_file_back_on_reject(host, fake_claude):
+    top, root = _host_ignoring_txt(host)
+    fake_claude.queue(*_two_responses())
+    report = ingest(root, yes=False, interactive=True, decide=lambda s: "reject")
+    assert report.decision == "reject"
+    assert inbox_files(root) == ["inbox/a-first.md", "inbox/b-second.txt"]
+    assert (root / "inbox" / "b-second.txt").read_text(encoding="utf-8") == SECOND
+    assert not (root / "raw" / "b-second.txt").exists()
+    assert branches(top) == ["trunk"]
+
+
+def _git_error_on(monkeypatch, message):
+    from llm_wiki import ingest as ingest_mod
+    from llm_wiki.errors import GitError
+
+    real = ingest_mod.stage_commit
+
+    def stage_commit(root, rels, msg, **kw):
+        if msg == message:
+            raise GitError(f"git commit: refused ({msg})")
+        return real(root, rels, msg, **kw)
+
+    monkeypatch.setattr(ingest_mod, "stage_commit", stage_commit)
+
+
+def two_sources(wiki, fake_claude):
+    drop(wiki, "inbox/a.md", NEW_TEXT)
+    drop(wiki, "inbox/b.md", "# B\n\nAlways squash.\n")
+    fake_claude.queue(
+        *ingest_responses("raw/a.md", NEW_TEXT, "a-md"),
+        *ingest_responses(
+            "raw/b.md",
+            "# B\n\nAlways squash.\n",
+            "b-md",
+            title="B",
+            page_id="concepts.squashing",
+        ),
+    )
+
+
+@pytest.mark.parametrize("message", ["ingest(prep): raw/a.md", "ingest: New guide"])
+def test_git_error_fails_only_that_source(wiki, fake_claude, monkeypatch, message):
+    # I7 / m4: a GitError in one source rolls that source back; the run goes on
+    two_sources(wiki, fake_claude)
+    if message.startswith("ingest(prep)"):  # no plan and edit for a
+        fake_claude.queue(
+            *ingest_responses(
+                "raw/b.md",
+                "# B\n\nAlways squash.\n",
+                "b-md",
+                title="B",
+                page_id="concepts.squashing",
+            )
+        )
+    _git_error_on(monkeypatch, message)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    statuses = {o.rel: (o.status, o.reason) for o in report.outcomes}
+    assert statuses["raw/a.md"][0] == "failed"
+    assert "refused" in statuses["raw/a.md"][1]
+    assert statuses["raw/b.md"][0] == "ingested"
+    assert not (wiki / PAGE).exists()  # a's page was rolled back
+    assert gitops.staged_paths(wiki) == []
+    lint_codes = [f.code for f in report.lint_errors]
+    assert lint_codes == []
+
+
+def test_refused_image_fails_only_that_source(wiki, fake_claude, monkeypatch, make_png):
+    # m4: RefusedSource from prepare_for_vision reaches the per-source catch
+    (wiki / "inbox" / "a.png").parent.mkdir(exist_ok=True)
+    make_png(wiki / "inbox" / "a.png")
+    drop(wiki, "inbox/b.md", NEW_TEXT)
+
+    def refuse(path, out_dir):
+        raise RefusedSource(f"unreadable image: {path.name}")
+
+    monkeypatch.setattr(claude, "prepare_for_vision", refuse)
+    fake_claude.queue(*ingest_responses("raw/b.md", NEW_TEXT, "b-md"))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    statuses = {o.rel: (o.status, o.reason) for o in report.outcomes}
+    assert statuses["raw/a.png"] == ("failed", "unreadable image: a.png")
+    assert statuses["raw/b.md"][0] == "ingested"

@@ -18,9 +18,9 @@ from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.errors import (
     ClaudeAuthError,
-    ClaudeError,
     ClaudeNotInstalled,
     ClaudeUsageLimit,
+    WikiError,
 )
 from llm_wiki.gitops import (
     changed_paths,
@@ -28,6 +28,7 @@ from llm_wiki.gitops import (
     restore,
     show_text,
     stage_commit,
+    unstage,
 )
 from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, source_slug, src_id_for
@@ -716,25 +717,40 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
         out.status, out.reason = "failed", str(exc)
         return out
     if plan is None:  # it backs no page: only the manifest and the log change
-        ctx.manifest.mark_deleted(rel)
-        ctx.manifest.save(root)
-        stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
+        try:
+            ctx.manifest.mark_deleted(rel)
+            ctx.manifest.save(root)
+            stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
+        except WikiError as exc:  # e.g. a GitError: the deletion stays pending
+            _drop_uncommitted(ctx, [rel, MANIFEST], [MANIFEST])
+            out.status, out.reason = "failed", str(exc)
         return out
     prepared = Prepared(rel=rel, sha=ctx.manifest.entries[rel].sha256, kind="deleted")
     source = _Source(ctx, prepared, out, None)
     try:
         source.apply(plan, lambda found: build_delete_prompt(ctx, rel, plan, found), "")
+        source.commit_deleted()
     except STOP as exc:
         exc.cost_usd += out.cost_usd
         source.undo()
         raise
-    except (_Failed, ClaudeError) as exc:
+    except (_Failed, WikiError) as exc:  # a ClaudeError, a GitError, …
         out.cost_usd += getattr(exc, "cost_usd", 0.0)
         source.undo()
+        _drop_uncommitted(ctx, [rel, MANIFEST], [])
         out.status, out.reason = "failed", str(exc)
-        return out
-    source.commit_deleted()
+        out.pages_updated, out.reviewed_touched = [], []
     return out
+
+
+def _drop_uncommitted(ctx: RunContext, staged: list[str], files: list[str]) -> None:
+    """Unstage ``staged`` and put ``files`` back to HEAD after a failed commit;
+    the in-memory manifest follows the file.
+    """
+    root = Path(ctx.root)
+    unstage(root, staged)
+    restore(root, files)
+    ctx.manifest.entries = Manifest.load(root).entries
 
 
 def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
@@ -747,22 +763,25 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     out = SourceOutcome(rel=rel, title=rel, status="failed")
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
-    if prepared.status != "ready":  # screened out or refused: record it, no LLM
-        out.status, out.reason = prepared.status, _record_unready(ctx, prepared)
-        stage_commit(root, [rel, MANIFEST], prep_message, allow_empty=True)
+    outputs = prepared.conversion.outputs if prepared.conversion else []
+    try:
+        if prepared.status != "ready":  # screened out or refused: record it, no LLM
+            out.status, out.reason = prepared.status, _record_unready(ctx, prepared)
+            stage_commit(root, [rel, MANIFEST], prep_message, allow_empty=True)
+            return out
+        # always a commit of its own: a later amend can never rewrite another one
+        prep = stage_commit(
+            root, [rel, *outputs, MANIFEST], prep_message, allow_empty=True
+        )
+    except WikiError as exc:  # no prep commit: the source stays pending in raw/
+        _drop_uncommitted(ctx, [rel, *outputs, MANIFEST], [*outputs, MANIFEST])
+        out.status, out.reason = "failed", str(exc)
         return out
-    assert prepared.conversion is not None
-    # always a commit of its own: a later amend can never rewrite another commit
-    prep = stage_commit(
-        root,
-        [rel, *prepared.conversion.outputs, MANIFEST],
-        prep_message,
-        allow_empty=True,
-    )
     source = _Source(ctx, prepared, out, prep)
     try:
         for part in prepared.parts:
             source.run_part(part)
+        source.commit()
     except _Injected as exc:
         source.undo()
         out.status, out.reason = (
@@ -774,17 +793,17 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
         exc.cost_usd += out.cost_usd
         _fail(ctx, source, str(exc))
         raise
-    except (_Failed, ClaudeError) as exc:
+    except (_Failed, WikiError) as exc:  # a ClaudeError, a GitError, a refused image
         out.cost_usd += getattr(exc, "cost_usd", 0.0)
         _fail(ctx, source, str(exc))
-        return out
-    source.commit()
     return out
 
 
 def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
     """Roll back to the prep commit and record the source as failed in it."""
     source.undo()
+    root = Path(ctx.root)
+    ctx.manifest.entries = Manifest.load(root).entries  # the prep commit's
     _set_status(ctx, source.prepared.rel, status="failed")
     assert source.prep is not None
     stage_commit(
@@ -793,5 +812,6 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
         f"ingest(prep): {source.prepared.rel}",
         amend=source.prep,
     )
-    source.out.status = "failed"
-    source.out.reason = reason
+    out = source.out
+    out.status, out.reason = "failed", reason
+    out.pages_created, out.pages_updated, out.reviewed_touched = [], [], []

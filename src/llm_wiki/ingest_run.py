@@ -148,6 +148,10 @@ class _Undo:
     def rollback(self, base: str, branch: str | None) -> None:
         root = self.root
         dirty = [p for p in gitops.changed_paths(root) if self._ours(p)]
+        # a gitignored file is reset only when the run owns it
+        dirty += [
+            p for p in gitops.changed_paths(root, ignored=True) if p in self.owned
+        ]
         gitops.restore(root, dirty)  # nothing the run left half-done survives
         if branch is not None:
             if gitops.current_branch(root) != base:
@@ -597,8 +601,10 @@ def run_ingest(
     undo = _Undo(root, _fresh(root / TMP_DIR / f"ingest-{run_dir.name}"), run_dir)
     report = IngestReport(decision="noop", base=base)
     try:
-        for rel in gitops.changed_paths(root):  # inbox/ and raw/ only, by preflight
-            undo.keep(rel)
+        # inbox/ and raw/ only, by preflight; gitignored ones too (R23)
+        for rel in gitops.changed_paths(root, ignored=True):
+            if rel.startswith(_DIRT_OK):
+                undo.keep(rel)
         items = _work_list(root, undo, paths, note, trust, today)
         items = _within_source_cap(root, cfg, items, undo)
         if not items:

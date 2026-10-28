@@ -121,12 +121,13 @@ def current_branch(root: Path) -> str | None:
         return None
 
 
-def changed_paths(root: Path) -> list[str]:
-    """Modified, added, deleted and untracked files of the wiki (gitignored ones
-    excluded), relative to the wiki root.
+def changed_paths(root: Path, ignored: bool = False) -> list[str]:
+    """Modified, added, deleted and untracked files of the wiki, relative to the
+    wiki root; gitignored files too when ``ignored`` is set.
     """
     top, prefix = _scope(root)
-    out = _pgit(top, "status", "--porcelain=v1", "-z", "-uall", "--", prefix)
+    flags = ["--ignored"] if ignored else []
+    out = _pgit(top, "status", "--porcelain=v1", "-z", "-uall", *flags, "--", prefix)
     fields = out.split("\0")
     paths: list[str] = []
     i = 0
@@ -183,8 +184,10 @@ def stage_commit(
     """Commit exactly ``rels`` (a missing file commits its deletion); returns HEAD.
 
     Only these paths are committed (``--only``), whatever else the index holds.
-    ``amend`` is the sha of the commit to amend: it must still be HEAD. Without
-    ``amend`` or ``allow_empty``, nothing to commit makes no commit.
+    They are tool-owned and named one by one, so they are added with ``-f``: a
+    host repo's .gitignore must not break an ingest (R23). ``amend`` is the sha
+    of the commit to amend: it must still be HEAD. Without ``amend`` or
+    ``allow_empty``, nothing to commit makes no commit.
     """
     top, prefix = _scope(root)
     head = git(top, "rev-parse", "HEAD").strip()
@@ -195,7 +198,7 @@ def stage_commit(
     present = _repo_paths(prefix, [r for r in rels if (root / r).exists()])
     gone = _repo_paths(prefix, [r for r in rels if not (root / r).exists()])
     if present:
-        _pgit(top, "add", "--", *present)
+        _pgit(top, "add", "-f", "--", *present)
     if gone:
         _pgit(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *gone)
     # a path neither added nor in HEAD is unknown to git: there is nothing to commit
@@ -214,6 +217,14 @@ def switch(root: Path, branch: str, create: bool = False) -> None:
 
 def delete_branch(root: Path, branch: str) -> None:
     git(root, "branch", "-q", "-D", branch)
+
+
+def unstage(root: Path, rels: list[str]) -> None:
+    """Put the index entries of ``rels`` back to HEAD; the files stay as they are."""
+    if not rels:
+        return
+    top, prefix = _scope(root)
+    _pgit(top, "reset", "-q", "--", *_repo_paths(prefix, list(dict.fromkeys(rels))))
 
 
 def ff_merge(root: Path, branch: str) -> None:
