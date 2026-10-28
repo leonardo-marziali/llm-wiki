@@ -148,6 +148,24 @@ def test_decision_without_adr_status(root):
     assert check(root, good) == []
 
 
+@pytest.mark.parametrize("status", ["deprecated", "superseded"])
+def test_to_be_section_never_creates_history(root, status):
+    # R18: routing accepts history pages in to-be sections, but a plan never
+    # creates one there
+    kw = {"type": "requirement", "status": status}
+    errors = check(root, page("requirements.old", **kw))
+    assert any(
+        "requirements.old" in e and "a new page in a to-be section" in e for e in errors
+    )
+    (root / "wiki" / "requirements" / "old.md").write_text(
+        page_text(
+            "requirements.old", "Old", "# Old\n", type_="requirement", status="to-be"
+        ),
+        encoding="utf-8",
+    )
+    assert check(root, page("requirements.old", action="update", **kw)) == []
+
+
 def test_routing_error_matches_lint_messages():
     assert routing_error("as-is", "concept", "as-is", None) is None
     assert routing_error("as-is", "concept", "to-be", None) == (

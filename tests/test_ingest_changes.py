@@ -445,3 +445,53 @@ def test_deleted_plan_deprecates_only_pages_left_without_sources(wiki):
     assert {c.text for pg in p.pages for c in pg.claims} == {DELETE_CLAIM}
     assert PLAN_CLAIM == DELETE_CLAIM  # the brief's exact wording
     assert p.open_questions == [OPEN_QUESTION]
+
+
+def test_deleted_source_to_be_page_becomes_deprecated(wiki, fake_claude):
+    # R18: a to-be page that loses its only source passes lint as deprecated
+    req = "wiki/requirements/fast-ci.md"
+    body = (
+        "# Fast CI\n\n**TL;DR** CI under five minutes.\n\n"
+        f"CI must finish in five minutes.[^1]\n\n[^1]: {RAW_REL}\n"
+    )
+    (wiki / req).write_text(
+        page_text(
+            "requirements.fast-ci",
+            "Fast CI",
+            body,
+            type_="requirement",
+            status="to-be",
+            sources=[(RAW_REL, sha(OLD_TEXT))],
+        ),
+        encoding="utf-8",
+    )
+    m = Manifest.load(wiki)
+    touched = [*m.pages_for(RAW_REL), "requirements.fast-ci"]
+    m.record(m.entries[RAW_REL].model_copy(update={"pages_touched": touched}))
+    m.save(wiki)
+    build_indexes(wiki, load_config(wiki))
+    gitops.commit_all(wiki, "add a requirement")
+    (wiki / RAW_REL).unlink()
+    deprecated = page_text(
+        "requirements.fast-ci",
+        "Fast CI",
+        "# Fast CI\n\n**TL;DR** CI under five minutes (unverified).\n\n"
+        "> [!unverified]\n> CI must finish in five minutes.\n",
+        type_="requirement",
+        status="deprecated",
+    )
+    response = deleted_edit()
+    response["write"][req] = deprecated
+    fake_claude.queue(response)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert report.lint_errors == []
+    (out,) = report.outcomes
+    assert out.status == "deleted"
+    assert "requirements.fast-ci" in out.pages_updated
+    assert (
+        f"`{req}`: update `requirements.fast-ci`; status: deprecated"
+        in (fake_claude.calls()[0]["stdin"])
+    )
+    assert "status: deprecated" in (wiki / req).read_text(encoding="utf-8")
+    assert Manifest.load(wiki).entries[RAW_REL].status == "deleted"

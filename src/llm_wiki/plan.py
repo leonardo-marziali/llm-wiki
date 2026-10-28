@@ -163,6 +163,12 @@ def _page_errors(
         reason := routing_error(kind, p.type, p.status, p.adr_status)
     ):
         errors.append(f"{p.id}: {reason}")
+    elif kind == "to-be" and p.action == "create" and p.status != "to-be":
+        # routing lets history stay in a to-be section; it is never created there
+        errors.append(
+            f"{p.id}: status '{p.status}' on a new page in a to-be section "
+            "(must be 'to-be')"
+        )
     errors += [
         f"{p.id}: claim cites '{c.source}', not this source or a known raw file"
         for c in p.claims

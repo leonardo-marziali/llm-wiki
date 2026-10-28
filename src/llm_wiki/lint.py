@@ -241,8 +241,9 @@ def routing_error(
 ) -> str | None:
     """Why a page with this type/status does not belong in a ``kind`` section."""
     if kind == "to-be":
-        # a superseded stub keeps its place in the section it was planned in
-        if status not in ("to-be", "superseded"):
+        # history keeps its place in the section it was planned in: a
+        # superseded stub, or a deprecated page that lost its sources (R18)
+        if status not in ("to-be", "superseded", "deprecated"):
             return f"status '{status}' in a to-be section"
     elif kind == "decisions":
         if type_ != "decision":

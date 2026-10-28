@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from llm_wiki.cli import app
 from llm_wiki.config import load_config
 from llm_wiki.index import build_indexes
-from llm_wiki.lint import Finding, LintReport, lint, write_report
+from llm_wiki.lint import Finding, LintReport, lint, routing_error, write_report
 from llm_wiki.manifest import Manifest, sha256_file
 
 TODAY = date(2026, 10, 26)
@@ -314,6 +314,25 @@ def test_deprecated_page_without_sources_ok(root):
     )
     append(root, "overview.md", "- [old](conventions/old.md)\n")
     assert codes(root) == set()
+
+
+def test_deprecated_page_in_to_be_section_ok(root):
+    # R18: a deprecated page is history, not a to-be claim
+    add_page(
+        root,
+        "requirements/old.md",
+        "Old requirement",
+        type_="requirement",
+        status="deprecated",
+        sources=[],
+        body="# Old\n\n**TL;DR** Gone.\n\n> [!unverified]\n> We once wanted it.\n",
+    )
+    append(root, "overview.md", "- [old](requirements/old.md)\n")
+    assert codes(root) == set()
+    assert routing_error("to-be", "requirement", "deprecated", None) is None
+    assert routing_error("to-be", "requirement", "as-is", None) == (
+        "status 'as-is' in a to-be section"
+    )
 
 
 def test_deprecated_page_with_sources_still_checked(root):
