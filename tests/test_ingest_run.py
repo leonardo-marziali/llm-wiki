@@ -594,7 +594,8 @@ def test_changed_source_refused_keeps_last_ingested_version(
     assert "could not be read" in out.reason
     assert (wiki / RAW_REL).read_bytes() == original
     assert Manifest.load(wiki).entries[RAW_REL] == before
-    assert gitops.changed_paths(wiki) == []
+    # C1: the refused version is the user's: back in the inbox
+    assert gitops.changed_paths(wiki) == ["inbox/docs/guide.md"]
 
 
 def test_new_refused_source_committed_and_not_retried(wiki, fake_claude, capsys):
@@ -701,3 +702,168 @@ def test_manifest_file_committed(wiki, fake_claude):
     ingest(wiki)
     shown = gitops.git(wiki, "show", f"HEAD:{MANIFEST}")
     assert json.loads(shown)["sources"]["raw/new.md"]["status"] == "ingested"
+
+
+# --- fix round 1: C1, I1, R17 ---
+
+
+def _refuse(monkeypatch):
+    def convert(*a, **kw):
+        raise RefusedSource("too big")
+
+    monkeypatch.setattr(intake, "convert", convert)
+
+
+def test_refused_changed_version_from_inbox_goes_back_to_inbox(
+    wiki, fake_claude, monkeypatch, capsys
+):
+    # C1: accept never loses the refused new version
+    _refuse(monkeypatch)
+    original = (wiki / RAW_REL).read_bytes()
+    drop(wiki, "inbox/docs/guide.md", "# Guide v2 USERDATA\n")
+    report = ingest(wiki)
+    assert report.decision == "accept"
+    assert (wiki / RAW_REL).read_bytes() == original
+    back = wiki / "inbox" / "docs" / "guide.md"
+    assert back.read_text(encoding="utf-8") == "# Guide v2 USERDATA\n"
+    (out,) = report.outcomes
+    assert "inbox/docs/guide.md" in out.reason
+    assert "inbox/docs/guide.md" in capsys.readouterr().out
+    assert gitops.changed_paths(wiki) == ["inbox/docs/guide.md"]
+
+
+def test_refused_changed_raw_edit_goes_to_inbox(wiki, fake_claude, monkeypatch):
+    # C1: a version edited in place in raw/ lands at inbox/<path under raw/>
+    _refuse(monkeypatch)
+    original = (wiki / RAW_REL).read_bytes()
+    drop(wiki, RAW_REL, "# Guide v2 USERDATA\n")
+    report = ingest(wiki)
+    assert report.decision == "accept"
+    assert (wiki / RAW_REL).read_bytes() == original
+    back = wiki / "inbox" / "docs" / "guide.md"
+    assert back.read_text(encoding="utf-8") == "# Guide v2 USERDATA\n"
+    assert "inbox/docs/guide.md" in report.outcomes[0].reason
+
+
+def test_refused_raw_edit_rejected_restores_raw_edit(wiki, fake_claude, monkeypatch):
+    _refuse(monkeypatch)
+    drop(wiki, RAW_REL, "# Guide v2 USERDATA\n")
+    before = snapshot(wiki)
+    report = ingest(wiki, yes=False, interactive=True, decide=lambda s: "reject")
+    assert report.decision == "reject"
+    assert snapshot(wiki) == before
+
+
+def test_files_dropped_mid_run_survive_reject(wiki, fake_claude):
+    # I1: user files the run never touched are never deleted
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+
+    def decide(summary):
+        drop(wiki, "inbox/later.md", "# Later\n")
+        drop(wiki, "raw/docs/later.md", "# Later raw\n")
+        return "reject"
+
+    ingest(wiki, yes=False, interactive=True, decide=decide)
+    assert inbox_files(wiki) == ["inbox/later.md", "inbox/new.md"]
+    assert (wiki / "raw/docs/later.md").read_text(encoding="utf-8") == "# Later raw\n"
+
+
+def test_interrupted_hold_keeps_unheld_user_files(wiki, fake_claude, monkeypatch):
+    # I1: a Ctrl-C while holding pre-run files deletes none of them
+    from llm_wiki import ingest_run
+
+    drop(wiki, "inbox/a.md", "a\n")
+    drop(wiki, "inbox/b.md", "b\n")
+    drop(wiki, "raw/docs/c.md", "c\n")
+    before = snapshot(wiki)
+    real_keep = ingest_run._Undo.keep
+    calls = []
+
+    def keep(self, rel, dest=None):
+        calls.append(rel)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        real_keep(self, rel, dest)
+
+    monkeypatch.setattr(ingest_run._Undo, "keep", keep)
+    with pytest.raises(KeyboardInterrupt):
+        ingest(wiki)
+    assert snapshot(wiki) == before
+    assert fake_claude.calls() == []
+
+
+def test_unchanged_inbox_copy_is_a_noop(wiki, fake_claude, capsys):
+    # R17(a): no branch, no call; the copy stays in the inbox
+    drop(wiki, "inbox/docs/guide.md", (wiki / RAW_REL).read_text(encoding="utf-8"))
+    report = ingest(wiki)
+    assert report.decision == "noop"
+    out = capsys.readouterr().out
+    assert "unchanged: inbox/docs/guide.md" in out
+    assert "nothing to do" in out
+    assert fake_claude.calls() == []
+    assert branches(wiki) == ["main"]
+    assert inbox_files(wiki) == ["inbox/docs/guide.md"]
+
+
+def test_recorded_deletion_is_a_noop(wiki, fake_claude):
+    # R17(a): a source already recorded as deleted needs no work
+    m = Manifest.load(wiki)
+    m.mark_deleted(RAW_REL)
+    m.save(wiki)
+    (wiki / RAW_REL).unlink()
+    gitops.commit_all(wiki, "deleted guide")
+    report = ingest(wiki)
+    assert report.decision == "noop"
+    assert fake_claude.calls() == []
+    assert branches(wiki) == ["main"]
+
+
+def test_accept_interrupted_prints_recovery(wiki, fake_claude, monkeypatch, capsys):
+    # R17(b)
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+
+    def ff_merge(root, branch):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(gitops, "ff_merge", ff_merge)
+    with pytest.raises(KeyboardInterrupt):
+        ingest(wiki)
+    err = capsys.readouterr().err
+    branch = "wiki/ingest-20261028-new"
+    assert (
+        f"git switch main && git merge --ff-only {branch} && git branch -D {branch}"
+        in err
+    )
+    assert ".wiki/tmp/ingest-" in err
+    assert branch in branches(wiki)  # nothing was thrown away
+
+
+def test_reject_failure_prints_recovery(wiki, fake_claude, monkeypatch, capsys):
+    # R17(b)
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+
+    def delete_branch(root, branch):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(gitops, "delete_branch", delete_branch)
+    with pytest.raises(RuntimeError):
+        ingest(wiki, yes=False, interactive=True, decide=lambda s: "reject")
+    err = capsys.readouterr().err
+    branch = "wiki/ingest-20261028-new"
+    assert f"git switch main && git branch -D {branch}" in err
+    assert "held.json" in err
+    held = next((wiki / ".wiki" / "tmp").glob("ingest-*/held.json"))
+    assert {"inbox/new.md"} <= {e["dest"] for e in json.loads(held.read_text())}
+
+
+def test_unknown_decision_rejects(wiki, fake_claude):
+    # R17(c)
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new"))
+    report = ingest(wiki, yes=False, interactive=True, decide=lambda s: "maybe")
+    assert report.decision == "reject"
+    assert branches(wiki) == ["main"]
+    assert inbox_files(wiki) == ["inbox/new.md"]

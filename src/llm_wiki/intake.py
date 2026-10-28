@@ -45,7 +45,7 @@ class Prepared:
     rel: str  # the raw path
     sha: str
     kind: Kind
-    origin: Path | None = None  # the inbox or note file to restore on reject
+    origin: Path | None = None  # where a refused changed version goes (absolute)
     conversion: Conversion | None = None
     parts: list[str] = field(default_factory=list)  # converted paths to plan in turn
     image: Path | None = None  # the raw image, sent to the plan call

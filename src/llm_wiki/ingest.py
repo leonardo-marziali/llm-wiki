@@ -6,6 +6,7 @@ limit, an auth failure or a missing CLI rolls back this source and stops the run
 """
 
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -436,12 +437,20 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
     """Settle the tree for a quarantined or refused source; returns the reason.
 
     A changed source gets its last ingested version back, raw file and manifest
-    entry, so the pages it backs keep valid citations. A new refused source is
+    entry, so the pages it backs keep valid citations; a refused new version
+    moves to ``prepared.origin`` (set by the caller). A new refused source is
     kept in raw/ flagged ``refused``: it is retried only once its file changes.
     """
     root, rel = Path(ctx.root), prepared.rel
     old = _entry_at(root, "HEAD", rel) if prepared.kind == "changed" else None
     if old is not None:
+        moved = ""
+        if prepared.status == "refused" and prepared.origin is not None:
+            # the refused version is the user's only copy: never drop it
+            dest = Path(prepared.origin)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(root / rel), dest)
+            moved = f"; the new version is back at {dest.relative_to(root).as_posix()}"
         restore(root, [rel])
         ctx.manifest.record(old)
         if prepared.held is not None:  # the reason file records the restore
@@ -452,7 +461,7 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
                 json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
             )
         ctx.manifest.save(root)
-        return prepared.reason + "; kept the last ingested version"
+        return prepared.reason + "; kept the last ingested version" + moved
     if prepared.status == "refused":
         entry = ctx.manifest.entries[rel]
         flags = [*entry.flags, *(["refused"] if "refused" not in entry.flags else [])]

@@ -5,6 +5,7 @@ either merges the squashed branch into the base (accept) or deletes it and puts
 every moved file back (reject, Ctrl-C or a crash): the wiki is as before the run.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -97,36 +98,52 @@ def _under(rel: str, folder: str) -> bool:
 
 class _Undo:
     """What a reject must put back: copies of moved and pre-run files, held under
-    .wiki/tmp/, and the quarantine entries the run did not make.
+    .wiki/tmp/ (listed in its held.json), and the quarantine entries the run did
+    not make. Only paths the run owns are reset: any other file under inbox/ or
+    raw/ is the user's and is never touched.
     """
 
     def __init__(self, root: Path, hold: Path, run_dir: Path):
         self.root, self.hold = root, hold
         self.skip = [p.relative_to(root).as_posix() for p in (hold, run_dir)]
         self.entries: list[tuple[Path | None, str]] = []  # (copy or None: absent, rel)
+        self.owned: set[str] = set()  # inbox/ and raw/ paths this run changes
         qdir = root / QUARANTINE_DIR
         self.quarantined = {p.name for p in qdir.iterdir()} if qdir.is_dir() else set()
+
+    @property
+    def index(self) -> Path:
+        return self.hold / "held.json"
+
+    def own(self, rel: str) -> None:
+        self.owned.add(rel)
 
     def keep(self, rel: str, dest: str | None = None) -> None:
         """Hold ``rel`` now; a rollback writes it to ``dest`` (default: ``rel``)."""
         src = self.root / rel
         copy = None
+        self.hold.mkdir(parents=True, exist_ok=True)
         if src.is_file():
-            self.hold.mkdir(parents=True, exist_ok=True)
             copy = self.hold / str(len(self.entries))
             shutil.copy2(src, copy)
         self.entries.append((copy, dest or rel))
+        self.owned |= {rel, dest or rel}
+        held = [
+            {"copy": c.name if c else None, "dest": d} for c, d in self.entries
+        ]  # for a rollback finished by hand
+        self.index.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
 
     def discard(self) -> None:
         shutil.rmtree(self.hold, ignore_errors=True)
 
+    def _ours(self, rel: str) -> bool:
+        if any(_under(rel, s) for s in self.skip):
+            return False
+        return rel in self.owned or not rel.startswith(_DIRT_OK)
+
     def rollback(self, base: str, branch: str | None) -> None:
         root = self.root
-        dirty = [
-            p
-            for p in gitops.changed_paths(root)
-            if not any(_under(p, s) for s in self.skip)
-        ]
+        dirty = [p for p in gitops.changed_paths(root) if self._ours(p)]
         gitops.restore(root, dirty)  # nothing the run left half-done survives
         if branch is not None:
             if gitops.current_branch(root) != base:
@@ -145,6 +162,15 @@ class _Undo:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(copy), dest)
         self.discard()
+
+
+def _free(path: Path) -> Path:
+    """``path``, or ``<stem>-2<suffix>`` and so on when a file is there."""
+    out, n = path, 2
+    while out.exists():
+        out = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        n += 1
+    return out
 
 
 # --- preflight ---
@@ -235,20 +261,31 @@ def _work_list(
         items.append(_Item(rel))
     manifest = Manifest.load(root)
     if paths:
-        items += [
-            _Item(rel)
-            for rel in copy_paths(root, paths)
-            if needs_work(manifest, root, rel)
-        ]
-    items += [_Item(rel, origin=src) for src, rel in intake_inbox(root)]
+        copied = copy_paths(root, paths)
+        for rel in copied:
+            undo.own(rel)
+        items += [_Item(rel) for rel in copied if needs_work(manifest, root, rel)]
+    for src, rel in intake_inbox(root):
+        target = root / rel
+        if (
+            target.is_file()
+            and not needs_work(manifest, root, rel)
+            and sha256_file(src) == sha256_file(target)
+        ):
+            name = src.relative_to(root).as_posix()
+            typer.echo(f"unchanged: {name} matches {rel}; left in inbox/")
+            continue
+        items.append(_Item(rel, origin=src))
     scan = manifest.scan(root)
-    items += [_Item(rel) for rel in [*scan.new, *scan.changed, *scan.deleted]]
+    items += [_Item(rel) for rel in [*scan.new, *scan.changed]]
+    items += [_Item(rel) for rel in scan.deleted if needs_work(manifest, root, rel)]
     items += [_Item(rel) for rel in scan.unchanged if needs_work(manifest, root, rel)]
     seen: set[str] = set()
     out = []
     for item in items:
         if item.rel not in seen:
             seen.add(item.rel)
+            undo.own(item.rel)
             out.append(item)
     return out
 
@@ -269,7 +306,9 @@ def _fresh_branch(root: Path, name: str) -> str:
 # --- processing and finalize ---
 
 
-def _process(ctx: RunContext, items: list[_Item], report: IngestReport) -> None:
+def _process(
+    ctx: RunContext, items: list[_Item], report: IngestReport, undo: _Undo
+) -> None:
     root = Path(ctx.root)
     redactions: Counter[str] = Counter()
     for n, item in enumerate(items, 1):
@@ -283,6 +322,12 @@ def _process(ctx: RunContext, items: list[_Item], report: IngestReport) -> None:
             continue
         prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
         redactions.update(prepared.redactions)
+        if prepared.status == "refused" and prepared.kind == "changed":
+            # the old version comes back; the refused one goes where the user
+            # sees it, and the next run retries it
+            dest = item.origin or root / "inbox" / Path(item.rel).relative_to("raw")
+            prepared.origin = _free(dest)
+            undo.own(prepared.origin.relative_to(root).as_posix())
         try:
             out = process_source(ctx, prepared)
         except STOP as exc:  # this source is rolled back; the rest stay pending
@@ -423,10 +468,40 @@ def _prompt_decide(root: Path, base: str, branch: str) -> Callable[[str], Decisi
     return decide
 
 
-def _accept(root: Path, base: str, branch: str) -> None:
-    gitops.switch(root, base)
-    gitops.ff_merge(root, branch)
-    gitops.delete_branch(root, branch)
+def _accept(root: Path, base: str, branch: str, undo: _Undo) -> None:
+    """Merge the branch; if that is cut short, say how to finish it by hand."""
+    try:
+        gitops.switch(root, base)
+        gitops.ff_merge(root, branch)
+        gitops.delete_branch(root, branch)
+    except BaseException:
+        typer.echo(
+            f"error: the accept stopped before it finished. To finish it, run in "
+            f"{root}:\n"
+            f"  git switch {base} && git merge --ff-only {branch} && "
+            f"git branch -D {branch}\n"
+            f"then delete {undo.hold} (copies held only for a reject)",
+            err=True,
+        )
+        raise
+    undo.discard()
+
+
+def _rollback(undo: _Undo, base: str, branch: str | None) -> None:
+    """Reject; if that is cut short, say how to finish it by hand."""
+    try:
+        undo.rollback(base, branch)
+    except BaseException:
+        drop = f" && git branch -D {branch}" if branch else ""
+        typer.echo(
+            f"error: the rollback stopped before it finished. To finish it, run in "
+            f"{undo.root}:\n"
+            f"  git switch {base}{drop}\n"
+            f"then move each file listed in {undo.index} from that folder back "
+            "to its dest (a null copy: delete the dest)",
+            err=True,
+        )
+        raise
 
 
 # --- the run ---
@@ -478,7 +553,7 @@ def run_ingest(
             run_dir=run_dir,
             n=0,
         )
-        _process(ctx, items, report)
+        _process(ctx, items, report, undo)
         _finalize(ctx, base, report)
         report.summary = summarize(report)
         typer.echo(report.summary)
@@ -486,15 +561,17 @@ def run_ingest(
             report.decision = "reject" if report.lint_errors else "accept"
         else:
             gate = decide or _prompt_decide(root, base, report.branch)
-            report.decision = gate(report.summary)
+            # anything but an explicit accept rejects
+            accepted = gate(report.summary) == "accept"
+            report.decision = "accept" if accepted else "reject"
     except BaseException:  # Ctrl-C or a crash: the wiki goes back as it was
-        undo.rollback(base, report.branch)
+        _rollback(undo, base, report.branch)
         raise
     if report.decision == "reject":
-        undo.rollback(base, report.branch)
+        _rollback(undo, base, report.branch)
+    else:
+        _accept(root, base, report.branch, undo)
     if report.decision == "accept":
-        _accept(root, base, report.branch)
-        undo.discard()
         typer.echo(f"accepted: {report.branch} merged into {base}")
     elif yes:
         report.exit_code = 1
