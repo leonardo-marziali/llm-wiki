@@ -803,3 +803,29 @@ def test_changed_source_git_error_keeps_last_version(
     assert out.status == "failed"
     assert "refused" in out.reason
     assert_last_version_kept(wiki, old_entry)
+
+
+# --- R26: every wanted page of a changed source is linted ---
+
+
+@pytest.mark.parametrize("skipped", ["src", "planned"])
+def test_changed_source_skipped_wanted_page_fails(wiki, fake_claude, skipped):
+    from llm_wiki.lint import lint
+
+    old_entry = Manifest.load(wiki).entries[RAW_REL]
+    (wiki / RAW_REL).write_text(NEW_TEXT, encoding="utf-8")
+    good = planned(plan(update("conventions.git-flow", "convention", "Git flow")))
+    new = sha(NEW_TEXT)
+    only = {GIT_FLOW: git_flow(new)} if skipped == "src" else {SRC: src_page(new)}
+    fake_claude.queue(good, edit(only), edit(only))
+    report = ingest(wiki)
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "sha-mismatch" in out.reason
+    assert Manifest.load(wiki).entries[RAW_REL] == old_entry
+    errors = [
+        f
+        for f in lint(wiki, load_config(wiki), today=TODAY).findings
+        if f.severity == "error"
+    ]
+    assert errors == []

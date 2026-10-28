@@ -16,10 +16,12 @@ from typing import Literal
 
 from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
+from llm_wiki.convert import never_ingest
 from llm_wiki.errors import STOP, WikiError
 from llm_wiki.gitops import (
     changed_paths,
     exists_at,
+    is_ignored,
     restore,
     show_text,
     stage_commit,
@@ -28,7 +30,7 @@ from llm_wiki.gitops import (
 from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, inbox_home, source_slug, src_id_for
 from llm_wiki.lint import Finding, cited_paths, lint
-from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
+from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, sha256_file
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
 from llm_wiki.plan import plan_source, redact_plan, screen_plan, system_prompt
 from llm_wiki.schemas import Claim, PagePlan, Plan
@@ -516,8 +518,9 @@ class _Source:
             # an untouched planned page still cites the deleted file: lint it too
             pages = wanted
             findings += self._deleted_citations(wanted)
-        else:  # an untouched verify page keeps the old sha: lint it too
-            pages = sorted({*pages, *(page_rel(i) for i in self.verified)})
+        elif self.prepared.kind == "changed":
+            # an untouched planned, src or verify page keeps the old sha
+            pages = wanted
         pages = [p for p in pages if (self.root / p).is_file()]
         if pages:
             report = lint(
@@ -581,7 +584,12 @@ class _Source:
             )
         )
         ctx.manifest.save(self.root)
-        stage_commit(self.root, [*staged, MANIFEST], f"ingest: {self.out.title}")
+        stage_commit(
+            self.root,
+            [*staged, MANIFEST],
+            f"ingest: {self.out.title}",
+            force=[*staged, MANIFEST],
+        )
         created = {i for i, a in self.planned.items() if a == "create"}
         updated = {i for i, a in self.planned.items() if a == "update"}
         updated |= {i for i in self.verified if page_rel(i) in staged}
@@ -599,7 +607,12 @@ class _Source:
         staged = [p for p in self._changed() if p in self.allowed]
         ctx.manifest.mark_deleted(rel)
         ctx.manifest.save(self.root)
-        stage_commit(self.root, [*staged, rel, MANIFEST], f"ingest(delete): {rel}")
+        stage_commit(
+            self.root,
+            [*staged, rel, MANIFEST],
+            f"ingest(delete): {rel}",
+            force=[*staged, MANIFEST],
+        )
         self.out.pages_updated = sorted(
             i for i in {*self.planned, self.src_id} if page_rel(i) in staged
         )
@@ -663,7 +676,13 @@ def _quarantine_plan(
         reason += "; kept the last ingested version"
     else:
         _set_status(ctx, rel, status="quarantined", converted=[])
-    stage_commit(root, [rel, *outputs, MANIFEST], f"ingest(prep): {rel}", amend=prep)
+    stage_commit(
+        root,
+        [rel, *outputs, MANIFEST],
+        f"ingest(prep): {rel}",
+        amend=prep,
+        force=[*outputs, MANIFEST],
+    )
     return reason
 
 
@@ -712,6 +731,14 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
         entry = ctx.manifest.entries[rel]
         flags = [*entry.flags, *(["refused"] if "refused" not in entry.flags else [])]
         _set_status(ctx, rel, flags=flags)
+        if never_ingest(Path(rel).name) or is_ignored(root, rel):
+            # a credential or a gitignored file is never committed: it goes back
+            # where the user sees it
+            dest = prepared.origin or inbox_home(root, rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(root / rel), dest)
+            where = dest.relative_to(root).as_posix()
+            return prepared.reason + f"; not committed: it is back at {where}"
     return prepared.reason
 
 
@@ -733,7 +760,9 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
         try:
             ctx.manifest.mark_deleted(rel)
             ctx.manifest.save(root)
-            stage_commit(root, [rel, MANIFEST], f"ingest(delete): {rel}")
+            stage_commit(
+                root, [rel, MANIFEST], f"ingest(delete): {rel}", force=[MANIFEST]
+            )
         except WikiError as exc:  # e.g. a GitError: the deletion stays pending
             _drop_uncommitted(ctx, [rel, MANIFEST], [MANIFEST])
             out.status, out.reason = "failed", str(exc)
@@ -777,19 +806,40 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
     outputs = prepared.conversion.outputs if prepared.conversion else []
+    settled = ""  # what _record_unready already did to the tree
     try:
         if prepared.status != "ready":  # screened out or refused: record it, no LLM
-            out.status, out.reason = prepared.status, _record_unready(ctx, prepared)
-            stage_commit(root, [rel, MANIFEST], prep_message, allow_empty=True)
+            settled = _record_unready(ctx, prepared)
+            out.status, out.reason = prepared.status, settled
+            # rel is the restored last version, gone, or a committable refused
+            # file: never forced
+            stage_commit(
+                root,
+                [rel, MANIFEST],
+                prep_message,
+                allow_empty=True,
+                force=[MANIFEST],
+            )
             return out
         # always a commit of its own: a later amend can never rewrite another one
         prep = stage_commit(
-            root, [rel, *outputs, MANIFEST], prep_message, allow_empty=True
+            root,
+            [rel, *outputs, MANIFEST],
+            prep_message,
+            allow_empty=True,
+            force=[rel, *outputs, MANIFEST],  # an accepted raw source
         )
     except WikiError as exc:  # no prep commit: a new source stays pending in raw/
         _drop_uncommitted(ctx, [rel, *outputs, MANIFEST], [*outputs, MANIFEST])
-        out.status, out.reason = "failed", str(exc)
-        if prepared.kind == "changed" and exists_at(root, "HEAD", rel):
+        out.status = "failed"
+        out.reason = "; ".join(r for r in (str(exc), settled) if r)
+        path = root / rel
+        if (
+            prepared.kind == "changed"
+            and exists_at(root, "HEAD", rel)
+            and path.is_file()
+            and sha256_file(path) == prepared.sha  # not settled already (N1)
+        ):
             out.reason += _move_new_version(ctx, prepared)
             restore(root, [rel])  # the last ingested version, as committed
         return out
@@ -834,14 +884,20 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
     old = _entry_at(root, f"{prep}^", rel) if prepared.kind == "changed" else None
     if old is None:
         _set_status(ctx, rel, status="failed")
-        stage_commit(root, [MANIFEST], f"ingest(prep): {rel}", amend=prep)
+        stage_commit(
+            root, [MANIFEST], f"ingest(prep): {rel}", amend=prep, force=[MANIFEST]
+        )
     else:
         reason += _move_new_version(ctx, prepared)
         restore(root, [rel, *outputs], rev=f"{prep}^")
         ctx.manifest.record(old)
         ctx.manifest.save(root)
         stage_commit(
-            root, [rel, *outputs, MANIFEST], f"ingest(prep): {rel}", amend=prep
+            root,
+            [rel, *outputs, MANIFEST],
+            f"ingest(prep): {rel}",
+            amend=prep,
+            force=[*outputs, MANIFEST],
         )
     out = source.out
     out.status, out.reason = "failed", reason

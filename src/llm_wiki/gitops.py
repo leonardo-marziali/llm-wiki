@@ -1,6 +1,7 @@
 """Thin git wrappers. Every failure surfaces as GitError carrying git's stderr."""
 
 import subprocess
+from collections.abc import Collection
 from pathlib import Path
 
 from llm_wiki.errors import GitError
@@ -189,14 +190,17 @@ def stage_commit(
     *,
     amend: str | None = None,
     allow_empty: bool = False,
+    force: Collection[str] = (),
 ) -> str:
     """Commit exactly ``rels`` (a missing file commits its deletion); returns HEAD.
 
     Only these paths are committed (``--only``), whatever else the index holds.
-    They are tool-owned and named one by one, so they are added with ``-f``: a
-    host repo's .gitignore must not break an ingest (R23). ``amend`` is the sha
-    of the commit to amend: it must still be HEAD. Without ``amend`` or
-    ``allow_empty``, nothing to commit makes no commit.
+    The ``force`` paths are tool-generated (pages, conversions, the manifest,
+    the log and indexes) or accepted raw sources, named one by one: they are
+    added with ``-f``, so a host repo's .gitignore cannot break an ingest (R23).
+    Any other path is added without it. ``amend`` is the sha of the commit to
+    amend: it must still be HEAD. Without ``amend`` or ``allow_empty``, nothing
+    to commit makes no commit.
     """
     top, prefix = _scope(root)
     head = git(top, "rev-parse", "HEAD").strip()
@@ -204,10 +208,15 @@ def stage_commit(
         raise GitError(f"refusing to amend {head[:12]}: expected {amend[:12]}")
     root = Path(root)
     rels = list(dict.fromkeys(rels))
-    present = _repo_paths(prefix, [r for r in rels if (root / r).exists()])
+    here = [r for r in rels if (root / r).exists()]
+    forced = _repo_paths(prefix, [r for r in here if r in force])
+    plain = _repo_paths(prefix, [r for r in here if r not in force])
+    present = forced + plain
     gone = _repo_paths(prefix, [r for r in rels if not (root / r).exists()])
-    if present:
-        _pgit(top, "add", "-f", "--", *present)
+    if forced:
+        _pgit(top, "add", "-f", "--", *forced)
+    if plain:
+        _pgit(top, "add", "--", *plain)
     if gone:
         _pgit(top, "rm", "--cached", "-q", "--ignore-unmatch", "--", *gone)
     # a path neither added nor in HEAD is unknown to git: there is nothing to commit
@@ -218,6 +227,21 @@ def stage_commit(
     extra = ["--allow-empty"] + (["--amend"] if amend else [])
     _pgit(top, "commit", "-q", "--only", *extra, "-m", message, "--", *paths)
     return git(top, "rev-parse", "HEAD").strip()
+
+
+def is_ignored(root: Path, rel: str) -> bool:
+    """True when git ignores the (untracked) wiki path ``rel``."""
+    top, prefix = _scope(root)
+    # check-ignore takes paths, not pathspecs: a name is matched literally
+    proc = subprocess.run(
+        ["git", "check-ignore", "-q", "--", *_repo_paths(prefix, [rel])],
+        cwd=top,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 1):
+        raise GitError(f"git check-ignore {rel}: {proc.stderr.decode().strip()}")
+    return proc.returncode == 0
 
 
 def switch(root: Path, branch: str, create: bool = False) -> None:

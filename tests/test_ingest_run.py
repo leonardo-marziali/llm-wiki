@@ -1237,3 +1237,120 @@ def test_wiki_wide_lint_finding_prints_without_empty_path():
     ]
     summary = summarize(report)
     assert "  cap-sources: 2 sources exceeds the cap of 1" in summary.splitlines()
+
+
+# --- R26 ---
+
+
+def test_refused_changed_then_git_error_keeps_new_version(
+    wiki, fake_claude, monkeypatch
+):
+    # N1: the tree was settled already; the old raw must never overwrite the
+    # user's new version in the inbox
+    _refuse(monkeypatch)
+    _git_error_on(monkeypatch, f"ingest(prep): {RAW_REL}")
+    original = (wiki / RAW_REL).read_bytes()
+    drop(wiki, "inbox/docs/guide.md", "# Guide v2 USERDATA\n")
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert inbox_files(wiki) == ["inbox/docs/guide.md"]
+    back = (wiki / "inbox/docs/guide.md").read_text(encoding="utf-8")
+    assert back == "# Guide v2 USERDATA\n"
+    assert (wiki / RAW_REL).read_bytes() == original
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert out.reason.count("is back at") == 1
+
+
+def test_quarantined_changed_then_git_error_copies_nothing_to_inbox(
+    wiki, fake_claude, monkeypatch
+):
+    _git_error_on(monkeypatch, f"ingest(prep): {RAW_REL}")
+    original = (wiki / RAW_REL).read_bytes()
+    drop(wiki, "inbox/docs/guide.md", INJECTION)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert inbox_files(wiki) == []  # the new version is in quarantine
+    assert (wiki / RAW_REL).read_bytes() == original
+    (out,) = report.outcomes
+    assert "is back at" not in out.reason
+
+
+def _history(top):
+    """Every committed patch, on every ref."""
+    return gitops.git(top, "log", "--all", "-p", "--format=")
+
+
+def _paths(top):
+    """Every path any commit on any ref touched."""
+    return set(gitops.git(top, "log", "--all", "--name-only", "--format=").split())
+
+
+def test_host_ignored_credential_never_committed(host, fake_claude):
+    # N2: a refused raw file the host .gitignore ignores is never force-added
+    top, root = host
+    (top / ".gitignore").write_text("*.pem\n", encoding="utf-8")
+    gitops.git(top, "add", ".gitignore")
+    gitops.git(top, "commit", "-qm", "ignore pem")
+    drop(root, "raw/server.pem", "-----BEGIN RSA PRIVATE KEY-----\nabc\n")
+    drop(root, "inbox/a-first.md", FIRST)
+    fake_claude.queue(*ingest_responses("raw/a-first.md", FIRST, "a-first-md"))
+    report = ingest(root)
+    assert report.decision == "accept", report.summary
+    assert "w/raw/server.pem" not in _paths(top)
+    assert "PRIVATE KEY" not in _history(top)
+    assert (root / "inbox" / "server.pem").is_file()
+    assert not (root / "raw" / "server.pem").exists()
+    statuses = {o.rel: (o.status, o.reason) for o in report.outcomes}
+    status, reason = statuses["raw/server.pem"]
+    assert status == "refused"
+    assert "inbox/server.pem" in reason
+    entry = Manifest.load(root).entries["raw/server.pem"]
+    assert (entry.status, entry.flags) == ("failed", ["refused"])
+
+
+def test_wiki_ignored_refused_file_never_committed(wiki, fake_claude):
+    gi = wiki / ".gitignore"
+    gi.write_text(gi.read_text(encoding="utf-8") + "*.xyz\n", encoding="utf-8")
+    gitops.commit_all(wiki, "ignore xyz")
+    drop(wiki, "raw/data.xyz", "opaque\n")
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert "raw/data.xyz" not in _paths(wiki)
+    assert inbox_files(wiki) == ["inbox/data.xyz"]
+
+
+def test_never_ingest_file_never_staged(wiki, fake_claude, capsys):
+    # N2: a credential file is never staged, ignored or not; it goes back to
+    # the inbox and is not retried while unchanged
+    key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretsecret\n"
+    drop(wiki, "inbox/deploy.pem", key)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert (out.rel, out.status) == ("raw/deploy.pem", "refused")
+    assert "inbox/deploy.pem" in out.reason
+    assert "MIIEsecretsecret" not in _history(wiki)
+    assert "raw/deploy.pem" not in _paths(wiki)
+    assert inbox_files(wiki) == ["inbox/deploy.pem"]
+    assert not (wiki / "raw" / "deploy.pem").exists()
+    entry = Manifest.load(wiki).entries["raw/deploy.pem"]
+    assert (entry.status, entry.flags) == ("failed", ["refused"])
+    capsys.readouterr()
+    again = ingest(wiki)
+    assert again.decision == "noop"
+    assert inbox_files(wiki) == ["inbox/deploy.pem"]
+    assert "MIIEsecretsecret" not in _history(wiki)
+
+
+def test_saved_plan_json_is_redacted(wiki, fake_claude):
+    # I5 minor: the plan written to the run dir carries no secret
+    secret = "S3cr3t!xY9q"
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new-md")
+    p["stdout"]["structured_output"]["open_questions"] = [f"password: {secret}"]
+    fake_claude.queue(p, e)
+    ingest(wiki)
+    saved = list((wiki / ".wiki" / "runs").glob("*/*.plan.json"))
+    assert saved
+    assert all(secret not in f.read_text(encoding="utf-8") for f in saved)

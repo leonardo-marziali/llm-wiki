@@ -247,8 +247,12 @@ def needs_work(manifest: Manifest, root: Path, rel: str) -> bool:
     """
     entry = manifest.entries.get(rel)
     path = Path(root) / rel
-    if not path.is_file():
-        return entry is not None and entry.status not in ("deleted", "quarantined")
+    if not path.is_file():  # a refused file sent back to the inbox is no deletion
+        return (
+            entry is not None
+            and entry.status not in ("deleted", "quarantined")
+            and not (entry.status == "failed" and "refused" in entry.flags)
+        )
     if entry is None or entry.status == "deleted":
         return True
     if entry.sha256 != sha256_file(path):
@@ -299,6 +303,17 @@ def _work_list(
         ]
     for src, rel in intake_inbox(root):
         target = root / rel
+        entry = manifest.entries.get(rel)
+        if (
+            not target.exists()
+            and entry is not None
+            and entry.status == "failed"
+            and "refused" in entry.flags
+            and entry.sha256 == sha256_file(src)
+        ):
+            name = src.relative_to(root).as_posix()
+            typer.echo(f"refused before: {name} is unchanged; left in inbox/")
+            continue
         if (
             target.is_file()
             and not needs_work(manifest, root, rel)
@@ -381,9 +396,10 @@ def _fresh_branch(root: Path, name: str) -> str:
 def _prepare(ctx: RunContext, item: _Item, undo: _Undo) -> Prepared:
     root = Path(ctx.root)
     prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
-    if prepared.kind == "changed":
+    if prepared.kind == "changed" or prepared.status == "refused":
         # a refused or failed new version goes back where the user sees it,
-        # the old version comes back, and the next run retries it (R13, R25)
+        # the old version comes back, and the next run retries it (R13, R25);
+        # a refused file that is never committed goes there too (R26)
         origin = item.origin
         prepared.origin = free_path(origin) if origin else inbox_home(root, item.rel)
         undo.own(prepared.origin.relative_to(root).as_posix())
