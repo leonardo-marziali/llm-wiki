@@ -79,7 +79,13 @@ def test_init_creates_tree_and_lint_clean(tmp_path):
         encoding="utf-8"
     ) == "# Open questions\n"
     gi = (root / ".gitignore").read_text(encoding="utf-8").split()
-    for entry in (".wiki/quarantine/", ".wiki/runs/", ".wiki/tmp/", ".env*"):
+    for entry in (
+        ".wiki/quarantine/",
+        ".wiki/runs/",
+        ".wiki/tmp/",
+        ".wiki/reports/",
+        ".env*",
+    ):
         assert entry in gi
     for name, type_ in (("overview", "overview"), ("glossary", "glossary")):
         page = read_page(root, root / "wiki" / f"{name}.md")
@@ -544,3 +550,12 @@ def test_init_empty_clone_on_master_commits_to_main(tmp_path):
     init_wiki(root, today=TODAY)
     assert gitops.current_branch(root) == "main"
     assert gitops.git(root, "branch", "--format=%(refname:short)").split() == ["main"]
+
+
+def test_gitignore_template_ignores_reports():
+    from importlib import resources
+
+    text = (resources.files("llm_wiki") / "templates" / "gitignore").read_text(
+        encoding="utf-8"
+    )
+    assert ".wiki/reports/" in text.split()

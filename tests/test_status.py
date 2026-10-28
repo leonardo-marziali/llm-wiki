@@ -158,3 +158,29 @@ def test_status_all_catches_any_exception_per_wiki(tmp_path, monkeypatch):
     assert "error: boom" in res.output
     assert "good" in res.output
     assert "pages 2/500" in res.output
+
+
+def test_status_near_cap(tmp_path):
+    init(tmp_path / "demo", "demo")
+    root = tmp_path / "demo"
+    ref = WikiRef("demo", root, "path")
+    assert wiki_status(ref).near_cap == []
+    toml = root / "wiki.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8") + "\n[caps]\nmax_pages = 5\n",
+        encoding="utf-8",
+    )
+    (root / "wiki" / "a.md").write_text(
+        page_text("a", "A", "# A\n", type_="overview"), encoding="utf-8"
+    )
+    (root / "wiki" / "b.md").write_text(
+        page_text("b", "B", "# B\n", type_="overview"), encoding="utf-8"
+    )
+    st = wiki_status(ref)
+    assert st.pages == 4
+    assert st.near_cap == ["pages 4/5: run `wiki consolidate`"]
+    res = runner.invoke(app, ["status", "--wiki", str(root)])
+    assert "near cap: pages 4/5: run `wiki consolidate`" in res.output
+    (root / "wiki" / "b.md").unlink()
+    res = runner.invoke(app, ["status", "--wiki", str(root)])
+    assert "near cap" not in res.output

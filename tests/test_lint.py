@@ -9,7 +9,14 @@ from typer.testing import CliRunner
 from llm_wiki.cli import app
 from llm_wiki.config import load_config
 from llm_wiki.index import build_indexes
-from llm_wiki.lint import Finding, LintReport, lint, routing_error, write_report
+from llm_wiki.lint import (
+    CONSOLIDATE_HINT,
+    Finding,
+    LintReport,
+    lint,
+    routing_error,
+    write_report,
+)
 from llm_wiki.manifest import Manifest, sha256_file
 
 TODAY = date(2026, 10, 26)
@@ -115,6 +122,18 @@ def test_duplicate_id(root):
 def test_duplicate_title(root):
     add_page(root, "conventions/git-flow-hub.md", "Git Flow", type_="hub")
     assert codes(root) == {("warn", "duplicate-title")}
+
+
+def test_duplicate_title_ignores_source_summaries(root):
+    add_page(root, "conventions/src-git-flow.md", "Git Flow", type_="source-summary")
+    assert ("warn", "duplicate-title") not in codes(root)
+    add_page(root, "conventions/git-flow-hub.md", "Git Flow", type_="hub")
+    dups = [
+        f
+        for f in lint(root, load_config(root), today=TODAY).findings
+        if f.code == "duplicate-title"
+    ]
+    assert len(dups) == 1
 
 
 def test_broken_link(root):
@@ -685,3 +704,23 @@ def test_secret_and_injection_in_open_questions(root):
     report = lint(root, load_config(root), today=TODAY)
     found = {(f.severity, f.code, f.path) for f in report.findings}
     assert ("error", "injection-in-page", "wiki/open-questions.md") in found
+
+
+def test_cap_findings_carry_hint(root):
+    add_page(root, "conventions/second.md", "Second")
+    append(root, "overview.md", "- [Second](conventions/second.md)\n")
+    for caps in (
+        {"max_pages": 2, "warn_pages": 2},
+        {"max_pages": 5, "warn_pages": 3},
+        {"max_section_pages": 1, "warn_section_pages": 1},
+        {"max_section_pages": 5, "warn_section_pages": 1},
+    ):
+        report = lint(root, with_caps(root, **caps), today=TODAY)
+        found = [f for f in report.findings if f.code.startswith("cap-")]
+        assert found
+        for f in found:
+            assert f.message.endswith(CONSOLIDATE_HINT), f
+    report = lint(root, with_caps(root, max_sources=1, warn_sources=1), today=TODAY)
+    srcs = [f for f in report.findings if f.code == "cap-sources-warn"]
+    assert srcs
+    assert all(CONSOLIDATE_HINT not in f.message for f in srcs)

@@ -263,22 +263,26 @@ def _routing(kind: str, page: Page) -> str | None:
     return routing_error(kind, fm.type, fm.status, fm.adr_status)
 
 
+CONSOLIDATE_HINT = "run `wiki consolidate` or start a new wiki"
+
+
 def _cap(
-    out: list[Finding], code: str, path: str, what: str, n: int, max_: int, warn: int
+    out: list[Finding],
+    code: str,
+    path: str,
+    what: str,
+    n: int,
+    max_: int,
+    warn: int,
+    hint: str = "",
 ) -> None:
+    tail = f"; {hint}" if hint else ""
     if n > max_:
-        out.append(
-            Finding("error", code, path, f"{n} {what} exceeds the cap of {max_}")
-        )
+        msg = f"{n} {what} exceeds the cap of {max_}{tail}"
+        out.append(Finding("error", code, path, msg))
     elif n >= warn:
-        out.append(
-            Finding(
-                "warn",
-                code + "-warn",
-                path,
-                f"{n} {what} reaches the warning level of {warn}",
-            )
-        )
+        msg = f"{n} {what} reaches the warning level of {warn}{tail}"
+        out.append(Finding("warn", code + "-warn", path, msg))
 
 
 def cited_paths(page: Page) -> set[str]:
@@ -518,7 +522,11 @@ def _duplicate_ids(valid: list[Page]) -> list[Finding]:
 
 def _duplicate_titles(valid: list[Page]) -> list[Finding]:
     out: list[Finding] = []
-    titles = [(p, p.fm.title) for p in valid if p.fm is not None]
+    titles = [
+        (p, p.fm.title)
+        for p in valid
+        if p.fm is not None and p.fm.type != "source-summary"
+    ]
     for i, (a, a_title) in enumerate(titles):
         for b, b_title in titles[i + 1 :]:
             ratio = fuzz.token_sort_ratio(a_title.casefold(), b_title.casefold())
@@ -557,7 +565,16 @@ def _cap_checks(
     out: list[Finding] = []
     live = manifest.live()
     _cap(out, "cap-sources", "", "sources", live, caps.max_sources, caps.warn_sources)
-    _cap(out, "cap-pages", "", "pages", len(valid), caps.max_pages, caps.warn_pages)
+    _cap(
+        out,
+        "cap-pages",
+        "",
+        "pages",
+        len(valid),
+        caps.max_pages,
+        caps.warn_pages,
+        CONSOLIDATE_HINT,
+    )
     per_section: dict[str, int] = defaultdict(int)
     for p in valid:
         section = _section_of(p.rel, kinds)
@@ -572,6 +589,7 @@ def _cap_checks(
             per_section[s],
             caps.max_section_pages,
             caps.warn_section_pages,
+            CONSOLIDATE_HINT,
         )
     return out
 

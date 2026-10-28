@@ -28,6 +28,7 @@ class WikiStatus:
     quarantined: int
     pending: dict[str, int]
     last_log: list[str]
+    near_cap: list[str]
 
 
 def _count_files(d: Path, skip: tuple[str, ...]) -> int:
@@ -75,6 +76,16 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
         except OSError as e:
             entries = [f"error: log.md unreadable: {e.strerror or e}"]
 
+    near_cap: list[str] = []
+    if pages >= caps.warn_pages:
+        near_cap.append(f"pages {pages}/{caps.max_pages}: run `wiki consolidate`")
+    live = manifest.live()
+    if live >= caps.warn_sources:
+        near_cap.append(
+            f"sources {live}/{caps.max_sources}: "
+            "start a new wiki or delete obsolete raw sources"
+        )
+
     return WikiStatus(
         name=ref.name,
         path=str(root),
@@ -93,4 +104,5 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
             "deleted": len(scan.deleted),
         },
         last_log=entries[-LOG_LINES:],
+        near_cap=near_cap,
     )

@@ -235,6 +235,8 @@ def _echo_status(st) -> None:
     )
     typer.echo("sections: " + ", ".join(f"{k} {v}" for k, v in st.sections.items()))
     typer.echo(f"stale: {', '.join(st.stale) if st.stale else 'none'}")
+    if st.near_cap:
+        typer.echo("near cap: " + "; ".join(st.near_cap))
     typer.echo(f"inbox {st.inbox}  quarantined {st.quarantined}")
     typer.echo(
         f"pending: new {st.pending['new']}, changed {st.pending['changed']}, "

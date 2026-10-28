@@ -20,7 +20,7 @@ from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.errors import STOP, ClaudeError, ConfigError
 from llm_wiki.init import sections_table
 from llm_wiki.intake import Prepared, source_slug, src_id_for, src_page_id
-from llm_wiki.lint import routing_error
+from llm_wiki.lint import CONSOLIDATE_HINT, routing_error
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import ID_RE, SYSTEM_FILES, Page, iter_pages, read_page
 from llm_wiki.registry import WikiRef
@@ -31,7 +31,6 @@ from llm_wiki.search import search, tokenize
 _ID = re.compile(ID_RE)
 _TOP_LEVEL = {"overview", "glossary"}  # pages outside any section; update only
 _SYSTEM_IDS = {name.removesuffix(".md") for name in SYSTEM_FILES}
-_HINT = "run `wiki consolidate` or start a new wiki"
 
 
 def _page_file(root: Path, id_: str) -> Path:
@@ -100,7 +99,7 @@ def _section_cap_errors(
             by_section[section].append(p.id)
     return [
         f"{', '.join(ids)}: {per_section[section]} pages + {len(ids)} creates "
-        f"exceeds the cap of {cap} in section '{section}'; {_HINT}"
+        f"exceeds the cap of {cap} in section '{section}'; {CONSOLIDATE_HINT}"
         for section, ids in by_section.items()
         if per_section[section] + len(ids) > cap
     ]
@@ -124,14 +123,15 @@ def _cap_errors(
         src_note = " + 1 source page" if reserve else ""
         errors.append(
             f"{ids}: {total} pages + {len(creates)} creates{src_note} "
-            f"exceeds the cap of {caps.max_pages}; {_HINT}"
+            f"exceeds the cap of {caps.max_pages}; {CONSOLIDATE_HINT}"
         )
     src_section = src_id.split(".", 1)[0]
     if reserve and per_section[src_section] + 1 > caps.max_section_pages:
         errors.append(
             f"{src_id}: section '{src_section}' already holds "
             f"{per_section[src_section]} pages, the cap of "
-            f"{caps.max_section_pages}, so the source page cannot be created; {_HINT}"
+            f"{caps.max_section_pages}, so the source page cannot be created; "
+            f"{CONSOLIDATE_HINT}"
         )
     return errors + _section_cap_errors(
         creates, per_section, kinds, caps.max_section_pages
