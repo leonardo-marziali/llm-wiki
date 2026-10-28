@@ -22,7 +22,8 @@ def _sha(path):
 
 
 def _claim(source, text, locator="§1"):
-    return {"text": text, "source": source, "locator": locator, "confidence": "high"}
+    level = "low" if source.endswith(".png") else "high"  # image facts are low
+    return {"text": text, "source": source, "locator": locator, "confidence": level}
 
 
 def _page_plan(source, id_, text, action="create"):

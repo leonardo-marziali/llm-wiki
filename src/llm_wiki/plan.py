@@ -191,11 +191,13 @@ def validate_plan(
     source: str,
     manifest: Manifest,
     allowed_updates: set[str] | None,
+    image: bool = False,
 ) -> list[str]:
     """Human-readable problems with ``plan``; an empty list means it may proceed.
 
     ``allowed_updates`` is None for a new source; for a changed source it holds
-    the ids of the pages the source already backs.
+    the ids of the pages the source already backs. When ``image`` is set (the
+    source is an image), every fact cited to it must be ``confidence: low``.
     """
     kinds = {s.name: s.kind for s in cfg.sections}
     max_pages = cfg.effective_caps().max_pages_per_ingest
@@ -218,6 +220,14 @@ def validate_plan(
             manifest=manifest,
             allowed_updates=allowed_updates,
         )
+    if image:
+        errors += [
+            f"{p.id}: claim {c.text[:40]!r} is read from an image, so its "
+            f"confidence must be 'low', not '{c.confidence}'"
+            for p in plan.pages
+            for c in p.claims
+            if c.source == source and c.confidence != "low"
+        ]
     planned = {p.id for p in plan.pages}
     errors += [
         err
@@ -576,6 +586,7 @@ def plan_source(
                 source=prepared.rel,
                 manifest=manifest,
                 allowed_updates=allowed,
+                image=prepared.image is not None,
             )
             if not errors:
                 return plan, [], cost
