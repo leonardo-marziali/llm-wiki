@@ -236,25 +236,30 @@ def _index_targets(root: Path, section: str) -> set[str]:
     return {m.group(1) for m in _LINK.finditer(block)}
 
 
+def routing_error(
+    kind: str, type_: str, status: str, adr_status: str | None
+) -> str | None:
+    """Why a page with this type/status does not belong in a ``kind`` section."""
+    if kind == "to-be":
+        # a superseded stub keeps its place in the section it was planned in
+        if status not in ("to-be", "superseded"):
+            return f"status '{status}' in a to-be section"
+    elif kind == "decisions":
+        if type_ != "decision":
+            return f"type '{type_}' in a decisions section (must be 'decision')"
+        if adr_status is None:
+            return "decision without adr_status"
+        if status == "to-be" and adr_status != "proposed":
+            return f"to-be decision with adr_status '{adr_status}' (must be 'proposed')"
+    elif status == "to-be":
+        return f"status 'to-be' in a {kind} section"
+    return None
+
+
 def _routing(kind: str, page: Page) -> str | None:
     fm = page.fm
     assert fm is not None
-    if kind == "to-be":
-        # a superseded stub keeps its place in the section it was planned in
-        if fm.status not in ("to-be", "superseded"):
-            return f"status '{fm.status}' in a to-be section"
-    elif kind == "decisions":
-        if fm.type != "decision":
-            return f"type '{fm.type}' in a decisions section (must be 'decision')"
-        if fm.adr_status is None:
-            return "decision without adr_status"
-        if fm.status == "to-be" and fm.adr_status != "proposed":
-            return (
-                f"to-be decision with adr_status '{fm.adr_status}' (must be 'proposed')"
-            )
-    elif fm.status == "to-be":
-        return f"status 'to-be' in a {kind} section"
-    return None
+    return routing_error(kind, fm.type, fm.status, fm.adr_status)
 
 
 def _cap(
