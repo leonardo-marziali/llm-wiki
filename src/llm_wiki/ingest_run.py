@@ -61,6 +61,7 @@ _LOG_OP = {
     "deleted": "delete",
 }
 _MAX_TITLES = 5
+_HINT = "run `wiki consolidate` or start a new wiki"
 _UNVERIFIED = re.compile(r"^\s*>\s*\[!unverified\]", re.IGNORECASE | re.MULTILINE)
 
 
@@ -84,6 +85,7 @@ class IngestReport:
 class _Item:
     rel: str
     origin: Path | None = None  # an inbox file, moved into raw/ when its turn comes
+    made: bool = False  # the run wrote it into raw/ (--note, copied paths)
 
 
 def _fresh(path: Path) -> Path:
@@ -262,11 +264,21 @@ def _work_list(
     if note is not None:
         rel = write_note(root, note, today)
         undo.keep(rel, dest=f"inbox/notes/{Path(rel).name}")
-        items.append(_Item(rel))
+        items.append(_Item(rel, made=True))
     manifest = Manifest.load(root)
     if paths:
-        copied = copy_paths(root, paths, on_copy=undo.own)
-        items += [_Item(rel) for rel in copied if needs_work(manifest, root, rel)]
+        made: set[str] = set()
+
+        def on_copy(rel: str) -> None:
+            undo.own(rel)
+            made.add(rel)
+
+        copied = copy_paths(root, paths, on_copy=on_copy)
+        items += [
+            _Item(rel, made=rel in made)
+            for rel in copied
+            if needs_work(manifest, root, rel)
+        ]
     for src, rel in intake_inbox(root):
         target = root / rel
         if (
@@ -289,6 +301,46 @@ def _work_list(
             seen.add(item.rel)
             undo.own(item.rel)
             out.append(item)
+    return out
+
+
+def _within_source_cap(
+    root: Path, cfg: WikiConfig, items: list[_Item], undo: _Undo
+) -> list[_Item]:
+    """Drop the new sources that would take the wiki past ``max_sources``,
+    before any paid call; changed and deleted sources always run.
+
+    A refused inbox file stays in inbox/; a file the run wrote into raw/ (a
+    note, a copied path) moves to inbox/; one the user put in raw/ stays there.
+    """
+    manifest = Manifest.load(root)
+    cap = cfg.effective_caps().max_sources
+    room = cap - manifest.live()
+    out: list[_Item] = []
+    for item in items:
+        new = not manifest.is_live(item.rel) and (
+            item.origin is not None or (root / item.rel).is_file()
+        )
+        if not new:
+            out.append(item)
+            continue
+        if room > 0:
+            room -= 1
+            out.append(item)
+            continue
+        if item.origin is not None:
+            where = item.origin.relative_to(root).as_posix()
+        elif item.made:
+            dest = _free(root / "inbox" / Path(item.rel).relative_to("raw"))
+            undo.own(dest.relative_to(root).as_posix())
+            move_into_raw(root, root / item.rel, dest.relative_to(root).as_posix())
+            where = dest.relative_to(root).as_posix()
+        else:
+            where = item.rel
+        typer.echo(
+            f"refused: {item.rel}: a new source would exceed the cap of {cap} "
+            f"sources; {_HINT}. It stays in {where}"
+        )
     return out
 
 
@@ -547,6 +599,7 @@ def run_ingest(
         for rel in gitops.changed_paths(root):  # inbox/ and raw/ only, by preflight
             undo.keep(rel)
         items = _work_list(root, undo, paths, note, trust, today)
+        items = _within_source_cap(root, cfg, items, undo)
         if not items:
             undo.discard()
             typer.echo("nothing to do")

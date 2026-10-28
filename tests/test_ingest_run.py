@@ -927,3 +927,66 @@ def test_interrupt_during_copy_removes_partial_copies(
     assert len(raw_copies) == 2
     assert snapshot(wiki) == before
     assert fake_claude.calls() == []
+
+
+# --- final-review fix wave ---
+
+
+def set_source_cap(root, cap):
+    toml = root / "wiki.toml"
+    text = toml.read_text(encoding="utf-8")
+    toml.write_text(
+        text + f"\n[caps]\nmax_sources = {cap}\nwarn_sources = {cap}\n",
+        encoding="utf-8",
+    )
+    gitops.commit_all(root, "cap")
+
+
+def test_sources_cap_refuses_new_sources_before_any_call(wiki, fake_claude, capsys):
+    # I4: the reproduction spent a plan and an edit, then lint rejected the run
+    set_source_cap(wiki, 1)  # the wiki already holds raw/docs/guide.md
+    drop(wiki, "inbox/deploy.md", "# Deploy\n\nWe deploy on Fridays.\n")
+    report = ingest(wiki)
+    out = capsys.readouterr().out
+    assert fake_claude.calls() == []
+    assert report.decision == "noop"
+    assert report.exit_code == 0
+    assert "inbox/deploy.md" in out
+    assert "cap of 1 sources" in out
+    assert "wiki consolidate" in out
+    assert inbox_files(wiki) == ["inbox/deploy.md"]
+    assert branches(wiki) == ["main"]
+
+
+def test_sources_cap_admits_up_to_the_cap(wiki, fake_claude, capsys):
+    set_source_cap(wiki, 2)
+    drop(wiki, "inbox/a.md", NEW_TEXT)
+    drop(wiki, "inbox/b.md", "# B\n\nAlways squash.\n")
+    fake_claude.queue(*ingest_responses("raw/a.md", NEW_TEXT, "a-md"))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert [(o.rel, o.status) for o in report.outcomes] == [("raw/a.md", "ingested")]
+    assert len(fake_claude.calls()) == 2
+    assert inbox_files(wiki) == ["inbox/b.md"]
+    assert "inbox/b.md" in capsys.readouterr().out
+
+
+def test_sources_cap_still_runs_changed_and_deleted(wiki, fake_claude):
+    set_source_cap(wiki, 1)
+    (wiki / RAW_REL).unlink()  # backs no page: no LLM call
+    drop(wiki, "inbox/deploy.md", "# Deploy\n")
+    report = ingest(wiki)
+    assert [(o.rel, o.status) for o in report.outcomes] == [(RAW_REL, "deleted")]
+    assert fake_claude.calls() == []
+    assert inbox_files(wiki) == ["inbox/deploy.md"]
+
+
+def test_sources_cap_moves_a_refused_note_to_the_inbox(wiki, fake_claude):
+    set_source_cap(wiki, 1)
+    report = ingest(wiki, note="Decided: always rebase.")
+    assert report.decision == "noop"
+    assert fake_claude.calls() == []
+    assert inbox_files(wiki) == ["inbox/notes/2026-10-28-decided-always-rebase.md"]
+    assert not (wiki / "raw" / "notes").exists() or not any(
+        (wiki / "raw" / "notes").iterdir()
+    )

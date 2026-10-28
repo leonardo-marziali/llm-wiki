@@ -540,7 +540,7 @@ def _cap_checks(
     caps: Caps, manifest: Manifest, valid: list[Page], kinds: dict[str, str]
 ) -> list[Finding]:
     out: list[Finding] = []
-    live = sum(e.status != "deleted" for e in manifest.entries.values())
+    live = manifest.live()
     _cap(out, "cap-sources", "", "sources", live, caps.max_sources, caps.warn_sources)
     _cap(out, "cap-pages", "", "pages", len(valid), caps.max_pages, caps.warn_pages)
     per_section: dict[str, int] = defaultdict(int)

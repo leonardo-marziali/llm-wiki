@@ -79,7 +79,7 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
         name=ref.name,
         path=str(root),
         description=cfg.description,
-        sources=sum(1 for e in manifest.entries.values() if e.status != "deleted"),
+        sources=manifest.live(),
         max_sources=caps.max_sources,
         pages=pages,
         max_pages=caps.max_pages,

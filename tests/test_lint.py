@@ -628,3 +628,15 @@ def test_cli_lint_writes_report_only_with_flag(root):
         app, ["lint", "--wiki", str(root), "--report", "--format", "json"]
     )
     assert json.loads(res.stdout)["errors"] == 0
+
+
+def test_cap_sources_ignores_quarantined(root):
+    # I4: the ingest work list and lint count live sources the same way
+    m = Manifest.load(root)
+    entry = m.entries[RAW_REL]
+    m.record(
+        entry.model_copy(update={"path": "raw/docs/q.md", "status": "quarantined"})
+    )
+    m.save(root)
+    report = lint(root, with_caps(root, max_sources=1, warn_sources=1), today=TODAY)
+    assert "cap-sources" not in {f.code for f in report.findings}

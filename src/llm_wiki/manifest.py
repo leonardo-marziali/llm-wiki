@@ -127,6 +127,16 @@ class Manifest:
             raise ConfigError(f"{MANIFEST}: no entry for {path}")
         self.entries[path] = self.entries[path].model_copy(update={"status": "deleted"})
 
+    def live(self) -> int:
+        """Sources counted against ``max_sources``: not deleted or quarantined."""
+        return sum(
+            e.status not in ("deleted", "quarantined") for e in self.entries.values()
+        )
+
+    def is_live(self, path: str) -> bool:
+        entry = self.entries.get(path)
+        return entry is not None and entry.status not in ("deleted", "quarantined")
+
     def pages_for(self, path: str) -> list[str]:
         entry = self.entries.get(path)
         return list(entry.pages_touched) if entry else []

@@ -212,7 +212,8 @@ def test_e2e_m3_fixture_batch(
     assert runner.invoke(app, ["lint"]).exit_code == 0
     status = runner.invoke(app, ["status"])
     assert status.exit_code == 0, status.output
-    assert f"sources {len(batch) + 1}/" in status.output
+    # the quarantined source is not live: it does not count against the cap
+    assert f"sources {len(batch)}/" in status.output
 
     again = runner.invoke(app, ["ingest", "--yes"])
     assert again.exit_code == 0, again.output
