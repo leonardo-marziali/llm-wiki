@@ -273,8 +273,9 @@ def screen_text(
     tmp_dir must lie inside the wiki root.
     """
     binary = str(gitleaks_path) if gitleaks_path else shutil.which("gitleaks")
-    leaks = _run_gitleaks(text, binary, tmp_dir) if binary and tmp_dir else []
     redacted, counts = redact(text)
+    # gitleaks sees the redacted text: what it still finds survived the regex set
+    leaks = _run_gitleaks(redacted, binary, tmp_dir) if binary and tmp_dir else []
     return ScreenResult(redacted, counts, find_injection(redacted), leaks)
 
 

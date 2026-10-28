@@ -29,7 +29,7 @@ from llm_wiki.manifest import (
     mime_for,
     sha256_file,
 )
-from llm_wiki.screen import Hit, quarantine, screen_text
+from llm_wiki.screen import Hit, quarantine, redact, screen_text
 
 QUARANTINE_DIR = Path(".wiki") / "quarantine"
 TMP_DIR = Path(".wiki") / "tmp"
@@ -83,11 +83,15 @@ def _raw_rel(parts: tuple[str, ...]) -> str:
     return "/".join(["raw", *dirs, _file_name(parts[-1])])
 
 
-def _unclaimed(rel: str, claimed: set[str]) -> str:
-    """``rel``, or ``rel`` with ``-2``, ``-3``, … when this batch already uses it."""
+def _unclaimed(root: Path, rel: str, claimed: set[str]) -> str:
+    """``rel``, or ``rel`` with ``-2``, ``-3``, … when this batch already uses it.
+
+    ``rel`` itself may exist (the same name: a changed source); a numbered
+    alternative never takes the path of an unrelated existing source.
+    """
     p = Path(rel)
     out, n = rel, 2
-    while out in claimed:
+    while out in claimed or (out != rel and (root / out).exists()):
         out = (p.parent / f"{p.stem}-{n}{p.suffix}").as_posix()
         n += 1
     claimed.add(out)
@@ -118,7 +122,7 @@ def intake_inbox(root: Path) -> list[tuple[Path, str]]:
         return []
     claimed: set[str] = set()
     return [
-        (p, _unclaimed(_raw_rel(p.relative_to(inbox).parts), claimed))
+        (p, _unclaimed(Path(root), _raw_rel(p.relative_to(inbox).parts), claimed))
         for p in _visible_files(inbox)
     ]
 
@@ -136,20 +140,21 @@ def copy_paths(root: Path, paths: list[Path]) -> list[str]:
     out: list[str] = []
     claimed: set[str] = set()
     for path in map(Path, paths):
-        if path.resolve().is_relative_to(raw):  # already a raw source
-            out.append(path.resolve().relative_to(raw.parent).as_posix())
+        if not path.exists():
+            raise WikiError(f"no such file or folder: {path}")
+        if path.resolve().is_relative_to(raw):  # already raw sources
+            files = _visible_files(path) if path.is_dir() else [path]
+            out += [f.resolve().relative_to(raw.parent).as_posix() for f in files]
             continue
         if path.is_dir():
             pairs = [
                 (f, (path.name, *f.relative_to(path).parts))
                 for f in _visible_files(path)
             ]
-        elif path.is_file():
-            pairs = [(path, (path.name,))]
         else:
-            raise WikiError(f"no such file or folder: {path}")
+            pairs = [(path, (path.name,))]
         for src, parts in pairs:
-            rel = _unclaimed(_raw_rel(parts), claimed)
+            rel = _unclaimed(root, _raw_rel(parts), claimed)
             dest = root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
@@ -159,7 +164,8 @@ def copy_paths(root: Path, paths: list[Path]) -> list[str]:
 
 def write_note(root: Path, text: str, today: date) -> str:
     """Save ``text`` as raw/notes/<date>-<slug of its first words>.md."""
-    words = slug(" ".join(text.split()[:_NOTE_WORDS])) or "note"
+    # the name ends up in prompts, page ids and git: never a secret value in it
+    words = slug(" ".join(redact(text)[0].split()[:_NOTE_WORDS])) or "note"
     notes = Path(root) / "raw" / "notes"
     notes.mkdir(parents=True, exist_ok=True)
     base = f"{today.isoformat()}-{words}"
@@ -176,13 +182,21 @@ def trust(root: Path, name: str) -> str:
     root = Path(root)
     qdir = root / QUARANTINE_DIR
     name = name.removesuffix(_REASON)
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise WikiError(f"--trust takes a file name in {QUARANTINE_DIR}, not {name!r}")
     held, reason_file = qdir / name, qdir / f"{name}{_REASON}"
     if not (held.is_file() and reason_file.is_file()):
         raise WikiError(f"no quarantined source named {name} in {QUARANTINE_DIR}")
     try:
-        rel = json.loads(reason_file.read_text(encoding="utf-8"))["source"]
+        reason = json.loads(reason_file.read_text(encoding="utf-8"))
+        rel = reason["source"]
     except (ValueError, KeyError, TypeError) as exc:
         raise WikiError(f"{reason_file.name} is corrupt: {exc}") from None
+    if reason.get("kind") != "injection":
+        raise WikiError(
+            f"{name} is quarantined for a secret, not injection; --trust cannot "
+            "release it. Remove the secret and add the file again"
+        )
     if not isinstance(rel, str) or not rel.startswith("raw/") or ".." in rel:
         raise WikiError(f"{reason_file.name} records no raw path")
     dest = root / rel
@@ -234,14 +248,26 @@ def _entry(
     )
 
 
-def _kind(old: SourceEntry | None, sha: str) -> tuple[Kind, str | None]:
-    """("new" | "changed", the superseded sha)."""
+def _last_ingested_sha(old: SourceEntry | None) -> str | None:
+    """The sha whose pages the wiki holds for this path, or None if it holds none.
+
+    An entry that is not ``ingested`` (new, changed, quarantined, failed) keeps
+    that sha in ``supersedes_sha``; an older failed entry without one was
+    ingested at its own sha when ``last_ingested`` is set.
+    """
     if old is None or old.status == "deleted":
-        return "new", None
-    if old.sha256 != sha:
-        return "changed", old.sha256
-    # same bytes again (a failed or trusted retry): keep what it superseded
-    return ("changed", old.supersedes_sha) if old.supersedes_sha else ("new", None)
+        return None
+    if old.status == "ingested":
+        return old.sha256
+    return old.supersedes_sha or (old.sha256 if old.last_ingested else None)
+
+
+def _kind(old: SourceEntry | None) -> tuple[Kind, str | None]:
+    """("new" | "changed", the superseded sha): changed only against pages the
+    wiki already holds for this path.
+    """
+    last = _last_ingested_sha(old)
+    return ("changed", last) if last else ("new", None)
 
 
 def _screen_outputs(
@@ -280,14 +306,22 @@ def _quarantine_reason(
     counts: Counter[str],
     hits: list[dict],
     leaks: list[str],
-) -> str:
-    """Why the screened source must be quarantined ("" when it may proceed)."""
+) -> tuple[str, str]:
+    """(kind, why) the screened source must be quarantined; ("", "") to proceed.
+
+    Trust releases only the injection check: secrets quarantine regardless.
+    """
     if hits and not trusted:
-        return "injection: " + ", ".join(sorted({h["kind"] for h in hits}))
-    found = sorted(counts) + [r for r in leaks if r != "gitleaks-error"]
-    if strict and found:
-        return "secrets (strict_secrets): " + ", ".join(found)
-    return ""
+        return "injection", "injection: " + ", ".join(sorted({h["kind"] for h in hits}))
+    # gitleaks ran on the redacted text, so a finding is a secret still in it
+    found = [r for r in leaks if r != "gitleaks-error"]
+    if found:
+        return "secrets", "secret left after redaction (gitleaks): " + ", ".join(found)
+    if strict and counts:
+        return "secrets", "secret redacted (strict_secrets): " + ", ".join(
+            sorted(counts)
+        )
+    return "", ""
 
 
 def prepare_source(
@@ -302,7 +336,7 @@ def prepare_source(
     raw_path = root / rel
     sha = sha256_file(raw_path)
     old = manifest.entries.get(rel)
-    kind, supersedes = _kind(old, sha)
+    kind, supersedes = _kind(old)
     entry = _entry(root, rel, sha, old, today).model_copy(
         update={"status": kind, "supersedes_sha": supersedes}
     )
@@ -315,13 +349,13 @@ def prepare_source(
         return prepared
     counts, hits, leaks = _screen_outputs(root, conv.outputs)
     trusted = "trusted" in entry.flags
-    reason = _quarantine_reason(trusted, cfg.strict_secrets, counts, hits, leaks)
+    why, reason = _quarantine_reason(trusted, cfg.strict_secrets, counts, hits, leaks)
     prepared.redactions = dict(counts)
     if reason:
         quarantine(
             root,
             raw_path,
-            {"source": rel, "sha256": sha, "reason": reason, "hits": hits},
+            {"source": rel, "sha256": sha, "kind": why, "reason": reason, "hits": hits},
         )
         for out in conv.outputs:
             (root / out).unlink(missing_ok=True)
@@ -332,13 +366,12 @@ def prepare_source(
         )
         prepared.status, prepared.reason = "quarantined", reason
         return prepared
-    flags = [f"gitleaks:{r}" for r in leaks]
     manifest.record(
         entry.model_copy(
             update={
                 "converter": conv.converter,
                 "converted": conv.outputs,
-                "flags": _merged_flags(entry.flags, conv.flags, flags),
+                "flags": _merged_flags(entry.flags, conv.flags),
                 "redactions": dict(counts),
             }
         )

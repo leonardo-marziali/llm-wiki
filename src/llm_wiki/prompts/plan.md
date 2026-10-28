@@ -11,8 +11,8 @@ claim in your plan.
 
 - Prefer updates. Update an existing page when the source adds to its topic;
   create a page only for a topic no page covers yet.
-- Plan at most 15 pages. Merge small related facts onto one page instead of
-  creating many thin ones.
+- Plan no more pages than the page limit in the message. Merge small related
+  facts onto one page instead of creating many thin ones.
 - `id` is `<section>.<slug>` with a lowercase kebab-case slug, or `overview` or
   `glossary` (update only). Use only the sections in the table, and follow
   their routing rules for `type`, `status` and `adr_status`.

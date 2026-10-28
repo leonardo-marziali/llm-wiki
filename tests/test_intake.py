@@ -241,3 +241,158 @@ def test_src_page_id(root):
     cfg = load_config(root)
     assert src_page_id(cfg, RAW_REL) == "sources.src-docs-guide"
     assert src_page_id(cfg, "raw/My Notes/A B.md") == "sources.src-my-notes-a-b"
+
+
+# ---- fix round 1 ----
+
+
+def test_note_name_never_carries_a_secret(root):
+    rel = write_note(root, f"password: {SECRET} for the prod db", TODAY)
+    assert SECRET.lower() not in rel.lower()
+    assert "s3cr3t" not in rel
+    assert rel.startswith("raw/notes/2026-10-28-password-")
+    # the note itself keeps the text: it is the raw evidence
+    assert SECRET in (root / rel).read_text(encoding="utf-8")
+
+
+def test_quarantined_new_source_replaced_is_new(root):
+    rel = "raw/docs/evil.md"
+    write(root, rel, INJECTION)
+    m = Manifest.load(root)
+    assert prep(root, rel, manifest=m).status == "quarantined"
+    write(root, rel, "# Notes\n\nA clean replacement.\n")
+    p = prep(root, rel, manifest=m)
+    assert (p.status, p.kind) == ("ready", "new")
+    assert m.entries[rel].supersedes_sha is None
+    assert m.entries[rel].status == "new"
+
+
+def test_fix_after_quarantined_change_supersedes_last_ingested(root):
+    m = Manifest.load(root)
+    sha_a = m.entries[RAW_REL].sha256  # ingested
+    write(root, RAW_REL, INJECTION)  # B: quarantined
+    b = prep(root, RAW_REL, manifest=m)
+    assert b.status == "quarantined"
+    assert m.entries[RAW_REL].supersedes_sha == sha_a
+    write(root, RAW_REL, "# Guide\n\nAlways branch from develop.\n")  # C
+    c = prep(root, RAW_REL, manifest=m)
+    assert (c.status, c.kind) == ("ready", "changed")
+    assert m.entries[RAW_REL].supersedes_sha == sha_a
+
+
+def test_failed_change_retried_still_supersedes_last_ingested(root):
+    m = Manifest.load(root)
+    sha_a = m.entries[RAW_REL].sha256
+    write(root, RAW_REL, "# Guide\n\nB.\n")
+    prep(root, RAW_REL, manifest=m)
+    entry = m.entries[RAW_REL]
+    m.record(entry.model_copy(update={"status": "failed"}))  # e.g. the edit failed
+    write(root, RAW_REL, "# Guide\n\nC.\n")
+    c = prep(root, RAW_REL, manifest=m)
+    assert c.kind == "changed"
+    assert m.entries[RAW_REL].supersedes_sha == sha_a
+
+
+def test_failed_entry_ingested_before_without_lineage(root):
+    m = Manifest.load(root)
+    entry = m.entries[RAW_REL]
+    sha_a = entry.sha256
+    m.record(
+        entry.model_copy(update={"status": "failed", "last_ingested": date(2026, 2, 1)})
+    )
+    write(root, RAW_REL, "# Guide\n\nC.\n")
+    c = prep(root, RAW_REL, manifest=m)
+    assert c.kind == "changed"
+    assert m.entries[RAW_REL].supersedes_sha == sha_a
+
+
+def test_copy_paths_under_raw_expands_dirs_and_rejects_missing(root):
+    from llm_wiki.errors import WikiError
+
+    write(root, "raw/docs/more/b.md", "b")
+    assert copy_paths(root, [root / "raw/docs"]) == [
+        RAW_REL,
+        "raw/docs/more/b.md",
+    ]
+    with pytest.raises(WikiError, match="no such file"):
+        copy_paths(root, [root / "raw/docs/ghost.md"])
+
+
+def test_trust_keeps_secret_quarantine_under_strict(root):
+    write(root, "raw/docs/evil.md", INJECTION + f"\npassword: {SECRET}\n")
+    m = Manifest.load(root)
+    assert prep(root, "raw/docs/evil.md", manifest=m).status == "quarantined"
+    m.save(root)
+    rel = trust(root, "evil.md")
+    cfg = load_config(root).model_copy(update={"strict_secrets": True})
+    m = Manifest.load(root)
+    p = prepare_source(root, cfg, m, rel, TODAY)
+    assert p.status == "quarantined"
+    assert "secret" in p.reason
+    assert "injection" not in p.reason
+    reason = json.loads(
+        (root / ".wiki/quarantine/evil.md.reason.json").read_text(encoding="utf-8")
+    )
+    assert reason["kind"] == "secrets"
+    from llm_wiki.errors import WikiError
+
+    with pytest.raises(WikiError, match="secret"):
+        trust(root, "evil.md")  # --trust releases only the injection quarantine
+    assert (root / ".wiki/quarantine/evil.md").exists()
+
+
+@pytest.mark.parametrize("name", ["../evil.md", "sub/evil.md", "..", ""])
+def test_trust_requires_a_bare_name(root, name):
+    from llm_wiki.errors import WikiError
+
+    with pytest.raises(WikiError, match="file name"):
+        trust(root, name)
+
+
+@pytest.fixture
+def leaky_gitleaks(monkeypatch):
+    import shutil
+
+    from llm_wiki import screen
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/fake/gitleaks" if name == "gitleaks" else None
+    )
+
+    def fake(text, binary, tmp_dir):
+        seen.append(text)
+        return ["generic-api-key"] if "LEAKY" in text else []
+
+    monkeypatch.setattr(screen, "_run_gitleaks", fake)
+    return seen
+
+
+def test_gitleaks_hit_quarantines_without_strict(root, leaky_gitleaks):
+    write(root, "raw/docs/leak.md", "# Leak\n\nkey LEAKY0123456789\n")
+    m = Manifest.load(root)
+    p = prep(root, "raw/docs/leak.md", manifest=m)
+    assert p.status == "quarantined"
+    assert "generic-api-key" in p.reason
+    assert m.entries["raw/docs/leak.md"].status == "quarantined"
+    assert not any(
+        f.startswith("gitleaks") for f in m.entries["raw/docs/leak.md"].flags
+    )
+
+
+def test_gitleaks_sees_redacted_text(root, leaky_gitleaks):
+    write(root, "raw/docs/pw.md", f"# Pw\n\npassword: {SECRET}\n")
+    p = prep(root, "raw/docs/pw.md")
+    assert p.status == "ready"  # the regex redaction removed it before gitleaks
+    assert leaky_gitleaks
+    assert all(SECRET not in text for text in leaky_gitleaks)
+
+
+def test_inbox_dedupe_never_takes_an_unrelated_raw_path(root):
+    write(root, "raw/a-b-2.md", "unrelated")
+    write(root, "inbox/a b.md", "x")
+    write(root, "inbox/a-b.md", "x")
+    assert [rel for _, rel in intake_inbox(root)] == ["raw/a-b.md", "raw/a-b-3.md"]
+    write(root, "raw/a-b.md", "existing")
+    # an exact same-name match is still a changed source
+    assert [rel for _, rel in intake_inbox(root)] == ["raw/a-b.md", "raw/a-b-3.md"]

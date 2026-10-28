@@ -282,6 +282,10 @@ def _source_block(
         f"- kind: {prepared.kind}",
         f"- part: {part_label}",
         (
+            f"- page limit: at most {cfg.effective_caps().max_pages_per_ingest} "
+            "pages in this plan (the source page does not count)"
+        ),
+        (
             f"- source page: {src_page_id(cfg, prepared.rel)} (written by the tool "
             "from source_title and source_summary; never plan it)"
         ),
@@ -431,16 +435,6 @@ def system_prompt(root: Path, prompt: str) -> str:
     return text + "\n\n" + _prompt(prompt)
 
 
-def _part_text(root: Path, prepared: Prepared, part: str) -> str:
-    """The part's converted text; the last part also carries the speaker notes."""
-    text = (root / part).read_text(encoding="utf-8")
-    conv = prepared.conversion
-    notes = [o for o in (conv.outputs if conv else []) if o.endswith(".notes.md")]
-    if notes and part == prepared.parts[-1]:
-        text += "\n\n" + (root / notes[0]).read_text(encoding="utf-8")
-    return text
-
-
 def _part_label(prepared: Prepared, part: str) -> tuple[str, str]:
     """(the prompt's part line, the run-file suffix)."""
     if len(prepared.parts) <= 1:
@@ -502,7 +496,8 @@ def plan_source(
     root = Path(root)
     manifest = manifest if manifest is not None else Manifest.load(root)
     system = system_prompt(root, "plan.md")
-    text = _part_text(root, prepared, part)
+    # markitdown already puts pptx speaker notes in the converted text
+    text = (root / part).read_text(encoding="utf-8")
     label, suffix = _part_label(prepared, part)
     old_text, pages_for, allowed = None, None, None
     if prepared.kind == "changed":

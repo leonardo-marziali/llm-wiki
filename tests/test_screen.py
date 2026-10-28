@@ -267,3 +267,20 @@ def test_shell_substitution_is_not_a_secret():
 def test_dollar_prefixed_real_secret_still_redacted():
     _, counts = redact("password=$ecretPass1")
     assert counts["password"] == 1
+
+
+# ---- task 5 fix round 1 ----
+
+
+def test_gitleaks_runs_on_redacted_text(monkeypatch, tmp_path):
+    from llm_wiki import screen as screen_mod
+
+    seen: list[str] = []
+
+    def fake(text, binary, tmp_dir):
+        seen.append(text)
+        return []
+
+    monkeypatch.setattr(screen_mod, "_run_gitleaks", fake)
+    screen_text("password: S3cr3t!x", gitleaks_path=tmp_path / "g", tmp_dir=tmp_path)
+    assert seen == ["password: ‹REDACTED:password›"]

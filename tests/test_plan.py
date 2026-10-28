@@ -543,3 +543,26 @@ def test_plan_text_injection_quarantines():
         "locator": "§1",
     }
     assert screen_plan(Plan.model_validate({**GOOD, "contradictions": [contra]}))
+
+
+# ---- fix round 1 ----
+
+
+def test_page_limit_comes_from_caps_not_the_system_prompt(agents):
+    plan_md = (resources.files("llm_wiki") / "prompts" / "plan.md").read_text("utf-8")
+    assert "15" not in plan_md
+    cfg = set_caps(agents, max_pages_per_ingest=7)
+    prepared = prepared_for(agents, NEW_REL, "# New\n\nFacts.\n")
+    prompt = build_plan_prompt(agents, cfg, prepared, "x", "whole", TODAY)
+    assert "at most 7 pages" in prompt
+
+
+def test_pptx_notes_reach_the_prompt_once(agents, fake_claude, make_pptx, tmp_path):
+    make_pptx(agents / "raw/docs/deck.pptx", [("Deck", ["point"], "remember the demo")])
+    prepared = prepared_for(agents, "raw/docs/deck.pptx")
+    fake_claude.queue(
+        {"stdout": ok(structured=plan_dict(page(claims=[claim("raw/docs/deck.pptx")])))}
+    )
+    run_plan(agents, prepared, tmp_path)
+    (c,) = fake_claude.calls()
+    assert c["stdin"].count("remember the demo") == 1
