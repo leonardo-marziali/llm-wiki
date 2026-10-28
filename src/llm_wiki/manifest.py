@@ -128,14 +128,14 @@ class Manifest:
         self.entries[path] = self.entries[path].model_copy(update={"status": "deleted"})
 
     def live(self) -> int:
-        """Sources counted against ``max_sources``: not deleted or quarantined."""
-        return sum(
-            e.status not in ("deleted", "quarantined") for e in self.entries.values()
-        )
+        """Sources counted against ``max_sources``: not deleted, quarantined
+        or refused (a refused source never reaches the wiki).
+        """
+        return sum(_counts(e) for e in self.entries.values())
 
     def is_live(self, path: str) -> bool:
         entry = self.entries.get(path)
-        return entry is not None and entry.status not in ("deleted", "quarantined")
+        return entry is not None and _counts(entry)
 
     def pages_for(self, path: str) -> list[str]:
         entry = self.entries.get(path)
@@ -151,3 +151,9 @@ class Manifest:
         f.write_text(
             json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
+
+
+def _counts(entry: SourceEntry) -> bool:
+    if entry.status in ("deleted", "quarantined"):
+        return False
+    return not (entry.status == "failed" and "refused" in entry.flags)

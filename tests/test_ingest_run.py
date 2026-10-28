@@ -1354,3 +1354,18 @@ def test_saved_plan_json_is_redacted(wiki, fake_claude):
     saved = list((wiki / ".wiki" / "runs").glob("*/*.plan.json"))
     assert saved
     assert all(secret not in f.read_text(encoding="utf-8") for f in saved)
+
+
+def test_finalize_forces_tool_owned_index(host, fake_claude):
+    # parked in M3: an untracked _index.md the host ignores aborted finalize
+    top, root = host
+    (top / ".gitignore").write_text("_index.md\n", encoding="utf-8")
+    gitops.git(top, "rm", "-q", "--cached", "w/wiki/concepts/_index.md")
+    gitops.git(top, "add", ".gitignore")
+    gitops.git(top, "commit", "-qm", "ignore section indexes")
+    drop(root, "inbox/new.md", NEW_TEXT)
+    fake_claude.queue(*ingest_responses("raw/new.md", NEW_TEXT, "new-md"))
+    report = ingest(root)
+    assert report.decision == "accept", report.summary
+    tracked = gitops.git(top, "ls-files", "w/wiki/concepts").split()
+    assert "w/wiki/concepts/_index.md" in tracked

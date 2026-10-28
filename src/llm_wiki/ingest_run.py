@@ -474,7 +474,7 @@ def _finalize(ctx: RunContext, base: str, report: IngestReport) -> None:
     _append_log(root, _log_lines(report.outcomes, ctx.today))
     ctx.manifest.save(root)
     files = [p.relative_to(root).as_posix() for p in indexes] + [LOG, MANIFEST]
-    gitops.stage_commit(root, files, "ingest(finalize)")
+    gitops.stage_commit(root, files, "ingest(finalize)", force=files)
     changed = gitops.changed_since(root, base)
     pages = [p for p in changed if is_page(p) and (root / p).is_file()]
     # wiki-wide checks (system files, caps, duplicates) always run

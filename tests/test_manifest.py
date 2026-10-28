@@ -164,3 +164,20 @@ def test_mark_deleted_unknown_path_raises(tmp_path):
     manifest = Manifest.load(tmp_path)
     with pytest.raises(ConfigError, match=r"raw/x\.md"):
         manifest.mark_deleted("raw/x.md")
+
+
+def test_refused_entry_not_counted_live(tmp_path):
+    # parked in M3: a refused credential sent back to inbox held a cap slot
+    m = Manifest.load(tmp_path)
+    m.entries["raw/key.pem"] = SourceEntry(
+        path="raw/key.pem",
+        sha256="0" * 64,
+        size=1,
+        mime="application/x-pem-file",
+        category="other",
+        first_seen=date(2026, 10, 28),
+        status="failed",
+        flags=["refused"],
+    )
+    assert m.live() == 0
+    assert not m.is_live("raw/key.pem")

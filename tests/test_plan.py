@@ -714,3 +714,14 @@ def test_stop_errors_defined_once():
         errors.ClaudeAuthError,
         errors.ClaudeNotInstalled,
     }
+
+
+def test_run_dir_result_is_redacted(agents, fake_claude, tmp_path):
+    # parked in M3: the raw result kept a secret read from an image
+    secret = "password: S3cr3t!x"
+    prepared = prepared_for(agents, NEW_REL, "# New\n\nFacts.\n")
+    leaky = plan_dict(page(claims=[{**claim(NEW_REL), "text": secret}]))
+    fake_claude.queue({"stdout": ok(structured=leaky)})
+    run_plan(agents, prepared, tmp_path)
+    for f in (tmp_path / "run").iterdir():
+        assert "S3cr3t!x" not in f.read_text(encoding="utf-8"), f.name

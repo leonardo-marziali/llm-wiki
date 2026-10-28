@@ -489,11 +489,11 @@ def _old_text(root: Path, manifest: Manifest, rel: str) -> str | None:
 def _save_run(run_dir: Path, name: str, result: claude.Result) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     n = len(list(run_dir.glob("*.plan.json"))) + 1
-    # the saved plan is redacted like the one the edit sees (I5); the raw
-    # result is the model's own transcript and stays as it is
+    # both records are redacted like the plan the edit sees (I5): a secret
+    # read from an image never passed the text screen
     for suffix, data in (
         (".plan.json", _redact_value(result.structured, Counter())),
-        (".plan.result.json", result.raw),
+        (".plan.result.json", _redact_value(result.raw, Counter())),
     ):
         (run_dir / f"{n}-{name}{suffix}").write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
