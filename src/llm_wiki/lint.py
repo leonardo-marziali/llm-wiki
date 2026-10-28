@@ -240,7 +240,8 @@ def _routing(kind: str, page: Page) -> str | None:
     fm = page.fm
     assert fm is not None
     if kind == "to-be":
-        if fm.status != "to-be":
+        # a superseded stub keeps its place in the section it was planned in
+        if fm.status not in ("to-be", "superseded"):
             return f"status '{fm.status}' in a to-be section"
     elif kind == "decisions":
         if fm.type != "decision":
@@ -279,8 +280,17 @@ def _wiki_rel(rel: str) -> str:
     return "wiki/" + rel
 
 
-def _body_issues(page: Page, path: str, caps: Caps) -> list[Finding]:
-    """Checks that need only the page text, so they run even on a broken page."""
+def _all_sources_trusted(page: Page, trusted: set[str]) -> bool:
+    return bool(
+        page.fm and page.fm.sources and all(s.path in trusted for s in page.fm.sources)
+    )
+
+
+def _body_issues(page: Page, path: str, caps: Caps, trusted: set[str]) -> list[Finding]:
+    """Checks that need only the page text, so they run even on a broken page.
+
+    A page whose sources are all trusted gets injection findings as warnings.
+    """
     out: list[Finding] = [
         Finding("error", "broken-link", path, f"link target '{target}' does not exist")
         for target in _md_links(page.body)
@@ -306,8 +316,12 @@ def _body_issues(page: Page, path: str, caps: Caps) -> list[Finding]:
             )
         )
     hits = find_injection(page.body)
+    demote = _all_sources_trusted(page, trusted)
     groups: tuple[tuple[Severity, list], ...] = (
-        ("error", [h for h in hits if h.kind not in _WARN_INJECTION]),
+        (
+            "warn" if demote else "error",
+            [h for h in hits if h.kind not in _WARN_INJECTION],
+        ),
         ("warn", [h for h in hits if h.kind in _WARN_INJECTION]),
     )
     out += [
@@ -352,7 +366,9 @@ def _placement_issues(page: Page, path: str, ctx: dict) -> list[Finding]:
         out.append(
             Finding("error", "missing-tldr", path, "no line starting with **TL;DR**")
         )
-    if not fm.sources and fm.type not in SOURCELESS_TYPES:
+    # a deprecated page may outlive its deleted sources
+    sourceless_ok = fm.type in SOURCELESS_TYPES or fm.status == "deprecated"
+    if not fm.sources and not sourceless_ok:
         out.append(
             Finding("error", "missing-sources", path, f"type '{fm.type}' needs sources")
         )
@@ -415,7 +431,7 @@ def _freshness_issues(page: Page, path: str, today: date) -> list[Finding]:
 
 def _page_checks(root: Path, page: Page, ctx: dict) -> list[Finding]:
     path = _wiki_rel(page.rel)
-    out = _body_issues(page, path, ctx["caps"])
+    out = _body_issues(page, path, ctx["caps"], ctx["trusted"])
     if page.error is not None:
         return [*out, Finding("error", "frontmatter-invalid", path, page.error)]
     return [
@@ -562,12 +578,14 @@ def lint(
     cfg: WikiConfig,
     only: list[Path] | None = None,
     today: date | None = None,
+    trusted: set[str] | None = None,
 ) -> LintReport:
     """Lint the wiki at ``root``.
 
     ``only`` limits per-page checks to those pages (absolute or relative to
     ``root``); wiki-wide checks always run. A path that is not a page raises
-    WikiError.
+    WikiError. ``trusted`` holds the raw paths whose injection findings are only
+    warnings; None reads them from the manifest's ``trusted`` flag.
     """
     root = Path(root).resolve()
     wiki = root / "wiki"
@@ -575,8 +593,11 @@ def lint(
     manifest = Manifest.load(root)
     pages = list(iter_pages(root))
     kinds = {s.name: s.kind for s in cfg.sections}
+    if trusted is None:
+        trusted = {p for p, e in manifest.entries.items() if "trusted" in e.flags}
     ctx = {
         "caps": caps,
+        "trusted": trusted,
         "kinds": kinds,
         "manifest": manifest,
         "inbound": _inbound(pages),

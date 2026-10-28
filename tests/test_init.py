@@ -319,6 +319,64 @@ def test_init_rolls_back_on_lint_failure(tmp_path, monkeypatch, pre_existing):
     assert not registry.registry_file().exists()
 
 
+def _fail_lint(monkeypatch):
+    from llm_wiki import init as init_mod
+    from llm_wiki.lint import Finding, LintReport
+
+    monkeypatch.setattr(
+        init_mod,
+        "lint",
+        lambda *a, **k: LintReport([Finding("error", "broken-link", "x", "boom")]),
+    )
+
+
+def test_failed_init_leaves_no_intermediate_dirs(tmp_path, monkeypatch):
+    _fail_lint(monkeypatch)
+    with pytest.raises(WikiError, match="broken-link"):
+        init_wiki(tmp_path / "a" / "b" / "c", today=TODAY)
+    assert not (tmp_path / "a").exists()
+
+
+def test_failed_init_keeps_preexisting_ancestors(tmp_path, monkeypatch):
+    _fail_lint(monkeypatch)
+    (tmp_path / "a").mkdir()
+    with pytest.raises(WikiError, match="broken-link"):
+        init_wiki(tmp_path / "a" / "b" / "c", today=TODAY)
+    assert (tmp_path / "a").is_dir()
+    assert not (tmp_path / "a" / "b").exists()
+
+
+def test_init_empty_clone(tmp_path):
+    root = tmp_path / "w"
+    root.mkdir()
+    gitops.init_repo(root)
+    result = init_wiki(root, today=TODAY)
+    assert result.created
+    assert result.host_repo is None
+    assert not (root / ".git" / ".git").exists()
+    assert len(gitops.git(root, "rev-list", "--all").split()) == 1
+    assert gitops.git(root, "status", "--porcelain").strip() == ""
+
+
+def test_failed_init_on_empty_clone_keeps_git(tmp_path, monkeypatch):
+    _fail_lint(monkeypatch)
+    root = tmp_path / "w"
+    root.mkdir()
+    gitops.init_repo(root)
+    with pytest.raises(WikiError, match="broken-link"):
+        init_wiki(root, today=TODAY)
+    assert [p.name for p in root.iterdir()] == [".git"]
+
+
+def test_init_dir_with_git_and_other_files_refused(tmp_path):
+    root = tmp_path / "w"
+    root.mkdir()
+    gitops.init_repo(root)
+    (root / "x.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(WikiError, match="not empty"):
+        init_wiki(root, today=TODAY)
+
+
 def test_init_rolls_back_on_commit_failure(tmp_path, monkeypatch):
     def fail(root, message):
         raise GitError("commit failed")

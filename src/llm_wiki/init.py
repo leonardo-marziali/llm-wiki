@@ -149,12 +149,37 @@ def _create(root: Path, cfg: WikiConfig, today: date) -> None:
     build_indexes(root, cfg)
 
 
-def _clean(root: Path, created_dir: bool) -> None:
-    """Undo a failed init; ``root`` was missing or empty when init started."""
-    if created_dir:
-        shutil.rmtree(root, ignore_errors=True)
+def _first_missing(path: Path) -> Path | None:
+    """The topmost ancestor of ``path`` (or ``path`` itself) that does not exist."""
+    missing = None
+    while not path.exists():
+        missing, path = path, path.parent
+    return missing
+
+
+def _is_empty_clone(root: Path) -> bool:
+    """True when ``root`` holds only a ``.git`` and is the toplevel of its own repo."""
+    return (
+        root.is_dir()
+        and [c.name for c in root.iterdir()] == [".git"]
+        and gitops.enclosing_repo(root) == root
+    )
+
+
+def _clean(root: Path, created_top: Path | None, keep_git: bool) -> None:
+    """Undo a failed init; ``root`` was missing or empty when init started.
+
+    ``created_top`` is the topmost directory init created; ``keep_git`` marks an
+    empty clone, whose ``.git`` must survive (minus anything staged).
+    """
+    if created_top is not None:
+        shutil.rmtree(created_top, ignore_errors=True)
         return
+    if keep_git:
+        (root / ".git" / "index").unlink(missing_ok=True)
     for child in root.iterdir():
+        if keep_git and child.name == ".git":
+            continue
         if child.is_dir() and not child.is_symlink():
             shutil.rmtree(child, ignore_errors=True)
         else:
@@ -223,7 +248,8 @@ def init_wiki(
     root = Path(path).resolve()
     if (root / WIKI_FILE).is_file():
         return _reregister(root, name)
-    if root.exists() and (not root.is_dir() or any(root.iterdir())):
+    empty_clone = _is_empty_clone(root)
+    if root.exists() and not empty_clone and (not root.is_dir() or any(root.iterdir())):
         raise WikiError(f"{root} is not empty and not a wiki")
     name = _new_name(root, name)
     _check_name_free(name, root)
@@ -235,21 +261,23 @@ def init_wiki(
     )
     if gitops.inside_git_dir(root):
         raise WikiError(f"{root} is inside a .git directory")
-    host_repo = gitops.enclosing_repo(root)
+    # an empty clone is its own repo, not a host: init commits into it
+    host_repo = None if empty_clone else gitops.enclosing_repo(root)
     if host_repo is None and not gitops.has_identity(root):
         raise GitError("configure git user.name and user.email")
     today = today or date.today()
 
-    created_dir = not root.exists()
+    created_top = _first_missing(root)
     root.mkdir(parents=True, exist_ok=True)
     try:
         _create(root, cfg, today)
         _require_clean_lint(root, cfg, today)
         if host_repo is None:
-            gitops.init_repo(root)
+            if not empty_clone:
+                gitops.init_repo(root)
             gitops.commit_all(root, f"chore: init wiki {name}")
     except BaseException:
-        _clean(root, created_dir)
+        _clean(root, created_top, empty_clone)
         raise
     register(name, root)
     return InitResult(
