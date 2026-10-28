@@ -112,6 +112,13 @@ def make_call(
 def claude_binary() -> str:
     override = os.environ.get("LLM_WIKI_CLAUDE")
     if override:
+        if "/" not in override:  # a bare command name is looked up on PATH
+            found = shutil.which(override)
+            if not found:
+                raise ClaudeNotInstalled(
+                    f"LLM_WIKI_CLAUDE={override} not found on PATH"
+                )
+            return found
         if not Path(override).exists():
             raise ClaudeNotInstalled(
                 f"LLM_WIKI_CLAUDE points to a missing file: {override}"
@@ -308,6 +315,10 @@ def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | 
         raise ClaudeNotInstalled(
             f"claude not found at {binary} — install Claude Code"
         ) from None
+    except OSError as exc:  # ENOEXEC (not an executable format), E2BIG, ...
+        raise ClaudeError(
+            f"cannot execute claude at {binary}: {exc.strerror or exc}"
+        ) from None
     finally:
         prompt_file.unlink(missing_ok=True)
 
@@ -373,30 +384,35 @@ def _execute(call: Call, binary: str, cwd: Path, sleep, rand) -> Result:
     transient = 0
     schema_retried = False
     spent = 0.0  # every attempt bills, not only the one that succeeds
-    while True:
-        kind, failure, cost, proc = _attempt(call, binary, cwd)
-        spent += cost
-        if kind == "ok":
-            assert proc is not None
-            result = parse_output(proc.stdout)
-            # Sonar types dataclasses.replace() as DataclassInstance; this is a Result
-            return dataclasses.replace(result, cost_usd=spent)  # NOSONAR
-        if kind == "transient":
-            if transient >= call.max_retries:
-                raise ClaudeError(failure)
-            transient += 1
-            sleep(2**transient * (0.5 + rand()))
-            continue
-        if kind == "schema":
-            if schema_retried:
-                raise ClaudeSchemaError(
-                    "claude reply did not match the required JSON schema: "
-                    "structured_output missing"
-                )
-            schema_retried = True
-            call = _with_schema_reminder(call)
-            continue
-        _raise_for(kind, call, proc)
+    try:
+        while True:
+            kind, failure, cost, proc = _attempt(call, binary, cwd)
+            spent += cost
+            if kind == "ok":
+                assert proc is not None
+                result = parse_output(proc.stdout)
+                # Sonar types dataclasses.replace() as DataclassInstance; it returns
+                # a Result
+                return dataclasses.replace(result, cost_usd=spent)  # NOSONAR
+            if kind == "transient":
+                if transient >= call.max_retries:
+                    raise ClaudeError(failure)
+                transient += 1
+                sleep(2**transient * (0.5 + rand()))
+                continue
+            if kind == "schema":
+                if schema_retried:
+                    raise ClaudeSchemaError(
+                        "claude reply did not match the required JSON schema: "
+                        "structured_output missing"
+                    )
+                schema_retried = True
+                call = _with_schema_reminder(call)
+                continue
+            _raise_for(kind, call, proc)
+    except ClaudeError as exc:
+        exc.cost_usd = spent  # the ingest gate's cost line counts failed calls too
+        raise
 
 
 def run(

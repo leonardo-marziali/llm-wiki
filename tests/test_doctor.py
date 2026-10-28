@@ -428,3 +428,33 @@ def test_bad_config_is_fail_row_and_other_checks_run(fake_claude):
     assert "config.toml" in checks["config"]["detail"]
     assert checks["claude"]["status"] == "ok"
     assert checks["git"]["status"] == "ok"
+
+
+def test_doctor_skips_probes_when_config_fails(fake_claude):
+    from llm_wiki.config import user_config_file
+
+    # A broken wiki.toml is refused earlier (exit 2) when the wiki is resolved, so the
+    # `config` row comes from the user config.
+    user_config_file().parent.mkdir(parents=True, exist_ok=True)
+    user_config_file().write_text("[llm\n", encoding="utf-8")
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK)
+    res = _doctor()
+    checks = _by_name(res)
+    assert res.exit_code == 1
+    assert checks["config"]["status"] == "fail"
+    assert checks["claude"]["status"] == "ok"
+    assert not [n for n in checks if n.startswith("model:")]
+    assert "edit-confinement" not in checks
+    assert fake_claude.calls() == []
+
+
+def test_doctor_oserror_label(fake_claude, monkeypatch):
+    def boom(call):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(doctor_mod, "run", boom)
+    for c in (probe_model("plan", S), probe_edit_confinement(S)):
+        assert c.status == "fail"
+        assert c.detail.startswith("cannot run claude: ")
+        assert "Argument list too long" in c.detail
+        assert "temp" not in c.detail

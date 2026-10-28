@@ -514,3 +514,54 @@ def test_autouse_env_never_reaches_real_claude():
     import os
 
     assert not Path(os.environ["LLM_WIKI_CLAUDE"]).exists()
+
+
+def test_failed_call_reports_cost(fake_claude):
+    failed = {
+        "stdout": {
+            "is_error": True,
+            "result": "API Error: 529 overloaded",
+            "total_cost_usd": 0.01,
+        },
+        "exit": 1,
+    }
+    fake_claude.queue(failed, failed, failed, failed)
+    with pytest.raises(ClaudeError) as ei:
+        run(_call(), sleep=lambda s: None)
+    assert ei.value.cost_usd == pytest.approx(0.04)
+    assert ClaudeError("x").cost_usd == 0.0
+
+
+def test_budget_error_carries_its_attempt_cost(fake_claude):
+    fake_claude.queue(
+        {
+            "stdout": {
+                "subtype": "error_max_budget_usd",
+                "is_error": True,
+                "total_cost_usd": 1.2,
+            },
+            "exit": 1,
+        }
+    )
+    with pytest.raises(ClaudeBudgetExceeded) as ei:
+        run(_call())
+    assert ei.value.cost_usd == pytest.approx(1.2)
+
+
+def test_enoexec_is_claude_error(tmp_path):
+    bin_ = tmp_path / "claude"
+    bin_.write_bytes(b"\x7fELFgarbage")
+    bin_.chmod(0o755)
+    with pytest.raises(ClaudeError, match="cannot execute") as ei:
+        run(_call(), binary=str(bin_))
+    assert not isinstance(ei.value, ClaudeNotInstalled)
+
+
+def test_llm_wiki_claude_bare_name_resolved_via_path(fake_claude, monkeypatch):
+    fake_dir = Path(__file__).parent / "fake_claude"
+    monkeypatch.setenv("LLM_WIKI_CLAUDE", "claude")
+    monkeypatch.setenv("PATH", str(fake_dir))
+    assert claude_binary() == str(fake_dir / "claude")
+    monkeypatch.setenv("PATH", str(fake_dir.parent))
+    with pytest.raises(ClaudeNotInstalled, match="not found on PATH"):
+        claude_binary()

@@ -212,6 +212,10 @@ def _probe_call(call: Call, role: Role, settings: LlmSettings) -> Call:
     )
 
 
+def _spawn_fail(name: str, e: OSError) -> Check:
+    return Check(name, "fail", f"cannot run claude: {e.strerror or e}")
+
+
 def _temp_fail(name: str, e: OSError) -> Check:
     return Check(name, "fail", f"cannot create probe temp files: {e}")
 
@@ -248,6 +252,8 @@ def probe_model(role: Role, settings: LlmSettings) -> Check:
                 result = run(call)
             except ClaudeAuthError:
                 return Check(name, "fail", "not logged in: run `claude /login`")
+            except OSError as e:  # a spawn failure, not a temp-file one
+                return _spawn_fail(name, e)
             except ClaudeSchemaError:
                 return Check(name, "fail", "structured output unsupported")
             except ClaudeError as e:
@@ -317,6 +323,8 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
                 result = run(call)
             except ClaudeAuthError:
                 return Check(name, "fail", "not logged in: run `claude /login`")
+            except OSError as e:  # a spawn failure, not a temp-file one
+                return _spawn_fail(name, e)
             except ClaudeError as e:
                 if escape.exists():  # the security finding wins over the error
                     return Check(name, "fail", _ESCAPE)
@@ -339,16 +347,19 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
     return Check(name, "ok", f"writes stay inside the wiki (${result.cost_usd:.4f})")
 
 
-def run_doctor(settings: LlmSettings, *, probe: bool) -> list[Check]:
+def run_doctor(
+    settings: LlmSettings, *, probe: bool, config_ok: bool = True
+) -> list[Check]:
     checks = offline_checks()
-    # No point spending money while the CLI is missing, too old or lacks a flag.
+    # No point spending money while the CLI is missing, too old or lacks a flag, or
+    # while the config failed to load (the probes would run on default settings).
     claude_ok = any(
         c.name == "claude" and c.status == "ok" for c in checks
     ) and not any(
         c.name in ("claude-version", "claude-flags") and c.status == "fail"
         for c in checks
     )
-    if probe and claude_ok:
+    if probe and claude_ok and config_ok:
         roles: list[Role] = []
         seen: set[str] = set()
         for role in ("plan", "edit", "deep"):

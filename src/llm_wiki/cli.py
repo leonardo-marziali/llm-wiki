@@ -277,7 +277,9 @@ def doctor(
             Check("config", "fail", f"{e}; using default llm settings")
         )
         settings = LlmSettings()
-    checks = config_checks + run_doctor(settings, probe=not no_probe)
+    checks = config_checks + run_doctor(
+        settings, probe=not no_probe, config_ok=not config_checks
+    )
     if fmt == "json":
         typer.echo(
             json.dumps(

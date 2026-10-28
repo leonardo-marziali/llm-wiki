@@ -26,7 +26,11 @@ class GitError(WikiError):
 
 
 class ClaudeError(WikiError):
-    """A `claude -p` call failed."""
+    """A `claude -p` call failed. `cost_usd` is what the failed attempts billed."""
+
+    def __init__(self, message: str, *, cost_usd: float = 0.0):
+        super().__init__(message)
+        self.cost_usd = cost_usd
 
 
 class ClaudeNotInstalled(ClaudeError):
