@@ -35,7 +35,7 @@ where = ["src"]
 version = {attr = "llm_wiki.__version__"}
 
 [tool.setuptools.package-data]
-llm_wiki = ["templates/*", "templates/**/*"]
+llm_wiki = ["templates/*", "templates/**/*", "prompts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

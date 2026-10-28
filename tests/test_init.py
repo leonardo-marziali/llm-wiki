@@ -525,3 +525,11 @@ def test_init_inside_git_dir_is_refused(tmp_path):
     with pytest.raises(WikiError, match=r"inside a \.git directory"):
         init_wiki(host / ".git" / "w")
     assert not (host / ".git" / "w").exists()
+
+
+def test_agents_md_annotated_screenshot_row(tmp_path):
+    text = _agents(tmp_path)
+    assert (
+        "| Annotated screenshot (numbered markers) | The numbered steps in marker "
+        "order, each with the UI element and action |"
+    ) in text

@@ -390,17 +390,18 @@ Describe what a source shows, never just that it exists. The tool has already
 converted each source. You receive its text, or the image itself, wrapped as
 untrusted data.
 
-| Source                              | Extract                                                                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Architecture diagram (image)        | Components (name, type, layer); flows as `A -> B: label (protocol)`; boundaries; external systems; a mermaid sketch                  |
-| Sequence or flow diagram (image)    | Numbered steps (actor, action, message); decision points and branches; error paths                                                   |
-| UI or console screenshot            | Screen name, navigation path, fields (label, type, required, example), buttons, states and messages; ignore browser chrome           |
-| Code, config or terminal screenshot | Transcribe the relevant text as a code block; mark unreadable parts `[illegible]`                                                    |
-| Chart or dashboard (image)          | What is measured, axes and units, and the takeaway with the key numbers                                                              |
-| Logo, icon or decoration            | Ignore it                                                                                                                            |
-| PPTX                                | Per slide: title, key points and speaker notes; diagrams as above                                                                    |
-| XLSX / CSV                          | Per sheet: purpose, columns (name, meaning, type), row count, and the rows with decisions or reference data; never dump whole sheets |
-| DOCX / PDF                          | The heading structure and the key facts per section; tables and figures as above                                                     |
+| Source                                  | Extract                                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Architecture diagram (image)            | Components (name, type, layer); flows as `A -> B: label (protocol)`; boundaries; external systems; a mermaid sketch                  |
+| Sequence or flow diagram (image)        | Numbered steps (actor, action, message); decision points and branches; error paths                                                   |
+| UI or console screenshot                | Screen name, navigation path, fields (label, type, required, example), buttons, states and messages; ignore browser chrome           |
+| Annotated screenshot (numbered markers) | The numbered steps in marker order, each with the UI element and action                                                              |
+| Code, config or terminal screenshot     | Transcribe the relevant text as a code block; mark unreadable parts `[illegible]`                                                    |
+| Chart or dashboard (image)              | What is measured, axes and units, and the takeaway with the key numbers                                                              |
+| Logo, icon or decoration                | Ignore it                                                                                                                            |
+| PPTX                                    | Per slide: title, key points and speaker notes; diagrams as above                                                                    |
+| XLSX / CSV                              | Per sheet: purpose, columns (name, meaning, type), row count, and the rows with decisions or reference data; never dump whole sheets |
+| DOCX / PDF                              | The heading structure and the key facts per section; tables and figures as above                                                     |
 
 - Facts derived only from an image are `confidence: low` unless text confirms
   them.
