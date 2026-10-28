@@ -6,6 +6,7 @@ limit, an auth failure or a missing CLI rolls back this source and stops the run
 """
 
 import json
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,9 +31,9 @@ from llm_wiki.gitops import (
 )
 from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, source_slug, src_page_id
-from llm_wiki.lint import Finding, lint
+from llm_wiki.lint import Finding, cited_paths, lint
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
-from llm_wiki.pages import SOURCELESS_TYPES, SYSTEM_FILES, read_page
+from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
 from llm_wiki.plan import plan_source, screen_plan, system_prompt
 from llm_wiki.schemas import Claim, PagePlan, Plan
 from llm_wiki.screen import Hit, quarantine
@@ -195,21 +196,36 @@ def _with_repair(blocks: list[str], findings: list[Finding] | None) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def _valid_id(id_: str) -> bool:
+    return bool(re.fullmatch(ID_RE, id_)) and (id_ in _TOP_LEVEL or id_.count(".") == 1)
+
+
 def deleted_plan(ctx: RunContext, rel: str) -> Plan | None:
     """The plan for deleted source ``rel``, built without a plan call: each page
-    it backs as an update. None when no page file of it is left.
+    it backs that still cites it, as an update. None when no such page is left.
 
     A page that loses its last source is planned ``deprecated`` (AGENTS.md
-    "Updates", rule 5); so is the source page.
+    "Updates", rule 5); so is the source page. A malformed id in the manifest or
+    a page whose frontmatter cannot be read fails the source (``_Failed``).
     """
     root = Path(ctx.root)
     src_id = src_page_id(ctx.cfg, rel)
     pages: list[PagePlan] = []
     for id_ in ctx.manifest.pages_for(rel):
+        if not _valid_id(id_):
+            raise _Failed(f"the manifest lists a malformed page id {id_!r} for {rel}")
         path = root / page_rel(id_)
-        fm = read_page(root, path).fm if path.is_file() else None
-        if fm is None:  # a missing page needs no edit; lint reports a broken one
+        if not path.is_file():  # a missing page needs no edit
             continue
+        page = read_page(root, path)
+        fm = page.fm
+        if fm is None:
+            raise _Failed(
+                f"{page_rel(id_)}: cannot read its frontmatter ({page.error}); "
+                "fix the page, then run ingest again"
+            )
+        if id_ != src_id and rel not in cited_paths(page):
+            continue  # it never cited the source: the edit may not touch it
         others = [s for s in fm.sources if s.path != rel]
         orphaned = (
             len(others) < len(fm.sources)
@@ -311,6 +327,7 @@ class _Source:
         self.allowed = {OPEN_QUESTIONS}
         if self.src_existed or prepared.kind != "deleted":  # never created then
             self.allowed.add(page_rel(self.src_id))
+        self.oq_before: bytes | None = None  # open-questions.md before an edit
         self.planned: dict[str, str] = {}  # id -> its first planned action
         self.reviewed: set[str] = set()  # ids whose page was reviewed before
         run_dir = Path(ctx.run_dir).resolve()
@@ -390,6 +407,7 @@ class _Source:
                     self.reviewed.add(id_)
 
     def _edit(self, prompt: str, suffix: str, kind: str) -> None:
+        self.oq_before = _content(self.root / OPEN_QUESTIONS)
         call = claude.make_call(
             "edit",
             self.ctx.settings,
@@ -446,7 +464,12 @@ class _Source:
             for p in wanted
             if not (self.root / p).is_file()
         ]
+        findings += self._open_questions_check()
         pages = [p for p in changed if p in self.allowed and is_page(p)]
+        if self.prepared.kind == "deleted":
+            # an untouched planned page still cites the deleted file: lint it too
+            pages = wanted
+            findings += self._deleted_citations(wanted)
         pages = [p for p in pages if (self.root / p).is_file()]
         if pages:
             report = lint(
@@ -463,6 +486,31 @@ class _Source:
                 and f.code not in _FINALIZE_CODES
             ]
         return findings
+
+    def _open_questions_check(self) -> list[Finding]:
+        """open-questions.md may only grow: anything else is put back (R19)."""
+        before = self.oq_before
+        path = self.root / OPEN_QUESTIONS
+        now = _content(path)
+        if before is None or (now is not None and now.startswith(before)):
+            return []
+        path.write_bytes(before)
+        msg = (
+            "may only grow: append entries, never edit or remove existing ones; "
+            "the earlier text was put back"
+        )
+        return [Finding("error", "open-questions-append-only", OPEN_QUESTIONS, msg)]
+
+    def _deleted_citations(self, pages: list[str]) -> list[Finding]:
+        """Planned pages whose ``sources`` or footnotes still cite the deleted file."""
+        rel = self.prepared.rel
+        msg = f"still cites the deleted {rel} in `sources` or a footnote"
+        return [
+            Finding("error", "cites-deleted-source", p, msg)
+            for p in pages
+            if (self.root / p).is_file()
+            and rel in cited_paths(read_page(self.root, self.root / p))
+        ]
 
     def undo(self) -> None:
         """Put the wiki back to the prep commit and the files uncommitted then."""
@@ -615,7 +663,11 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
     """
     root = Path(ctx.root)
     out = SourceOutcome(rel=rel, title=rel, status="deleted")
-    plan = deleted_plan(ctx, rel)
+    try:
+        plan = deleted_plan(ctx, rel)
+    except _Failed as exc:  # nothing changed yet: the deletion stays pending
+        out.status, out.reason = "failed", str(exc)
+        return out
     if plan is None:  # it backs no page: only the manifest and the log change
         ctx.manifest.mark_deleted(rel)
         ctx.manifest.save(root)

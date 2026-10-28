@@ -281,6 +281,13 @@ def _cap(
         )
 
 
+def cited_paths(page: Page) -> set[str]:
+    """The raw paths ``page`` cites: its ``sources`` and its footnote targets."""
+    paths = {src.path for src in page.fm.sources} if page.fm is not None else set()
+    body = "\n".join(_strip_code(page.body))
+    return paths | {m.group(2) for m in _FOOTNOTE.finditer(body)}
+
+
 def _wiki_rel(rel: str) -> str:
     """Wiki-root-relative path of a page given relative to ``wiki/``."""
     return "wiki/" + rel

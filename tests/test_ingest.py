@@ -247,6 +247,42 @@ def test_lint_failure_repaired_once(wiki, fake_claude):
     assert "Always rebase before merging.[^1]" in (wiki / PAGE).read_text("utf-8")
 
 
+OQ = "wiki/open-questions.md"
+
+
+def test_open_questions_rewrite_restored_then_repaired(wiki, fake_claude):
+    # R19(a): every edit session may only append to open-questions.md
+    ctx = context(wiki)
+    prepared = prepare(ctx)
+    ctx.manifest.save(wiki)
+    original = (wiki / OQ).read_text("utf-8")
+    fake_claude.queue(
+        planned(plan()),
+        edit({PAGE: good_page(wiki), SRC: src_page(wiki), OQ: "# Mine now\n"}),
+        edit({OQ: original + "\n- Is rebasing mandatory?\n"}),
+    )
+    out = process_source(ctx, prepared)
+    assert out.status == "ingested", out.reason
+    repair = fake_claude.calls()[2]["stdin"]
+    assert f"`{OQ}` open-questions-append-only" in repair
+    assert (wiki / OQ).read_text("utf-8") == original + "\n- Is rebasing mandatory?\n"
+    assert OQ in gitops.git(wiki, "show", "--name-only", "--format=", "HEAD")
+
+
+def test_open_questions_rewrite_twice_fails(wiki, fake_claude):
+    ctx = context(wiki)
+    prepared = prepare(ctx)
+    ctx.manifest.save(wiki)
+    original = (wiki / OQ).read_bytes()
+    rewrite = edit({PAGE: good_page(wiki), SRC: src_page(wiki), OQ: "# Mine\n"})
+    fake_claude.queue(planned(plan()), rewrite, rewrite)
+    out = process_source(ctx, prepared)
+    assert out.status == "failed"
+    assert "open-questions-append-only" in out.reason
+    assert (wiki / OQ).read_bytes() == original
+    assert not (wiki / PAGE).exists()
+
+
 def test_missing_planned_page_triggers_repair(wiki, fake_claude):
     ctx = context(wiki)
     prepared = prepare(ctx)
@@ -356,11 +392,12 @@ def test_large_source_parts_planned_in_turn(wiki, fake_claude):
         plan_page(action="update", claims=[claim(locator="#p2 §1")]),
         open_questions=["Which branch?"],
     )
+    appended = (wiki / OQ).read_text("utf-8") + "\n- Which branch?\n"  # R19
     fake_claude.queue(
         planned(plan()),
         edit({PAGE: good_page(wiki), SRC: src_page(wiki)}),
         planned(part2),
-        edit({PAGE: good_page(wiki) + "\nMore.\n", "wiki/open-questions.md": "x\n"}),
+        edit({PAGE: good_page(wiki) + "\nMore.\n", OQ: appended}),
     )
     out = process_source(ctx, prepared)
     assert out.status == "ingested", out.reason

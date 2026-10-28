@@ -421,8 +421,24 @@ def test_deleted_plan_deprecates_only_pages_left_without_sources(wiki):
         sources=[(RAW_REL, sha(OLD_TEXT)), (other, sha("# Other\n"))],
     )
     (wiki / "wiki" / "concepts" / "shared.md").write_text(shared, encoding="utf-8")
+    footnoted = page_text(
+        "concepts.footnoted",
+        "Footnoted",
+        "# Footnoted\n\n**TL;DR** Cites it in a footnote only.\n\n"
+        f"A fact.[^1]\n\n[^1]: {RAW_REL} — §2\n",
+        type_="concept",
+        sources=[(other, sha("# Other\n"))],
+    )
+    (wiki / "wiki" / "concepts" / "footnoted.md").write_text(
+        footnoted, encoding="utf-8"
+    )
     m = Manifest.load(wiki)
-    touched = [*m.pages_for(RAW_REL), "concepts.shared", "concepts.gone"]
+    touched = [
+        *m.pages_for(RAW_REL),
+        "concepts.shared",
+        "concepts.footnoted",
+        "concepts.gone",
+    ]
     m.record(m.entries[RAW_REL].model_copy(update={"pages_touched": touched}))
     ctx = RunContext(
         root=wiki,
@@ -438,10 +454,10 @@ def test_deleted_plan_deprecates_only_pages_left_without_sources(wiki):
     statuses = {pg.id: (pg.action, pg.status) for pg in p.pages}
     assert statuses == {
         "conventions.git-flow": ("update", "deprecated"),  # its only source
-        "glossary": ("update", "as-is"),  # never cited it
         SRC_ID: ("update", "deprecated"),
         "concepts.shared": ("update", "as-is"),  # another source remains
-    }  # concepts.gone has no file: skipped
+        "concepts.footnoted": ("update", "as-is"),  # cites it in a footnote
+    }  # glossary never cited it (I2); concepts.gone has no file
     assert {c.text for pg in p.pages for c in pg.claims} == {DELETE_CLAIM}
     assert PLAN_CLAIM == DELETE_CLAIM  # the brief's exact wording
     assert p.open_questions == [OPEN_QUESTION]
@@ -495,3 +511,114 @@ def test_deleted_source_to_be_page_becomes_deprecated(wiki, fake_claude):
     )
     assert "status: deprecated" in (wiki / req).read_text(encoding="utf-8")
     assert Manifest.load(wiki).entries[RAW_REL].status == "deleted"
+
+
+# --- fix round 1: I1, I2, R19 ---
+
+
+def oq_edit():
+    return {"wiki/open-questions.md": f"# Open questions\n\n- {OPEN_QUESTION}\n"}
+
+
+def skipping_edit():
+    """Deprecates the src page only: git-flow keeps citing the deleted file."""
+    return edit({SRC: src_page("", status="deprecated"), **oq_edit()})
+
+
+def test_deleted_source_skipped_page_fails_and_stays_pending(wiki, fake_claude):
+    # I1, the reviewer's probe: an untouched planned page still cites the file
+    (wiki / RAW_REL).unlink()
+    before = (wiki / GIT_FLOW).read_bytes()
+    fake_claude.queue(skipping_edit(), skipping_edit())
+    report = ingest(wiki)
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "lint errors after the repair" in out.reason
+    assert f"{GIT_FLOW} cites-deleted-source" in out.reason
+    repair = fake_claude.calls()[1]["stdin"]
+    assert f"`{GIT_FLOW}` cites-deleted-source" in repair
+    assert (wiki / GIT_FLOW).read_bytes() == before
+    assert Manifest.load(wiki).entries[RAW_REL].status == "ingested"
+    assert tracked(wiki, RAW_REL)  # the deletion stays pending
+
+
+def test_deleted_source_skipped_page_repaired(wiki, fake_claude):
+    (wiki / RAW_REL).unlink()
+    fake_claude.queue(skipping_edit(), edit({GIT_FLOW: deprecated_git_flow()}))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    (out,) = report.outcomes
+    assert out.status == "deleted"
+    assert "status: deprecated" in (wiki / GIT_FLOW).read_text(encoding="utf-8")
+    assert Manifest.load(wiki).entries[RAW_REL].status == "deleted"
+
+
+def test_deleted_source_footnote_left_fails(wiki, fake_claude):
+    # sources is cleaned, yet a footnote still names the deleted file
+    (wiki / RAW_REL).unlink()
+    half = page_text(
+        "conventions.git-flow",
+        "Git flow",
+        "# Git flow\n\n**TL;DR** Branch from main.\n\n"
+        "> [!unverified]\n> We branch from main for every change.\n\n"
+        f"[^1]: {RAW_REL}\n",
+        status="deprecated",
+    )
+    response = deleted_edit()
+    response["write"][GIT_FLOW] = half
+    fake_claude.queue(response, edit({}))
+    report = ingest(wiki)
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert "cites-deleted-source" in out.reason
+
+
+def test_deleted_source_unreadable_page_fails(wiki, fake_claude):
+    (wiki / GIT_FLOW).write_text("---\nid: [unclosed\n---\n# Git flow\n", "utf-8")
+    gitops.commit_all(wiki, "break git-flow")
+    (wiki / RAW_REL).unlink()
+    report = ingest(wiki)
+    (out,) = report.outcomes
+    assert out.status == "failed"
+    assert GIT_FLOW in out.reason
+    assert "frontmatter" in out.reason
+    assert fake_claude.calls() == []
+    assert Manifest.load(wiki).entries[RAW_REL].status == "ingested"
+    assert tracked(wiki, RAW_REL)
+
+
+def test_deleted_source_malformed_manifest_id_fails(wiki, fake_claude):
+    # R19(b): a bad id fails this source; the run goes on
+    m = Manifest.load(wiki)
+    touched = [*m.pages_for(RAW_REL), "Not An Id"]
+    m.record(m.entries[RAW_REL].model_copy(update={"pages_touched": touched}))
+    m.save(wiki)
+    gitops.commit_all(wiki, "bad id")
+    (wiki / RAW_REL).unlink()
+    (wiki / "inbox" / "a.md").write_text("# A\n", encoding="utf-8")
+    fake_claude.queue(failing("plan boom", cost=0.1))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    statuses = {o.rel: (o.status, o.reason) for o in report.outcomes}
+    status, reason = statuses[RAW_REL]
+    assert status == "failed"
+    assert "'Not An Id'" in reason
+    assert "raw/a.md" in statuses  # the run went on
+    assert Manifest.load(wiki).entries[RAW_REL].status == "ingested"
+
+
+def test_deleted_source_open_questions_rewrite_reverted(wiki, fake_claude):
+    # R19(a): open-questions.md may only grow
+    (wiki / RAW_REL).unlink()
+    original = (wiki / "wiki" / "open-questions.md").read_bytes()
+    response = deleted_edit()
+    response["write"]["wiki/open-questions.md"] = f"- {OPEN_QUESTION}\n"
+    fake_claude.queue(response, edit(oq_edit()))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert [o.status for o in report.outcomes] == ["deleted"]
+    repair = fake_claude.calls()[1]["stdin"]
+    assert "`wiki/open-questions.md` open-questions-append-only" in repair
+    text = (wiki / "wiki" / "open-questions.md").read_bytes()
+    assert text.startswith(original)
+    assert OPEN_QUESTION in text.decode("utf-8")
