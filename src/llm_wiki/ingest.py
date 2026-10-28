@@ -34,7 +34,7 @@ from llm_wiki.intake import Prepared, source_slug, src_id_for
 from llm_wiki.lint import Finding, cited_paths, lint
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
-from llm_wiki.plan import plan_source, screen_plan, system_prompt
+from llm_wiki.plan import plan_source, redact_plan, screen_plan, system_prompt
 from llm_wiki.schemas import Claim, PagePlan, Plan
 from llm_wiki.screen import Hit, quarantine
 
@@ -79,6 +79,7 @@ class SourceOutcome:
     open_questions: int = 0
     reason: str = ""
     cost_usd: float = 0.0
+    redactions: dict[str, int] = field(default_factory=dict)  # in the plans
 
 
 class _Failed(Exception):
@@ -379,6 +380,9 @@ class _Source:
         self.out.cost_usd += cost
         if plan is None:
             raise _Failed("plan rejected: " + "; ".join(errors))
+        plan, counts = redact_plan(plan)
+        for kind, n in counts.items():
+            self.out.redactions[kind] = self.out.redactions.get(kind, 0) + n
         trusted = "trusted" in ctx.manifest.entries[prepared.rel].flags
         hits = [] if trusted else screen_plan(plan)
         if hits:

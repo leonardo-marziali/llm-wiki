@@ -990,3 +990,25 @@ def test_sources_cap_moves_a_refused_note_to_the_inbox(wiki, fake_claude):
     assert not (wiki / "raw" / "notes").exists() or not any(
         (wiki / "raw" / "notes").iterdir()
     )
+
+
+def test_plan_strings_redacted_and_counted(wiki, fake_claude):
+    # I5a: an image can carry a secret no text screen saw; the plan is redacted
+    secret = "S3cr3t!xY9q"
+    drop(wiki, "inbox/new.md", NEW_TEXT)
+    p, e = ingest_responses("raw/new.md", NEW_TEXT, "new-md")
+    structured = p["stdout"]["structured_output"]
+    structured["pages"][0]["claims"].append(
+        claim("raw/new.md", text=f"The prod password: {secret} is shared.")
+    )
+    structured["open_questions"] = [f"Who rotates password: {secret}?"]
+    fake_claude.queue(p, e)
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    edit_stdin = fake_claude.calls()[1]["stdin"]
+    assert secret not in edit_stdin
+    assert "‹REDACTED:" in edit_stdin
+    (out,) = report.outcomes
+    assert sum(out.redactions.values()) == 2
+    assert sum(report.redactions.values()) == 2
+    assert "redactions: " in report.summary

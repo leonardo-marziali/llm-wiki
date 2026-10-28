@@ -318,18 +318,31 @@ def _body_issues(page: Page, path: str, caps: Caps, trusted: set[str]) -> list[F
                 f"{page.line_count} lines (max {caps.max_page_lines})",
             )
         )
-    _, counts = redact(page.body)
+    demote = _all_sources_trusted(page, trusted)
+    out += _screen_issues(page.body, path, demote)
+    if page.fm is not None:
+        fm = page.fm
+        texts = [fm.title, fm.summary, *fm.tags, *(s.locator for s in fm.sources)]
+        out += _screen_issues("\n".join(texts), path, demote, "frontmatter: ")
+    return out
+
+
+def _screen_issues(
+    text: str, path: str, demote: bool, where: str = ""
+) -> list[Finding]:
+    """Secrets and injection in ``text``; ``where`` prefixes the messages."""
+    out: list[Finding] = []
+    _, counts = redact(text)
     if sum(counts.values()):
         out.append(
             Finding(
                 "error",
                 "secret-in-page",
                 path,
-                "possible secret: " + ", ".join(sorted(counts)),
+                f"{where}possible secret: " + ", ".join(sorted(counts)),
             )
         )
-    hits = find_injection(page.body)
-    demote = _all_sources_trusted(page, trusted)
+    hits = find_injection(text)
     groups: tuple[tuple[Severity, list], ...] = (
         (
             "warn" if demote else "error",
@@ -342,7 +355,7 @@ def _body_issues(page: Page, path: str, caps: Caps, trusted: set[str]) -> list[F
             sev,
             "injection-in-page",
             path,
-            "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in group),
+            where + "; ".join(f"line {h.line} {h.kind}: {h.excerpt}" for h in group),
         )
         for sev, group in groups
         if group
@@ -528,6 +541,8 @@ def _system_file_checks(
             code = _SYSTEM_CODE.get(f.name, "broken-link")
             out.append(Finding("error", code, rel, _NOT_UTF8))
             continue
+        if f.name == "open-questions.md":  # entries come from source text
+            out += _screen_issues(text, rel, demote=False)
         out += [
             Finding("error", "broken-link", rel, f"link target '{t}' does not exist")
             for t in _md_links(text)

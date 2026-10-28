@@ -31,7 +31,7 @@ from llm_wiki.manifest import Manifest
 from llm_wiki.pages import ID_RE, SYSTEM_FILES, Page, iter_pages, read_page
 from llm_wiki.registry import WikiRef
 from llm_wiki.schemas import PLAN_SCHEMA, PagePlan, Plan
-from llm_wiki.screen import Hit, find_injection
+from llm_wiki.screen import Hit, find_injection, redact
 from llm_wiki.search import search, tokenize
 
 _ID = re.compile(ID_RE)
@@ -592,6 +592,27 @@ def plan_strings(value: object) -> Iterator[str]:
     elif isinstance(value, list):
         for v in value:
             yield from plan_strings(v)
+
+
+def _redact_value(value: object, counts: Counter[str]) -> object:
+    if isinstance(value, str):
+        text, found = redact(value)
+        counts.update(found)
+        return text
+    if isinstance(value, dict):
+        return {k: _redact_value(v, counts) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(v, counts) for v in value]
+    return value
+
+
+def redact_plan(plan: Plan) -> tuple[Plan, Counter[str]]:
+    """The plan with every string redacted, and the redaction counts: a secret
+    read from an image never passed the text screen.
+    """
+    counts: Counter[str] = Counter()
+    data = _redact_value(plan.model_dump(), counts)
+    return (Plan.model_validate(data) if counts else plan), counts
 
 
 def screen_plan(plan: Plan) -> list[Hit]:

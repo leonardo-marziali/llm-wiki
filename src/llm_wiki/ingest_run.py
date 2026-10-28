@@ -402,6 +402,7 @@ def _process(
             )
             report.stopped = str(exc)
             break
+        redactions.update(out.redactions)
         report.outcomes.append(out)
     report.redactions = dict(redactions)
     report.cost_usd = sum(o.cost_usd for o in report.outcomes)
