@@ -48,6 +48,20 @@ def near_duplicate(
     return best[1] if best else None
 
 
+# Modes PNG can store; anything else (CMYK, YCbCr, LAB, F, ...) is converted first.
+_PNG_MODES = frozenset({"RGB", "RGBA", "L", "LA", "P", "1", "I", "I;16"})
+
+
+def _has_alpha(img: Image.Image) -> bool:
+    return img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+
+
+def _png_ready(img: Image.Image) -> Image.Image:
+    if img.mode in _PNG_MODES:
+        return img
+    return img.convert("RGBA" if _has_alpha(img) else "RGB")
+
+
 def _png_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
@@ -56,7 +70,7 @@ def _png_bytes(img: Image.Image) -> bytes:
 
 def _jpeg_bytes(img: Image.Image) -> bytes:
     flat = img
-    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+    if _has_alpha(img):
         rgba = img.convert("RGBA")
         flat = Image.new("RGB", rgba.size, "white")
         flat.paste(rgba, mask=rgba.getchannel("A"))
@@ -78,6 +92,7 @@ def prepare_for_vision(src: Path, out_dir: Path) -> Path:
             img.load()
     except (OSError, Image.DecompressionBombError) as exc:
         raise RefusedSource(f"unreadable image: {src.name}") from exc
+    img = _png_ready(img)
     if max(img.size) > VISION_MAX_SIDE:
         img.thumbnail((VISION_MAX_SIDE, VISION_MAX_SIDE), Image.Resampling.LANCZOS)
     data, suffix = _png_bytes(img), ".png"

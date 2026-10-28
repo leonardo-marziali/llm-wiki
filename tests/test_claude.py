@@ -783,3 +783,26 @@ def test_prepare_for_vision_keeps_alpha_png(tmp_path):
     out = prepare_for_vision(src, tmp_path)
     with Image.open(out) as im:
         assert im.format == "PNG"
+
+
+@pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB", "F"])
+def test_prepare_for_vision_handles_modes_png_cannot_store(tmp_path, mode):
+    from PIL import Image
+
+    src = tmp_path / "odd.tif"
+    Image.new(mode, (50, 50)).save(src, "TIFF")
+    out = prepare_for_vision(src, tmp_path)
+    with Image.open(out) as im:
+        assert im.format in ("PNG", "JPEG")
+        assert im.size == (50, 50)
+
+
+def test_prepare_for_vision_accepts_cmyk_jpeg(tmp_path):
+    from PIL import Image
+
+    src = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (50, 50), (0, 255, 255, 0)).save(src, "JPEG")
+    out = prepare_for_vision(src, tmp_path)
+    with Image.open(out) as im:
+        assert im.format == "PNG"
+        assert im.mode == "RGB"
