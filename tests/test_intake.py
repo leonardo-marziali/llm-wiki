@@ -416,3 +416,25 @@ def test_trust_overwrites_an_existing_raw_path_as_changed(root):
     p = prep(root, RAW_REL, manifest=m)
     assert (p.status, p.kind) == ("ready", "changed")
     assert m.entries[RAW_REL].supersedes_sha == old_sha
+
+
+def test_copy_paths_checks_every_path_before_copying(root, tmp_path):
+    from llm_wiki.errors import WikiError
+
+    write(tmp_path, "out/a.md", "a")
+    with pytest.raises(WikiError, match="nope"):
+        copy_paths(root, [tmp_path / "out/a.md", tmp_path / "out/nope.md"])
+    assert not (root / "raw" / "a.md").exists()
+
+
+def test_copy_paths_reports_each_raw_path_before_creating_it(root, tmp_path):
+    write(tmp_path, "out/a.md", "a")
+    write(tmp_path, "out/b.md", "b")
+    seen = []
+
+    def owned(rel):
+        seen.append((rel, (root / rel).exists()))
+
+    out = copy_paths(root, [tmp_path / "out/a.md", tmp_path / "out/b.md"], owned)
+    assert out == ["raw/a.md", "raw/b.md"]
+    assert seen == [("raw/a.md", False), ("raw/b.md", False)]

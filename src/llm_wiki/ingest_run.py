@@ -35,6 +35,7 @@ from llm_wiki.init import slug
 from llm_wiki.intake import (
     QUARANTINE_DIR,
     TMP_DIR,
+    check_paths,
     copy_paths,
     intake_inbox,
     move_into_raw,
@@ -253,17 +254,17 @@ def _work_list(
         if Path(name).name == name:  # trust() itself refuses anything else
             for held in (name, f"{name}.reason.json"):
                 undo.keep((QUARANTINE_DIR / held).as_posix())
+        rel = trust(root, trust_name)
+        undo.own(rel)  # a raw path the run made: a rollback takes it back
         # the scan sees a released source with an unchanged sha as done
-        items.append(_Item(trust(root, trust_name)))
+        items.append(_Item(rel))
     if note is not None:
         rel = write_note(root, note, today)
         undo.keep(rel, dest=f"inbox/notes/{Path(rel).name}")
         items.append(_Item(rel))
     manifest = Manifest.load(root)
     if paths:
-        copied = copy_paths(root, paths)
-        for rel in copied:
-            undo.own(rel)
+        copied = copy_paths(root, paths, on_copy=undo.own)
         items += [_Item(rel) for rel in copied if needs_work(manifest, root, rel)]
     for src, rel in intake_inbox(root):
         target = root / rel
@@ -529,6 +530,7 @@ def run_ingest(
     if not (interactive or yes):
         raise WikiError("the gate needs a terminal; pass --yes")
     base = _preflight_git(root)
+    check_paths(paths or [])  # a typo stops the run before any intake step
     today = today or date.today()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = _fresh(root / ".wiki" / "runs" / stamp)

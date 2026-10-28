@@ -5,9 +5,11 @@ Nothing here calls an LLM. A source whose text holds injection hits (or, with
 """
 
 import json
+import os
 import re
 import shutil
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -134,15 +136,31 @@ def move_into_raw(root: Path, src: Path, rel: str) -> None:
     shutil.move(str(src), dest)
 
 
-def copy_paths(root: Path, paths: list[Path]) -> list[str]:
-    """Copy files, or folders recursively, into raw/; a folder keeps its name."""
+def check_paths(paths: list[Path]) -> None:
+    """Refuse a path that is missing or unreadable, before anything is copied."""
+    for path in map(Path, paths):
+        if not path.exists():
+            raise WikiError(f"no such file or folder: {path}")
+        if not os.access(path, os.R_OK | (os.X_OK if path.is_dir() else 0)):
+            raise WikiError(f"cannot read {path}")
+
+
+def copy_paths(
+    root: Path,
+    paths: list[Path],
+    on_copy: Callable[[str], None] | None = None,
+) -> list[str]:
+    """Copy files, or folders recursively, into raw/; a folder keeps its name.
+
+    ``on_copy`` gets each raw path before its copy is made, so a caller can
+    take a half-made copy back after a Ctrl-C.
+    """
+    check_paths(paths)
     root = Path(root)
     raw = (root / "raw").resolve()
     out: list[str] = []
     claimed: set[str] = set()
     for path in map(Path, paths):
-        if not path.exists():
-            raise WikiError(f"no such file or folder: {path}")
         if path.resolve().is_relative_to(raw):  # already raw sources
             files = _visible_files(path) if path.is_dir() else [path]
             out += [f.resolve().relative_to(raw.parent).as_posix() for f in files]
@@ -157,6 +175,8 @@ def copy_paths(root: Path, paths: list[Path]) -> list[str]:
         for src, parts in pairs:
             rel = _unclaimed(root, _raw_rel(parts), claimed)
             dest = root / rel
+            if on_copy is not None:
+                on_copy(rel)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             out.append(rel)

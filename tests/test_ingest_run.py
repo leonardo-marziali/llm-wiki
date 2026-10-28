@@ -867,3 +867,63 @@ def test_unknown_decision_rejects(wiki, fake_claude):
     assert report.decision == "reject"
     assert branches(wiki) == ["main"]
     assert inbox_files(wiki) == ["inbox/new.md"]
+
+
+# --- fix round 2: N1 ---
+
+
+def test_bad_path_after_trust_changes_nothing(wiki, fake_claude, tmp_path):
+    # N1: a typo in a path is refused before any intake step
+    drop(wiki, "inbox/evil.md", INJECTION)
+    ingest(wiki)
+    before = snapshot(wiki)
+    with pytest.raises(WikiError, match=r"nope\.md"):
+        ingest(wiki, trust="evil.md", paths=[tmp_path / "nope.md"])
+    assert snapshot(wiki) == before
+    assert branches(wiki) == ["main"]
+    again = ingest(wiki)  # nothing left behind to re-screen
+    assert again.decision == "noop"
+    assert sorted(p.name for p in (wiki / ".wiki" / "quarantine").iterdir()) == [
+        "evil.md",
+        "evil.md.reason.json",
+    ]
+    assert fake_claude.calls() == []
+
+
+def test_bad_path_after_good_path_copies_nothing(wiki, fake_claude, tmp_path):
+    # N1
+    out = tmp_path / "out"
+    drop(out, "a.md", NEW_TEXT)
+    before = snapshot(wiki)
+    with pytest.raises(WikiError, match=r"nope\.md"):
+        ingest(wiki, paths=[out / "a.md", out / "nope.md"])
+    assert snapshot(wiki) == before
+    assert fake_claude.calls() == []
+
+
+def test_interrupt_during_copy_removes_partial_copies(
+    wiki, fake_claude, tmp_path, monkeypatch
+):
+    # N1: each copy is owned before it is made, so a Ctrl-C mid-copy leaves none
+    out = tmp_path / "out"
+    drop(out, "a.md", NEW_TEXT)
+    drop(out, "b.md", "# B\n")
+    drop(wiki, "inbox/keep.md", "# Keep\n")
+    before = snapshot(wiki)
+    real_copy = intake.shutil.copy2
+    raw_copies = []
+
+    def copy2(src, dest, **kw):
+        result = real_copy(src, dest, **kw)
+        if "/raw/" in str(dest):
+            raw_copies.append(dest)
+            if len(raw_copies) == 2:
+                raise KeyboardInterrupt  # after b.md landed in raw/
+        return result
+
+    monkeypatch.setattr(intake.shutil, "copy2", copy2)
+    with pytest.raises(KeyboardInterrupt):
+        ingest(wiki, paths=[out / "a.md", out / "b.md"])
+    assert len(raw_copies) == 2
+    assert snapshot(wiki) == before
+    assert fake_claude.calls() == []
