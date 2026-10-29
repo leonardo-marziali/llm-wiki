@@ -687,7 +687,7 @@ def test_diff_then_accept(wiki, fake_claude, monkeypatch):
     shown = []
     monkeypatch.setattr("typer.prompt", lambda *a, **kw: next(answers))
     monkeypatch.setattr(
-        "llm_wiki.ingest_run._show_diff",
+        "llm_wiki.gate.show_diff",
         lambda root, base, branch: shown.append(branch),
     )
     report = ingest(wiki, yes=False, interactive=True)
@@ -771,13 +771,13 @@ def test_files_dropped_mid_run_survive_reject(wiki, fake_claude):
 
 def test_interrupted_hold_keeps_unheld_user_files(wiki, fake_claude, monkeypatch):
     # I1: a Ctrl-C while holding pre-run files deletes none of them
-    from llm_wiki import ingest_run
+    from llm_wiki import gate
 
     drop(wiki, "inbox/a.md", "a\n")
     drop(wiki, "inbox/b.md", "b\n")
     drop(wiki, "raw/docs/c.md", "c\n")
     before = snapshot(wiki)
-    real_keep = ingest_run._Undo.keep
+    real_keep = gate.Undo.keep
     calls = []
 
     def keep(self, rel, dest=None):
@@ -786,7 +786,7 @@ def test_interrupted_hold_keeps_unheld_user_files(wiki, fake_claude, monkeypatch
             raise KeyboardInterrupt
         real_keep(self, rel, dest)
 
-    monkeypatch.setattr(ingest_run._Undo, "keep", keep)
+    monkeypatch.setattr(gate.Undo, "keep", keep)
     with pytest.raises(KeyboardInterrupt):
         ingest(wiki)
     assert snapshot(wiki) == before

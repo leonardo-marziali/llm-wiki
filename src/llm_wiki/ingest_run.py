@@ -5,10 +5,7 @@ either merges the squashed branch into the base (accept) or deletes it and puts
 every moved file back (reject, Ctrl-C or a crash): the wiki is as before the run.
 """
 
-import json
 import re
-import shutil
-import subprocess
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -18,16 +15,16 @@ from typing import Literal
 
 import typer
 
-from llm_wiki import gitops
+from llm_wiki import gate, gitops
 from llm_wiki.claude import claude_binary
 from llm_wiki.config import WikiConfig, load_config, load_llm_settings
 from llm_wiki.errors import WikiError
+from llm_wiki.gate import LOG, Decision, Undo, plain
 from llm_wiki.index import build_indexes
 from llm_wiki.ingest import (
     STOP,
     RunContext,
     SourceOutcome,
-    is_page,
     process_deleted,
     process_source,
 )
@@ -50,11 +47,10 @@ from llm_wiki.lint import Finding, lint
 from llm_wiki.manifest import MANIFEST, Manifest, sha256_file
 from llm_wiki.pages import read_page
 from llm_wiki.registry import WikiRef
+from llm_wiki.session import is_page
 
-Decision = Literal["accept", "reject"]
 BRANCH_PREFIX = "wiki/ingest-"
-LOG = "wiki/log.md"
-_DIRT_OK = ("inbox/", "raw/")  # what a run picks up; anything else must be committed
+_PICKED_UP = ("inbox/", "raw/")  # the uncommitted files a run picks up
 _LOG_OP = {
     "ingested": "ingest",
     "quarantined": "quarantine",
@@ -65,16 +61,6 @@ _LOG_OP = {
 _MAX_TITLES = 5
 _HINT = "run `wiki consolidate` or start a new wiki"
 _UNVERIFIED = re.compile(r"^\s*>\s*\[!unverified\]", re.IGNORECASE | re.MULTILINE)
-# terminal escapes: CSI, OSC (with its payload) and the two-character ones
-_ESCAPE = re.compile(
-    r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]?"
-)
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def _plain(text: str) -> str:
-    """``text`` without terminal escapes; other control characters become spaces."""
-    return _CONTROL.sub(" ", _ESCAPE.sub("", text))
 
 
 @dataclass
@@ -98,142 +84,6 @@ class _Item:
     rel: str
     origin: Path | None = None  # an inbox file, moved into raw/ when its turn comes
     made: bool = False  # the run wrote it into raw/ (--note, copied paths)
-
-
-def _fresh(path: Path) -> Path:
-    out, n = path, 2
-    while out.exists():
-        out = path.with_name(f"{path.name}-{n}")
-        n += 1
-    return out
-
-
-def _under(rel: str, folder: str) -> bool:
-    return rel == folder or rel.startswith(folder + "/")
-
-
-class _Undo:
-    """What a reject must put back: copies of moved and pre-run files, held under
-    .wiki/tmp/ (listed in its held.json), and the quarantine entries the run did
-    not make. Only paths the run owns are reset: any other file under inbox/ or
-    raw/ is the user's and is never touched.
-    """
-
-    def __init__(self, root: Path, hold: Path, run_dir: Path):
-        self.root, self.hold = root, hold
-        self.skip = [p.relative_to(root).as_posix() for p in (hold, run_dir)]
-        self.entries: list[tuple[Path | None, str]] = []  # (copy or None: absent, rel)
-        self.owned: set[str] = set()  # inbox/ and raw/ paths this run changes
-        qdir = root / QUARANTINE_DIR
-        self.quarantined = {p.name for p in qdir.iterdir()} if qdir.is_dir() else set()
-
-    @property
-    def index(self) -> Path:
-        return self.hold / "held.json"
-
-    def own(self, rel: str) -> None:
-        self.owned.add(rel)
-
-    def keep(self, rel: str, dest: str | None = None) -> None:
-        """Hold ``rel`` now; a rollback writes it to ``dest`` (default: ``rel``)."""
-        src = self.root / rel
-        copy = None
-        self.hold.mkdir(parents=True, exist_ok=True)
-        if src.is_file():
-            copy = self.hold / str(len(self.entries))
-            shutil.copy2(src, copy)
-        self.entries.append((copy, dest or rel))
-        self.owned |= {rel, dest or rel}
-        held = [
-            {"copy": c.name if c else None, "dest": d} for c, d in self.entries
-        ]  # for a rollback finished by hand
-        self.index.write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
-
-    def discard(self) -> None:
-        shutil.rmtree(self.hold, ignore_errors=True)
-
-    def _ours(self, rel: str) -> bool:
-        if any(_under(rel, s) for s in self.skip):
-            return False
-        return rel in self.owned or not rel.startswith(_DIRT_OK)
-
-    def rollback(self, base: str, branch: str | None) -> None:
-        """Every step runs even when an earlier one fails; the first error then
-        propagates, and the held copies' index stays for a rollback by hand.
-        """
-        root = self.root
-        try:
-            dirty = [p for p in gitops.changed_paths(root) if self._ours(p)]
-            # a gitignored file is reset only when the run owns it
-            ignored = gitops.changed_paths(root, ignored=True)
-            dirty += [p for p in ignored if p in self.owned]
-            gitops.restore(root, dirty)  # nothing the run left half-done survives
-        finally:
-            try:
-                if branch is not None:
-                    if gitops.current_branch(root) != base:
-                        gitops.switch(root, base)
-                    gitops.delete_branch(root, branch)
-            finally:
-                self._put_back()
-        self.discard()
-
-    def _put_back(self) -> None:
-        """Drop the run's quarantine entries; move the held copies back."""
-        root = self.root
-        qdir = root / QUARANTINE_DIR
-        if qdir.is_dir():
-            for p in qdir.iterdir():
-                if p.name not in self.quarantined and p.is_file():
-                    p.unlink()  # its source goes back to where it came from
-        for copy, rel in self.entries:
-            dest = root / rel
-            if copy is None:
-                dest.unlink(missing_ok=True)
-            else:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(copy), dest)
-
-
-# --- preflight ---
-
-
-def _preflight_git(root: Path) -> str:
-    """The base branch, after the branch and clean-tree rules."""
-    top = gitops.enclosing_repo(root)
-    if top is None:
-        raise WikiError(f"{root} is not inside a git repository")
-    own = top == Path(root).resolve()
-    branch = gitops.current_branch(root)
-    if branch is None:
-        raise WikiError("HEAD is detached; switch to a branch first")
-    if branch.startswith(BRANCH_PREFIX):
-        base = "main" if own else "<base branch>"
-        raise WikiError(
-            f"a previous ingest left {branch} checked out; run "
-            f"`git switch {base} && git branch -D {branch}` first"
-        )
-    if own and branch != "main":
-        raise WikiError(f"ingest runs on main; the wiki is on {branch}")
-    try:
-        gitops.git(root, "rev-parse", "--verify", "-q", "HEAD")
-    except WikiError:
-        raise WikiError("the repository has no commits yet") from None
-    staged = gitops.staged_paths(root)
-    if staged:
-        raise WikiError(
-            "the repository has staged changes ("
-            + ", ".join(staged[:5])
-            + "); commit or unstage them first"
-        )
-    dirty = [p for p in gitops.changed_paths(root) if not p.startswith(_DIRT_OK)]
-    if dirty:
-        raise WikiError(
-            "the wiki has uncommitted changes outside inbox/ and raw/ ("
-            + ", ".join(dirty[:5])
-            + "); commit or discard them first"
-        )
-    return branch
 
 
 # --- the work list ---
@@ -264,7 +114,7 @@ def needs_work(manifest: Manifest, root: Path, rel: str) -> bool:
 
 def _work_list(
     root: Path,
-    undo: _Undo,
+    undo: Undo,
     paths: list[Path] | None,
     note: str | None,
     trust_name: str | None,
@@ -344,7 +194,7 @@ def _inbox_skip(root: Path, manifest: Manifest, src: Path, rel: str) -> str | No
 
 
 def _within_source_cap(
-    root: Path, cfg: WikiConfig, items: list[_Item], undo: _Undo
+    root: Path, cfg: WikiConfig, items: list[_Item], undo: Undo
 ) -> list[_Item]:
     """Drop the new sources that would take the wiki past ``max_sources``,
     before any paid call; changed and deleted sources always run.
@@ -385,21 +235,13 @@ def _within_source_cap(
 
 def _branch_name(root: Path, today: date, first: str) -> str:
     stem = slug(Path(first).stem)[:40].strip("-") or "source"
-    return _fresh_branch(root, f"{BRANCH_PREFIX}{today:%Y%m%d}-{stem}")
-
-
-def _fresh_branch(root: Path, name: str) -> str:
-    out, n = name, 2
-    while gitops.branch_exists(root, out):
-        out = f"{name}-{n}"
-        n += 1
-    return out
+    return gate.fresh_branch(root, f"{BRANCH_PREFIX}{today:%Y%m%d}-{stem}")
 
 
 # --- processing and finalize ---
 
 
-def _prepare(ctx: RunContext, item: _Item, undo: _Undo) -> Prepared:
+def _prepare(ctx: RunContext, item: _Item, undo: Undo) -> Prepared:
     root = Path(ctx.root)
     prepared = prepare_source(root, ctx.cfg, ctx.manifest, item.rel, ctx.today)
     if prepared.kind == "changed" or prepared.status == "refused":
@@ -413,7 +255,7 @@ def _prepare(ctx: RunContext, item: _Item, undo: _Undo) -> Prepared:
 
 
 def _process(
-    ctx: RunContext, items: list[_Item], report: IngestReport, undo: _Undo
+    ctx: RunContext, items: list[_Item], report: IngestReport, undo: Undo
 ) -> None:
     root = Path(ctx.root)
     redactions: Counter[str] = Counter()
@@ -452,26 +294,16 @@ def _process(
 def _log_lines(outcomes: list[SourceOutcome], today: date) -> list[str]:
     lines = []
     for o in outcomes:
-        text = " ".join(_plain(o.title).split()) if o.status == "ingested" else o.rel
+        text = " ".join(plain(o.title).split()) if o.status == "ingested" else o.rel
         lines.append(f"## [{today.isoformat()}] {_LOG_OP[o.status]} | {text or o.rel}")
     return lines
-
-
-def _append_log(root: Path, lines: list[str]) -> None:
-    if not lines:
-        return
-    path = root / LOG
-    text = path.read_text(encoding="utf-8") if path.is_file() else "# Log\n"
-    if not text.endswith("\n"):
-        text += "\n"
-    path.write_text(text + "\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _finalize(ctx: RunContext, base: str, report: IngestReport) -> None:
     """Indexes, log, manifest, lint, then one squashed commit on the branch."""
     root, cfg = Path(ctx.root), ctx.cfg
     indexes = build_indexes(root, cfg)
-    _append_log(root, _log_lines(report.outcomes, ctx.today))
+    gate.append_log(root, _log_lines(report.outcomes, ctx.today))
     ctx.manifest.save(root)
     files = [p.relative_to(root).as_posix() for p in indexes] + [LOG, MANIFEST]
     gitops.stage_commit(root, files, "ingest(finalize)", force=files)
@@ -496,7 +328,7 @@ def _page_stats(root: Path, pages: list[str], report: IngestReport) -> None:
 
 def _squash_message(outcomes: list[SourceOutcome]) -> str:
     n = len(outcomes)
-    titles = [" ".join(_plain(o.title).split()) for o in outcomes]
+    titles = [" ".join(plain(o.title).split()) for o in outcomes]
     if len(titles) > _MAX_TITLES:
         titles = [*titles[:_MAX_TITLES], "…"]
     noun = "source" if n == 1 else "sources"
@@ -550,64 +382,7 @@ def summarize(report: IngestReport) -> str:
         )
     lines.append(f"cost ${report.cost_usd:.2f}")
     # titles, reasons and findings carry model text: never a terminal escape
-    return "\n".join(_plain(line) for line in lines)
-
-
-def _show_diff(root: Path, base: str, branch: str) -> None:
-    # the pager is inherited: no capture
-    subprocess.run(
-        ["git", "diff", f"{base}...{branch}", "--", "."], cwd=root, check=False
-    )
-
-
-def _prompt_decide(root: Path, base: str, branch: str) -> Callable[[str], Decision]:
-    def decide(summary: str) -> Decision:
-        while True:
-            answer = typer.prompt("accept, reject or diff? [a/r/d]").strip().lower()
-            if answer in ("a", "accept"):
-                return "accept"
-            if answer in ("r", "reject"):
-                return "reject"
-            if answer in ("d", "diff"):
-                _show_diff(root, base, branch)
-
-    return decide
-
-
-def _accept(root: Path, base: str, branch: str, undo: _Undo) -> None:
-    """Merge the branch; if that is cut short, say how to finish it by hand."""
-    try:
-        gitops.switch(root, base)
-        gitops.ff_merge(root, branch)
-        gitops.delete_branch(root, branch)
-    except BaseException:
-        typer.echo(
-            f"error: the accept stopped before it finished. To finish it, run in "
-            f"{root}:\n"
-            f"  git switch {base} && git merge --ff-only {branch} && "
-            f"git branch -D {branch}\n"
-            f"then delete {undo.hold} (copies held only for a reject)",
-            err=True,
-        )
-        raise
-    undo.discard()
-
-
-def _rollback(undo: _Undo, base: str, branch: str | None) -> None:
-    """Reject; if that is cut short, say how to finish it by hand."""
-    try:
-        undo.rollback(base, branch)
-    except BaseException:
-        drop = f" && git branch -D {branch}" if branch else ""
-        typer.echo(
-            f"error: the rollback stopped before it finished. To finish it, run in "
-            f"{undo.root}:\n"
-            f"  git switch {base}{drop}\n"
-            f"then move each file listed in {undo.index} from that folder back "
-            "to its dest (a null copy: delete the dest)",
-            err=True,
-        )
-        raise
+    return "\n".join(plain(line) for line in lines)
 
 
 # --- the run ---
@@ -637,17 +412,18 @@ def run_ingest(
     claude_binary()
     if not (interactive or yes):
         raise WikiError("the gate needs a terminal; pass --yes")
-    base = _preflight_git(root)
+    base = gate.preflight_git(root)
     check_paths(paths or [])  # a typo stops the run before any intake step
     today = today or date.today()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = _fresh(root / ".wiki" / "runs" / stamp)
-    undo = _Undo(root, _fresh(root / TMP_DIR / f"ingest-{run_dir.name}"), run_dir)
+    run_dir = gate.fresh(root / ".wiki" / "runs" / stamp)
+    undo = Undo(root, gate.fresh(root / TMP_DIR / f"ingest-{run_dir.name}"), run_dir)
     report = IngestReport(decision="noop", base=base)
     try:
-        # inbox/ and raw/ only, by preflight; gitignored ones too (R23)
+        # inbox/ and raw/ (preflight's other dirt, .wiki/reports/, is never
+        # touched); gitignored ones too (R23)
         for rel in gitops.changed_paths(root, ignored=True):
-            if rel.startswith(_DIRT_OK):
+            if rel.startswith(_PICKED_UP):
                 undo.keep(rel)
         items = _work_list(root, undo, paths, note, trust, today)
         items = _within_source_cap(root, cfg, items, undo)
@@ -670,38 +446,25 @@ def run_ingest(
         _finalize(ctx, base, report)
         report.summary = summarize(report)
         typer.echo(report.summary)
-        report.decision = _gate(root, base, report.branch, report, yes, decide, confirm)
+        report.decision = gate.decide(
+            root,
+            base,
+            report.branch,
+            report.summary,
+            len(report.lint_errors),
+            yes,
+            decide,
+            confirm,
+        )
     except BaseException:  # Ctrl-C or a crash: the wiki goes back as it was
-        _rollback(undo, base, report.branch)
+        gate.rollback(undo, base, report.branch)
         raise
     if report.decision == "reject":
-        _rollback(undo, base, report.branch)
+        gate.rollback(undo, base, report.branch)
     else:
-        _accept(root, base, report.branch, undo)
+        gate.accept(root, base, report.branch, undo)
     _announce(report, base, yes)
     return report
-
-
-def _gate(
-    root: Path,
-    base: str,
-    branch: str,
-    report: IngestReport,
-    yes: bool,
-    decide: Callable[[str], Decision] | None,
-    confirm: Callable[[str], bool] | None,
-) -> Decision:
-    """Accept or reject the finished branch: --yes takes only a clean run."""
-    if yes:
-        return "reject" if report.lint_errors else "accept"
-    gate = decide or _prompt_decide(root, base, branch)
-    # anything but an explicit accept rejects
-    accepted = gate(report.summary) == "accept"
-    if accepted and report.lint_errors:
-        n = len(report.lint_errors)
-        ask = confirm or (lambda q: typer.confirm(q, default=False))
-        accepted = ask(f"lint has {n} error{'' if n == 1 else 's'}; accept anyway?")
-    return "accept" if accepted else "reject"
 
 
 def _announce(report: IngestReport, base: str, yes: bool) -> None:

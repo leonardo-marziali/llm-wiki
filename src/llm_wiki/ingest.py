@@ -14,12 +14,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
-from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.convert import never_ingest
 from llm_wiki.errors import STOP, WikiError
 from llm_wiki.gitops import (
-    changed_paths,
     exists_at,
     is_ignored,
     restore,
@@ -29,18 +27,17 @@ from llm_wiki.gitops import (
 )
 from llm_wiki.init import REVIEW_DAYS
 from llm_wiki.intake import Prepared, inbox_home, source_slug, src_id_for
-from llm_wiki.lint import Finding, cited_paths, lint
+from llm_wiki.lint import Finding, cited_paths
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, sha256_file
-from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, SYSTEM_FILES, read_page
-from llm_wiki.plan import plan_source, redact_plan, screen_plan, system_prompt
+from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, read_page
+from llm_wiki.plan import plan_source, redact_plan, screen_plan
 from llm_wiki.schemas import Claim, PagePlan, Plan
 from llm_wiki.screen import Hit, quarantine
+from llm_wiki.session import OPEN_QUESTIONS, EditSession, SessionFailed, is_page
 
-OPEN_QUESTIONS = "wiki/open-questions.md"
 SHORT_REVIEW_DAYS = 60
 SHORT_REVIEW_SECTIONS = {"conventions", "operations"}
 _TOP_LEVEL = {"overview", "glossary"}
-_FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all sources
 DELETE_CLAIM = "source deleted: mark its claims unverified per AGENTS.md"
 VERIFY = (
     "update its sha256 for this source to the new value and refresh "
@@ -101,24 +98,6 @@ def review_after(id_: str, today: date) -> date:
     """+90 days, or +60 for conventions and operations pages."""
     short = id_.split(".", 1)[0] in SHORT_REVIEW_SECTIONS and "." in id_
     return today + timedelta(days=SHORT_REVIEW_DAYS if short else REVIEW_DAYS)
-
-
-def is_page(rel: str) -> bool:
-    parts = rel.split("/")
-    return (
-        parts[0] == "wiki"
-        and rel.endswith(".md")
-        and parts[-1] not in SYSTEM_FILES
-        and "_archive" not in parts[1:-1]
-    )
-
-
-def _content(path: Path) -> bytes | None:
-    return path.read_bytes() if path.is_file() else None
-
-
-def _under(rel: str, folder: str | None) -> bool:
-    return folder is not None and (rel == folder or rel.startswith(folder + "/"))
 
 
 def _part_info(prepared: Prepared, part: str) -> tuple[str, str]:
@@ -323,7 +302,9 @@ def build_delete_prompt(
 
 
 class _Source:
-    """One ready source between its prep commit and its outcome."""
+    """One ready source between its prep commit and its outcome; its edits run
+    in an ``EditSession``.
+    """
 
     def __init__(
         self,
@@ -339,29 +320,20 @@ class _Source:
         self.root = Path(ctx.root)
         self.src_id = src_id_for(ctx.cfg, ctx.manifest, prepared.rel)
         self.src_existed = (self.root / page_rel(self.src_id)).is_file()
-        self.allowed = {OPEN_QUESTIONS}
+        self.session = EditSession(
+            self.root,
+            ctx.cfg,
+            ctx.settings,
+            ctx.today,
+            ctx.run_dir,
+            f"{ctx.n}-{source_slug(prepared.rel)}",
+        )
+        self.allowed = self.session.allowed
         if self.src_existed or prepared.kind != "deleted":  # never created then
             self.allowed.add(page_rel(self.src_id))
-        self.oq_before: bytes | None = None  # open-questions.md before an edit
         self.planned: dict[str, str] = {}  # id -> its first planned action
         self.reviewed: set[str] = set()  # ids whose page was reviewed before
         self.verified: set[str] = set()  # unplanned pages a changed source backs
-        run_dir = Path(ctx.run_dir).resolve()
-        root = self.root.resolve()
-        # the run's own files are never strays, gitignored or not
-        self.run_rel = (
-            run_dir.relative_to(root).as_posix()
-            if run_dir.is_relative_to(root)
-            else None
-        )
-        # what was already uncommitted (e.g. inbox files of later sources), with
-        # its bytes so a stray edit to it can be undone; None: it was missing.
-        # Gitignored files count too: a stray may hide there (m6)
-        self.baseline = {
-            p: _content(self.root / p)
-            for p in changed_paths(self.root, ignored=True)
-            if not _under(p, self.run_rel)
-        }
 
     def run_part(self, part: str) -> None:
         ctx, prepared = self.ctx, self.prepared
@@ -421,16 +393,26 @@ class _Source:
     ) -> None:
         """The edit session, the post-check, then one repair of any lint errors."""
         self._record(plan, verify or [])
-        self._edit(prompt(None), suffix, "edit")
-        errors_found = self._check()
-        if errors_found:
-            self._edit(prompt(errors_found), suffix, "repair")
-            errors_found = self._check()
-        if errors_found:
-            raise _Failed(
-                "lint errors after the repair: "
-                + "; ".join(f"{f.path} {f.code}: {f.message}" for f in errors_found)
-            )
+        session, spent = self.session, self.session.cost_usd
+        kind = self.prepared.kind
+        # a deleted or changed source: an untouched planned, src or verify page
+        # still cites the deleted file or keeps the old sha, so lint them all
+        pages_to_lint = self._wanted if kind in ("deleted", "changed") else None
+        extra = self._deleted_extra if kind == "deleted" else None
+        try:
+            session.apply(prompt, suffix, pages_to_lint=pages_to_lint, extra=extra)
+        except SessionFailed as exc:
+            raise _Failed(str(exc)) from None
+        finally:
+            self.out.cost_usd += session.cost_usd - spent
+            self.out.reverted = list(session.reverted)
+
+    def _wanted(self, _changed: list[str] | None = None) -> list[str]:
+        """Every allowed page, changed or not."""
+        return sorted(p for p in self.allowed if is_page(p))
+
+    def _deleted_extra(self) -> list[Finding]:
+        return self._deleted_citations(self._wanted())
 
     def _record(self, plan: Plan, verify: list[str]) -> None:
         if not self.planned:
@@ -449,109 +431,6 @@ class _Source:
                 if fm is not None and fm.review_status == "reviewed":
                     self.reviewed.add(id_)
 
-    def _edit(self, prompt: str, suffix: str, kind: str) -> None:
-        self.oq_before = _content(self.root / OPEN_QUESTIONS)
-        call = claude.make_call(
-            "edit",
-            self.ctx.settings,
-            prompt=prompt,
-            system_prompt=system_prompt(self.root, "edit.md"),
-            cwd=self.root,
-        )
-        result = claude.run(call)
-        self.out.cost_usd += result.cost_usd
-        run_dir = Path(self.ctx.run_dir)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        name = f"{self.ctx.n}-{source_slug(self.prepared.rel)}{suffix}.{kind}.json"
-        (run_dir / name).write_text(
-            json.dumps(result.raw, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-    def _changed(self) -> list[str]:
-        """Paths changed since the prep commit, beyond what was uncommitted then."""
-        now = {
-            p
-            for p in changed_paths(self.root, ignored=True)
-            if p not in self.baseline and not _under(p, self.run_rel)
-        }
-        now |= {
-            p
-            for p, data in self.baseline.items()
-            if _content(self.root / p) != data  # changed, deleted or recreated
-        }
-        return sorted(now)
-
-    def _revert(self, paths: list[str]) -> None:
-        """Committed paths go back to the prep commit, the others to their bytes."""
-        restore(self.root, [p for p in paths if p not in self.baseline])
-        for p in paths:
-            if p not in self.baseline:
-                continue
-            path, data = self.root / p, self.baseline[p]
-            if data is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-
-    def _check(self) -> list[Finding]:
-        """Revert stray changes, then the errors on the changed and planned pages.
-
-        A changed .gitignore goes back first, so it cannot hide a stray.
-        """
-        ignores = [p for p in self._changed() if Path(p).name == ".gitignore"]
-        self._revert(ignores)
-        changed = sorted({*self._changed(), *ignores})
-        strays = [p for p in changed if p not in self.allowed]
-        self._revert([p for p in strays if p not in ignores])
-        self.out.reverted = sorted({*self.out.reverted, *strays})
-        wanted = sorted(p for p in self.allowed if is_page(p))
-        findings = [
-            Finding("error", "missing-page", p, "planned page was not written")
-            for p in wanted
-            if not (self.root / p).is_file()
-        ]
-        findings += self._open_questions_check()
-        pages = [p for p in changed if p in self.allowed and is_page(p)]
-        if self.prepared.kind == "deleted":
-            # an untouched planned page still cites the deleted file: lint it too
-            pages = wanted
-            findings += self._deleted_citations(wanted)
-        elif self.prepared.kind == "changed":
-            # an untouched planned, src or verify page keeps the old sha
-            pages = wanted
-        pages = [p for p in pages if (self.root / p).is_file()]
-        if pages:
-            report = lint(
-                self.root,
-                self.ctx.cfg,
-                only=[Path(p) for p in pages],
-                today=self.ctx.today,
-            )
-            findings += [
-                f
-                for f in report.findings
-                if f.severity == "error"
-                and f.path in pages
-                and f.code not in _FINALIZE_CODES
-            ]
-        return findings
-
-    def _open_questions_check(self) -> list[Finding]:
-        """open-questions.md may only grow: anything else is put back (R19)."""
-        before = self.oq_before
-        path = self.root / OPEN_QUESTIONS
-        now = _content(path)
-        if before is None or (now is not None and now.startswith(before)):
-            return []
-        path.write_bytes(before)
-        msg = (
-            "may only grow: append entries, never edit or remove existing ones; "
-            "the earlier text was put back"
-        )
-        return [Finding("error", "open-questions-append-only", OPEN_QUESTIONS, msg)]
-
     def _deleted_citations(self, pages: list[str]) -> list[Finding]:
         """Planned pages whose ``sources`` or footnotes still cite the deleted file."""
         rel = self.prepared.rel
@@ -565,12 +444,12 @@ class _Source:
 
     def undo(self) -> None:
         """Put the wiki back to the prep commit and the files uncommitted then."""
-        self._revert(self._changed())
+        self.session.undo()
 
     def commit(self) -> None:
         ctx, rel = self.ctx, self.prepared.rel
         assert self.prepared.conversion is not None
-        staged = [p for p in self._changed() if p in self.allowed]
+        staged = [p for p in self.session.changed() if p in self.allowed]
         entry = ctx.manifest.entries[rel]
         touched = {*entry.pages_touched, *self.planned, self.src_id}
         ctx.manifest.record(
@@ -604,7 +483,7 @@ class _Source:
     def commit_deleted(self) -> None:
         """One commit: the edited pages, the raw file's deletion, the manifest."""
         ctx, rel = self.ctx, self.prepared.rel
-        staged = [p for p in self._changed() if p in self.allowed]
+        staged = [p for p in self.session.changed() if p in self.allowed]
         ctx.manifest.mark_deleted(rel)
         ctx.manifest.save(self.root)
         stage_commit(
