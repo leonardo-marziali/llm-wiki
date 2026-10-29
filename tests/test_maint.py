@@ -10,6 +10,7 @@ from llm_wiki.ingest import page_rel
 from llm_wiki.lint import CONSOLIDATE_HINT, Finding, LintReport, lint
 from llm_wiki.maint import (
     FIX_CODES,
+    HAND_HINT,
     HINTS,
     MAX_JOBS,
     PLAN_PROMPTS,
@@ -20,6 +21,8 @@ from llm_wiki.maint import (
     consolidate_jobs,
     fix_jobs,
     flagged,
+    hint,
+    live_linkers,
     validate_maint_plan,
 )
 from llm_wiki.manifest import Manifest
@@ -92,7 +95,7 @@ def test_fix_jobs_group_by_page_and_route_codes(root):
     rep = report(root)
     assert any(f.code == "not-in-index" for f in rep.findings)  # unindexed pages
 
-    jobs, left = fix_jobs(root, load_config(root), rep)
+    jobs, left, _ = fix_jobs(root, load_config(root), rep)
 
     assert [(j.kind, j.targets) for j in jobs] == [("fix", ["concepts.a"])]
     assert jobs[0].inputs[0] == "concepts.a"
@@ -143,7 +146,7 @@ def test_fix_jobs_route_consolidate_codes_to_left(root):
     add(root, "concepts.long", "Long page", long_body, cited=False, type_="hub")
     add(root, "concepts.flow", "Git flow")  # duplicate title of git-flow
     reindex(root)
-    jobs, left = fix_jobs(root, load_config(root), report(root))
+    jobs, left, _ = fix_jobs(root, load_config(root), report(root))
     left_codes = {f.code for f in left}
     assert {"page-too-long", "duplicate-title"} <= left_codes
     assert all(
@@ -166,7 +169,7 @@ def test_deep_finding_joins_first_page_job(root):
             pages=("concepts.a", GIT),
         )
     )
-    jobs, _ = fix_jobs(root, load_config(root), rep)
+    jobs, _, _ = fix_jobs(root, load_config(root), rep)
     (job,) = jobs
     assert job.targets == ["concepts.a"]
     assert job.inputs[:2] == ["concepts.a", GIT]
@@ -182,7 +185,7 @@ def test_orphan_job_adds_search_hits_and_overview(root):
         links = "".join(f"[c{m}](c{m}.md) " for m in range(3) if m != n)
         edit(root, page_rel(f"components.c{n}"), "Short fact.", f"{links}Short fact.")
     reindex(root)
-    jobs, _ = fix_jobs(root, load_config(root), report(root))
+    jobs, _, _ = fix_jobs(root, load_config(root), report(root))
     (job,) = [j for j in jobs if j.targets == ["concepts.deploy"]]
     assert job.inputs[0] == "concepts.deploy"
     assert "overview" in job.inputs
@@ -234,8 +237,8 @@ def test_flagged_pages_never_in_jobs(root):
     ]
     cfg = load_config(root)
 
-    fixes, left = fix_jobs(root, cfg, rep)
-    consolidates = consolidate_jobs(root, cfg, rep)
+    fixes, left, _ = fix_jobs(root, cfg, rep)
+    consolidates, _ = consolidate_jobs(root, cfg, rep)
 
     assert "concepts.s" not in ids_in(fixes) | ids_in(consolidates)
     assert any(j.targets == ["concepts.a"] for j in fixes)  # not vacuous
@@ -255,8 +258,9 @@ def test_fix_jobs_capped_errors_first(root):
         add(root, f"concepts.p{n:02}", f"Page {n:02}")  # orphan warnings only
     add(root, "concepts.z", "Zulu", "# Zulu\n\nNo summary line.\n")  # an error
     reindex(root)
-    jobs, _ = fix_jobs(root, load_config(root), report(root))
+    jobs, _, more = fix_jobs(root, load_config(root), report(root))
     assert len(jobs) == MAX_JOBS == 10
+    assert more == 3
     assert [j.targets[0] for j in jobs] == [
         "concepts.z",
         *(f"concepts.p{n:02}" for n in range(9)),
@@ -310,7 +314,7 @@ def seed_consolidate(root):
 
 def test_consolidate_jobs_kinds_and_order(root):
     question = seed_consolidate(root)
-    jobs = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
     assert [(j.kind, j.targets) for j in jobs] == [
         ("relink", ["concepts.old"]),
         ("promote", ["requirements.sso"]),
@@ -338,7 +342,7 @@ def test_consolidate_linkers_capped_at_8(root):
             type_="component",
         )
     reindex(root)
-    (job,) = consolidate_jobs(root, load_config(root), report(root))
+    (job,), _ = consolidate_jobs(root, load_config(root), report(root))
     assert job.inputs == ["concepts.old", *(f"components.u{n}" for n in range(7))]
 
 
@@ -348,7 +352,7 @@ def test_consolidate_page_only_in_first_job(root):
     add(root, "components.cache", "Caching layer", type_="component")
     add(root, "concepts.user", "User", "# User\n\n**TL;DR** U.\n\n[c](cache.md)\n")
     reindex(root)
-    jobs = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
     assert [(j.kind, j.targets) for j in jobs] == [("relink", ["concepts.cache"])]
 
 
@@ -360,7 +364,7 @@ def test_src_pages_never_merged(root):
         add(root, f"sources.{name}", "Guide", body, type_="source-summary")
     add(root, "concepts.guide", "Guide")
     reindex(root)
-    jobs = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
     assert not any(i.startswith("sources.") for j in jobs for i in j.targets)
     assert not [j for j in jobs if j.kind in ("merge", "split")]
 
@@ -658,7 +662,7 @@ def test_maint_prompt_wraps_pages_with_nonce(root):
         load_config(root),
         j,
         "fix",
-        flagged=flagged(rep),
+        exclude=flagged(rep),
         today=TODAY,
         errors=["concepts.x: bad id"],
     )
@@ -684,7 +688,7 @@ def test_maint_prompt_wraps_pages_with_nonce(root):
     assert "- [2026-10-01] Why? — x" in prompt
     assert "concepts.x: bad id" in prompt
     retry_free = build_maint_plan_prompt(
-        root, load_config(root), j, "fix", flagged=set(), today=TODAY
+        root, load_config(root), j, "fix", exclude=set(), today=TODAY
     )
     assert "concepts.x: bad id" not in retry_free
 
@@ -695,5 +699,171 @@ def test_flagged_open_questions_give_no_promote_job(root):
     oq.write_text(oq.read_text(encoding="utf-8") + SECRET, encoding="utf-8")
     rep = report(root)
     assert "wiki/open-questions.md" in flagged(rep)
-    jobs = consolidate_jobs(root, load_config(root), rep)
+    jobs, _ = consolidate_jobs(root, load_config(root), rep)
     assert [j.kind for j in jobs] == ["relink", "merge", "split"]
+
+
+# --- fix round 1 ---
+
+
+def stub_page(root, successor=GIT):
+    """A superseded stub without a TL;DR that the overview links (no orphan)."""
+    add(
+        root,
+        "concepts.stub",
+        "Stub",
+        f"# Stub\n\nReplaced by [{successor}](../conventions/git-flow.md).\n",
+        status="superseded",
+        extra=f"superseded_by: {successor}\n",
+    )
+    edit(
+        root,
+        "wiki/overview.md",
+        "- [Git flow]",
+        "- [S](concepts/stub.md)\n- [Git flow]",
+    )
+    reindex(root)
+
+
+def keep_stub(**kw) -> MaintPlan:
+    return mplan(mpage("concepts.stub", action="update", status="superseded", **kw))
+
+
+def test_fix_job_on_stub_keeps_current_successor(root):
+    # R9: the stub's job has only itself as input; keeping the successor it
+    # already names is valid while that successor is live
+    stub_page(root)
+    (job,), _, _ = fix_jobs(root, load_config(root), report(root))
+    assert job.inputs == ["concepts.stub"]
+    assert [f.code for f in job.findings] == ["missing-tldr"]
+    assert check(root, keep_stub(superseded_by=GIT), job, mode="fix") == []
+    # another page that is neither an input nor the current successor
+    errors = check(root, keep_stub(superseded_by="overview"), job, mode="fix")
+    assert any("superseded_by" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        lambda root: edit(root, GIT_REL, "status: as-is", "status: deprecated"),
+        lambda root: edit(root, GIT_REL, "status: as-is", "status: superseded"),
+        lambda root: (root / GIT_REL).unlink(),
+        lambda root: edit(
+            root, GIT_REL, "for every change.", "for every change." + SECRET
+        ),
+    ],
+    ids=["deprecated", "superseded", "archived-or-gone", "flagged"],
+)
+def test_kept_successor_must_be_live(root, spoil):
+    stub_page(root)
+    job_ = job("fix", targets=["concepts.stub"])
+    spoil(root)
+    errors = check(root, keep_stub(superseded_by=GIT), job_, mode="fix")
+    assert any("concepts.stub" in e and "superseded_by" in e for e in errors)
+
+
+def test_fix_job_prompt_carries_target_question(root):
+    line = (
+        f"- [2026-10-01] Still right? — [Git flow](conventions/git-flow.md) — {RAW_REL}"
+    )
+    (root / "wiki" / "open-questions.md").write_text(
+        f"# Open questions\n\n- [2026-10-01] Unrelated?\n{line}\n", encoding="utf-8"
+    )
+    edit(root, GIT_REL, "for every change.", "for every change. See [x](x.md).")
+    rep = report(root)
+    (job,), _, _ = fix_jobs(root, load_config(root), rep)
+    assert job.targets == [GIT]
+    assert job.questions == [line]
+    prompt = build_maint_plan_prompt(
+        root, load_config(root), job, "fix", exclude=flagged(rep), today=TODAY
+    )
+    m = re.search(
+        r"<untrusted-questions-([0-9a-f]{16})>\n(.*?)\n</untrusted-questions-\1>",
+        prompt,
+        re.DOTALL,
+    )
+    assert m is not None
+    assert m.group(2) == line
+    # the validator then accepts it as resolved
+    assert check(root, mplan(git_update(), resolved=[line]), job, mode="fix") == []
+
+
+def test_consolidate_jobs_carry_target_questions(root):
+    seed_consolidate(root)
+    line = "- [2026-10-02] Too long? — [Long](concepts/long.md)"
+    oq = root / "wiki" / "open-questions.md"
+    oq.write_text(oq.read_text(encoding="utf-8") + line + "\n", encoding="utf-8")
+    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
+    by_kind = {j.kind: j for j in jobs}
+    assert by_kind["split"].questions == [line]
+    assert by_kind["relink"].questions == []
+
+
+def test_source_page_findings_left_for_ingest(root):
+    src = "sources.src-docs-guide-md"
+    add(
+        root,
+        src,
+        "Guide source",
+        "# Guide\n\nNo summary line.\n",
+        type_="source-summary",
+    )
+    reindex(root)
+    cfg = load_config(root)
+    jobs, left, _ = fix_jobs(root, cfg, report(root))
+    (job,) = [j for j in jobs if j.targets == [src]]
+    assert [f.code for f in job.findings] == ["orphan"]  # its hosts are updated
+    (tldr,) = [f for f in left if f.code == "missing-tldr"]
+    assert tldr.path == page_rel(src)
+    assert hint(tldr, cfg) == "re-run `wiki ingest`"
+    assert hint(Finding("error", "broken-link", "wiki/log.md", "m"), cfg) == HAND_HINT
+    assert hint(Finding("warn", "stale", GIT_REL, "m"), cfg) == HINTS["stale"]
+
+
+def test_orphan_hosts_skip_retired_pages(root):
+    add(root, "concepts.deploy", "Deploy pipeline")
+    add(
+        root,
+        "components.old",
+        "Deploy pipeline",
+        type_="component",
+        status="deprecated",
+    )
+    reindex(root)
+    jobs, _, _ = fix_jobs(root, load_config(root), report(root))
+    (job,) = [j for j in jobs if j.targets == ["concepts.deploy"]]
+    assert "components.old" not in job.inputs
+
+
+def test_page_linked_only_by_stub_gets_no_relink(root):
+    add(root, "concepts.old", "Old thing", status="deprecated")
+    add(
+        root,
+        "concepts.stub",
+        "Stub",
+        "# Stub\n\n**TL;DR** Gone.\n\n[old](old.md)\n",
+        status="superseded",
+        extra=f"superseded_by: {GIT}\n",
+    )
+    reindex(root)
+    assert live_linkers(root, "concepts.old") == []
+    assert live_linkers(root, GIT) == ["overview"]
+    jobs, more = consolidate_jobs(root, load_config(root), report(root))
+    assert jobs == []
+    assert more == 0
+
+
+def test_consolidate_jobs_report_overflow(root):
+    for n in range(12):
+        add(root, f"concepts.old{n:02}", f"Old {n:02} thing", status="deprecated")
+        add(
+            root,
+            f"components.u{n:02}",
+            f"User {n:02} page",
+            f"# U\n\n**TL;DR** U.\n\n[o](../concepts/old{n:02}.md)\n",
+            type_="component",
+        )
+    reindex(root)
+    jobs, more = consolidate_jobs(root, load_config(root), report(root))
+    assert len(jobs) == MAX_JOBS
+    assert more == 2

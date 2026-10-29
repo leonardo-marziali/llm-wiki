@@ -18,6 +18,7 @@ from llm_wiki.lint import (
     LintReport,
     cited_paths,
     flagged_pages,
+    is_flagged,
     link_targets,
 )
 from llm_wiki.pages import Page, id_for, iter_pages, read_page
@@ -93,15 +94,21 @@ HINTS: dict[str, str] = {
 }
 # a fixable finding left for you: on a flagged page, or on a file that is no page
 HAND_HINT = "fix it by hand"
+# a fixable finding on a source page, which only ingest writes
+SOURCE_PAGE_HINT = "re-run `wiki ingest`"
 _RETIRED = {"deprecated", "superseded"}
 
 # Ruling 4: one copy of the rule, shared with lint --deep
 flagged = flagged_pages
 
 
-def hint(code: str) -> str:
-    """The "left for you" hint for a finding code."""
-    return HINTS.get(code, HAND_HINT)
+def hint(f: Finding, cfg: WikiConfig) -> str:
+    """The "left for you" hint for a finding."""
+    if f.code in HINTS:
+        return HINTS[f.code]
+    id_ = _page_id(f.path)
+    on_source = id_ is not None and _section(id_) in _source_sections(cfg)
+    return SOURCE_PAGE_HINT if f.code in FIX_CODES and on_source else HAND_HINT
 
 
 @dataclass
@@ -143,8 +150,8 @@ def _orphan_hosts(
     root: Path, id_: str, exclude: set[str], sources: set[str]
 ) -> list[str]:
     """Pages to link an orphan from: the top search hits for its title and
-    summary, then the overview. Source pages are written by the tool, so they
-    are never hosts.
+    summary, then the overview. Source pages are written by the tool and retired
+    pages are history, so neither is ever a host.
     """
     page = read_page(root, _page_file(root, id_))
     hosts: list[str] = []
@@ -153,7 +160,11 @@ def _orphan_hosts(
         query = f"{page.fm.title} {page.fm.summary}"
         for hit in search([ref], query, top=sys.maxsize):
             hit_id = id_for(Path(hit.path).relative_to(root / "wiki").as_posix())
-            if hit_id not in {id_, *exclude} and _section(hit_id) not in sources:
+            if (
+                hit_id not in {id_, *exclude}
+                and _section(hit_id) not in sources
+                and hit.status not in _RETIRED
+            ):
                 hosts.append(hit_id)
     hosts = hosts[:ORPHAN_HOSTS]
     if "overview" not in exclude and _page_file(root, "overview").is_file():
@@ -165,57 +176,11 @@ def _fix_order(job: Job) -> tuple[bool, str]:
     return (not any(f.severity == "error" for f in job.findings), job.targets[0])
 
 
-def fix_jobs(
-    root: Path, cfg: WikiConfig, report: LintReport
-) -> tuple[list[Job], list[Finding]]:
-    """One job per page with fixable findings (at most ``MAX_JOBS``, errors first),
-    and the findings left for you.
-
-    A deep finding joins its first page's job; its other pages become inputs. An
-    orphan's job also gets the pages it could be linked from. Flagged pages get
-    no job and are never inputs. ``not-in-index`` goes nowhere: finalize
-    rebuilds the indexes.
+def _job_question_lines(root: Path, report: LintReport) -> list[tuple[str, set[Path]]]:
+    """``_question_lines`` for jobs: none when open-questions.md is flagged, so
+    its text never reaches a model.
     """
-    root = Path(root).resolve()
-    bad = _flagged_ids(report)
-    by_id: dict[str, Job] = {}
-    left: list[Finding] = []
-    for f in report.findings:
-        if f.code == "not-in-index":
-            continue
-        id_ = _page_id(f.path)
-        if f.code not in FIX_CODES or id_ is None or id_ in bad:
-            left.append(f)
-            continue
-        job = by_id.setdefault(id_, Job("fix", [id_], [id_]))
-        job.findings.append(f)
-        _add(job, (i for i in f.pages if i not in bad))
-    sources = _source_sections(cfg)
-    for job in by_id.values():
-        if any(f.code == "orphan" for f in job.findings):
-            _add(job, _orphan_hosts(root, job.targets[0], bad, sources))
-    return sorted(by_id.values(), key=_fix_order)[:MAX_JOBS], left
-
-
-# --- consolidate jobs ---
-
-
-def _linkers(pages: dict[str, Page]) -> dict[str, list[str]]:
-    """Page id -> the ids of the other pages that link to it (indexes don't count)."""
-    by_path = {p.path.resolve(): i for i, p in pages.items()}
-    out: dict[str, list[str]] = defaultdict(list)
-    for i in sorted(pages):
-        page = pages[i]
-        for target in sorted(link_targets(page.path.parent, page.body)):
-            t = by_path.get(target)
-            if t is not None and t != i:
-                out[t].append(i)
-    return out
-
-
-def _status(pages: dict[str, Page], id_: str) -> str | None:
-    fm = pages[id_].fm if id_ in pages else None
-    return fm.status if fm is not None else None
+    return [] if OPEN_QUESTIONS in flagged(report) else _question_lines(root)
 
 
 def _question_lines(root: Path) -> list[tuple[str, set[Path]]]:
@@ -228,20 +193,89 @@ def _question_lines(root: Path) -> list[tuple[str, set[Path]]]:
     return [(ln, link_targets(oq.parent, ln)) for ln in text.splitlines()]
 
 
-def _promote_jobs(
-    root: Path, pages: dict[str, Page], linkers: dict[str, list[str]]
-) -> list[Job]:
-    lines = _question_lines(root)
-    jobs = []
-    for i in sorted(pages):
-        if _status(pages, i) != "to-be":
+def _questions(
+    root: Path, targets: list[str], lines: list[tuple[str, set[Path]]]
+) -> list[str]:
+    """The open-questions lines that link any of ``targets``."""
+    here = {_page_file(root, t).resolve() for t in targets}
+    return [ln for ln, linked in lines if linked & here]
+
+
+def fix_jobs(
+    root: Path, cfg: WikiConfig, report: LintReport
+) -> tuple[list[Job], list[Finding], int]:
+    """One job per page with fixable findings (at most ``MAX_JOBS``, errors first),
+    the findings left for you, and how many jobs the cap cut.
+
+    A deep finding joins its first page's job; its other pages become inputs. An
+    orphan's job also gets the pages it could be linked from. Flagged pages get
+    no job and are never inputs; a source page gets a job only for ``orphan``,
+    whose fix updates other pages. ``not-in-index`` goes nowhere: finalize
+    rebuilds the indexes.
+    """
+    root = Path(root).resolve()
+    bad = _flagged_ids(report)
+    sources = _source_sections(cfg)
+    by_id: dict[str, Job] = {}
+    left: list[Finding] = []
+    for f in report.findings:
+        if f.code == "not-in-index":
             continue
-        here = pages[i].path.resolve()
-        questions = [ln for ln, targets in lines if here in targets]
-        if questions:
-            as_is = [x for x in linkers[i] if _status(pages, x) == "as-is"]
-            jobs.append(Job("promote", [i], [i, *as_is], [], questions))
-    return jobs
+        id_ = _page_id(f.path)
+        if (
+            f.code not in FIX_CODES
+            or id_ is None
+            or id_ in bad
+            or (_section(id_) in sources and f.code != "orphan")
+        ):
+            left.append(f)
+            continue
+        job = by_id.setdefault(id_, Job("fix", [id_], [id_]))
+        job.findings.append(f)
+        _add(job, (i for i in f.pages if i not in bad))
+    lines = _job_question_lines(root, report)
+    for job in by_id.values():
+        if any(f.code == "orphan" for f in job.findings):
+            _add(job, _orphan_hosts(root, job.targets[0], bad, sources))
+        job.questions = _questions(root, job.targets, lines)
+    jobs = sorted(by_id.values(), key=_fix_order)
+    return jobs[:MAX_JOBS], left, max(0, len(jobs) - MAX_JOBS)
+
+
+# --- consolidate jobs ---
+
+
+def _live_linker_map(root: Path) -> dict[str, list[str]]:
+    """Page id -> the ids of the live pages that link to it.
+
+    A live linker is any other page that is not deprecated or superseded;
+    archived pages and system files (indexes, log, open questions) never count.
+    A page whose frontmatter is broken counts: it may still be live.
+    """
+    pages = {id_for(p.rel): p for p in iter_pages(Path(root))}
+    by_path = {p.path.resolve(): i for i, p in pages.items()}
+    out: dict[str, list[str]] = defaultdict(list)
+    for i in sorted(pages):
+        page = pages[i]
+        if _status(pages, i) in _RETIRED:
+            continue
+        for target in sorted(link_targets(page.path.parent, page.body)):
+            t = by_path.get(target)
+            if t is not None and t != i:
+                out[t].append(i)
+    return out
+
+
+def live_linkers(root: Path, id_: str) -> list[str]:
+    """The ids of the live pages that link to page ``id_`` (see
+    ``_live_linker_map``): a retired page with none can be archived.
+    """
+    return _live_linker_map(root).get(id_, [])
+
+
+def _status(pages: dict[str, Page], id_: str) -> str | None:
+    fm = pages[id_].fm if id_ in pages else None
+    return fm.status if fm is not None else None
 
 
 def _with_linkers(
@@ -252,26 +286,31 @@ def _with_linkers(
     return job
 
 
-def consolidate_jobs(root: Path, cfg: WikiConfig, report: LintReport) -> list[Job]:
-    """relink, promote, merge, then split jobs (at most ``MAX_JOBS``).
-
-    A page is in one job at most: a later job that would target a page an earlier
-    job holds is skipped, and such pages are dropped from its other inputs.
-    Flagged pages are never targets or inputs; source pages are never merged or
-    split.
-    """
-    root = Path(root).resolve()
-    bad = _flagged_ids(report)
+def _candidates(
+    root: Path, report: LintReport, lines: list[tuple[str, set[Path]]]
+) -> list[Job]:
+    """Every consolidate job, in kind order, before selection."""
     pages = {id_for(p.rel): p for p in iter_pages(root)}
-    linkers = _linkers(pages)
-    retired = [i for i in sorted(pages) if _status(pages, i) in _RETIRED]
-    candidates = [
-        *(Job("relink", [i], [i, *linkers[i]]) for i in retired if linkers[i]),
+    linkers = _live_linker_map(root)
+    ids = sorted(pages)
+    promote = [
+        Job(
+            "promote",
+            [i],
+            [i, *(x for x in linkers[i] if _status(pages, x) == "as-is")],
+            [],
+            qs,
+        )
+        for i in ids
+        if _status(pages, i) == "to-be" and (qs := _questions(root, [i], lines))
+    ]
+    return [
         *(
-            []
-            if OPEN_QUESTIONS in flagged(report)
-            else _promote_jobs(root, pages, linkers)
+            Job("relink", [i], [i, *linkers[i]])
+            for i in ids
+            if _status(pages, i) in _RETIRED and linkers[i]
         ),
+        *promote,
         *(
             _with_linkers("merge", list(f.pages), linkers, f)
             for f in report.findings
@@ -283,10 +322,26 @@ def consolidate_jobs(root: Path, cfg: WikiConfig, report: LintReport) -> list[Jo
             if f.code == "page-too-long" and (i := _page_id(f.path)) is not None
         ),
     ]
+
+
+def consolidate_jobs(
+    root: Path, cfg: WikiConfig, report: LintReport
+) -> tuple[list[Job], int]:
+    """relink, promote, merge, then split jobs (at most ``MAX_JOBS``), and how
+    many jobs the cap cut.
+
+    Linkers are live linkers (``live_linkers``). A page is in one job at most: a
+    later job that would target a page an earlier job holds is skipped, and such
+    pages are dropped from its other inputs. Flagged pages are never targets or
+    inputs; source pages are never merged or split.
+    """
+    root = Path(root).resolve()
+    bad = _flagged_ids(report)
     sources = _source_sections(cfg)
+    lines = _job_question_lines(root, report)
     jobs: list[Job] = []
     used: set[str] = set()
-    for job in candidates:
+    for job in _candidates(root, report, lines):
         targets = set(job.targets)
         if targets & (used | bad):
             continue
@@ -298,9 +353,10 @@ def consolidate_jobs(root: Path, cfg: WikiConfig, report: LintReport) -> list[Jo
         job.inputs = job.inputs[:MAX_INPUTS]
         if job.kind == "relink" and len(job.inputs) == 1:
             continue  # every linker is flagged or held by an earlier job
+        job.questions = _questions(root, job.targets, lines)
         used |= set(job.inputs)
         jobs.append(job)
-    return jobs[:MAX_JOBS]
+    return jobs[:MAX_JOBS], max(0, len(jobs) - MAX_JOBS)
 
 
 # --- the validator ---
@@ -315,13 +371,30 @@ def _input_pages(root: Path, job: Job) -> dict[str, Page]:
 
 
 def _successor_live(
-    s: str, planned: dict[str, MaintPage], inputs: dict[str, Page]
+    p: MaintPage, root: Path, planned: dict[str, MaintPage], inputs: dict[str, Page]
 ) -> bool:
+    """``p.superseded_by`` names a live page other than ``p``: a create of this
+    plan, a live input, or the successor ``p`` already names (Ruling R9).
+    """
+    s = p.superseded_by
+    if not s or s == p.id:
+        return False
     if s in planned:
         q = planned[s]
         return q.status not in _RETIRED and (q.action == "create" or s in inputs)
-    fm = inputs[s].fm if s in inputs else None
-    return fm is not None and fm.status not in _RETIRED
+    if s in inputs:
+        fm = inputs[s].fm
+        return fm is not None and fm.status not in _RETIRED
+    current = inputs[p.id].fm if p.id in inputs else None
+    if current is None or current.superseded_by != s or "." not in s:
+        return False
+    f = _page_file(root, s)  # never under _archive/: slugs hold no "/"
+    if not f.is_file():
+        return False
+    page = read_page(root, f)
+    return (
+        page.fm is not None and page.fm.status not in _RETIRED and not is_flagged(page)
+    )
 
 
 def _maint_page_errors(
@@ -346,14 +419,11 @@ def _maint_page_errors(
         for s in p.sources
         if s not in cited or not s.startswith("raw/")
     ]
-    if p.status == "superseded" and (
-        not p.superseded_by
-        or p.superseded_by == p.id
-        or not _successor_live(p.superseded_by, planned, inputs)
-    ):
+    if p.status == "superseded" and not _successor_live(p, root, planned, inputs):
         errors.append(
-            f"{p.id}: superseded_by {p.superseded_by!r} must name a live input page "
-            "or a page this plan creates, other than this one"
+            f"{p.id}: superseded_by {p.superseded_by!r} must name a live input page, "
+            "a page this plan creates or the page's current live successor, other "
+            "than this one"
         )
     return errors
 
@@ -493,13 +563,13 @@ def build_maint_plan_prompt(
     job: Job,
     mode: Mode,
     *,
-    flagged: set[str],
+    exclude: set[str],
     today: date | None = None,
     errors: list[str] | None = None,
 ) -> str:
     """The maint plan call's stdin prompt: everything that varies per job.
 
-    ``flagged`` holds the flagged pages' paths (``maint.flagged`` of the report):
+    ``exclude`` holds the flagged pages' paths (``maint.flagged`` of the report):
     their index lines are left out.
     """
     root = Path(root)
@@ -518,7 +588,7 @@ def build_maint_plan_prompt(
             nonce,
             [f"- {f.code} {f.path}: {f.message}" for f in job.findings],
         ),
-        indexes_block(root, cfg, nonce, flagged),
+        indexes_block(root, cfg, nonce, exclude),
     ]
     if job.questions:
         blocks.append(_data_block("Open questions", "questions", nonce, job.questions))

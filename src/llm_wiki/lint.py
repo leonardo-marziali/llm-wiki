@@ -333,13 +333,24 @@ def _body_issues(page: Page, path: str, caps: Caps, trusted: set[str]) -> list[F
                 f"{page.line_count} lines (max {caps.max_page_lines})",
             )
         )
-    demote = _all_sources_trusted(page, trusted)
-    out += _screen_issues(page.body, path, demote)
+    return out + _page_screen(page, path, _all_sources_trusted(page, trusted))
+
+
+def _page_screen(page: Page, path: str, demote: bool) -> list[Finding]:
+    """Secret and injection findings in the page's body and frontmatter."""
+    out = _screen_issues(page.body, path, demote)
     if page.fm is not None:
         fm = page.fm
         texts = [fm.title, fm.summary, *fm.tags, *(s.locator for s in fm.sources)]
         out += _screen_issues("\n".join(texts), path, demote, "frontmatter: ")
     return out
+
+
+def is_flagged(page: Page) -> bool:
+    """Whether lint gives ``page`` a secret or injection finding of any severity
+    (Ruling 4): ``flagged_pages`` for one page, without a report.
+    """
+    return bool(_page_screen(page, _wiki_rel(page.rel), demote=False))
 
 
 def _screen_issues(

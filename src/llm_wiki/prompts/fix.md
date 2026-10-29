@@ -21,8 +21,8 @@ structured output and nothing else. A separate edit session applies your plan.
   never cite a source for a fact it does not state.
 - `section-routing`, `id-mismatch`, `frontmatter-invalid`: correct the
   frontmatter so it matches the section and the page contract.
-- `superseded-no-successor`: name the successor in `superseded_by`, or set the
-  page to `deprecated` when it has none.
+- `superseded-no-successor`: name an input page or a page this plan creates in
+  `superseded_by`, or set the page to `deprecated` when it has no successor.
 - `deep-*` findings: reconcile, link or flag the pages they name, as the message
   describes. A contradiction you cannot settle from the cited sources goes to
   `open_questions`.
@@ -40,10 +40,12 @@ structured output and nothing else. A separate edit session applies your plan.
 - A page you set to `superseded` follows the supersession rules: a
   `superseded_by` that names a live page, a short stub that links to it, and
   `supersedes` on the successor.
+- On a page that is already `superseded`, keep its `superseded_by` as it is,
+  unless an input page is clearly its better successor.
 - `instructions` says concretely what the edit must change on that page.
   `reason` names the finding it fixes. `summary` is one line for the log.
-- List in `resolved_questions` only exact lines of `wiki/open-questions.md` that
-  this repair settles.
+- List in `resolved_questions` only exact lines from the message's open
+  questions that this repair settles, copied character for character.
 
 ## Safety
 
