@@ -25,8 +25,9 @@ say.
   or change one.
 - Never drop a citation whose raw file exists. Keep every footnote definition
   `[^n]: raw/<path> — <locator>` on some allowed page, with the same path and
-  locator. A claim you retire is struck through (`~~claim~~`) and keeps its
-  footnote.
+  locator, and keep its `[^n]` reference in that page's text: a definition
+  whose claim is gone cites nothing. You may renumber a footnote. A claim you
+  retire is struck through (`~~claim~~[^n]`) and keeps its footnote.
 - Keep `last_verified` and `review_after` exactly as the allowed list gives
   them. Nothing is re-checked against the sources, so nothing is re-verified.
 - Use the frontmatter the plan gives: `id`, `title`, `type`, `status`,

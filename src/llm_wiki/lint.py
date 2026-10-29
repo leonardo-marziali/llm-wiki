@@ -35,6 +35,7 @@ _LOG = re.compile(LOG_RE)
 _ID = re.compile(ID_RE)
 # a footnote definition: label, target, then the locator text after it
 _FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*(\S+)(.*)$", re.MULTILINE)
+_FOOTNOTE_REF = re.compile(r"\[\^([^\]]+)\]")
 _LOCATOR_LEAD = " \t—–-:,;"
 _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 _HEADING = re.compile(r"^(#{1,6})\s++(.*)$")
@@ -298,21 +299,41 @@ def _cap(
         out.append(Finding("warn", code + "-warn", path, msg))
 
 
-def footnotes(page: Page) -> set[tuple[str, str]]:
-    """(target, locator) of each footnote definition outside code; the locator
-    is the text after the target, without its leading dash and spacing.
+def footnotes(page: Page) -> set[tuple[str, str, str]]:
+    """(label, target, locator) of each footnote definition outside code; the
+    locator is the text after the target, without its leading dash and spacing.
     """
     body = "\n".join(_strip_code(page.body))
     return {
-        (m.group(2), " ".join(m.group(3).split()).lstrip(_LOCATOR_LEAD))
+        (m.group(1), m.group(2), " ".join(m.group(3).split()).lstrip(_LOCATOR_LEAD))
         for m in _FOOTNOTE.finditer(body)
     }
+
+
+def footnote_refs(page: Page) -> set[str]:
+    """The labels ``page`` references as ``[^label]`` outside its footnote
+    definitions and code. A struck-through claim (``~~claim~~[^2]``) counts.
+    """
+    return {
+        label
+        for line in _strip_code(page.body)
+        if not _FOOTNOTE.match(line)
+        for label in _FOOTNOTE_REF.findall(_drop_code_spans(line))
+    }
+
+
+def cited_footnotes(page: Page) -> set[tuple[str, str]]:
+    """(target, locator) of each footnote whose label the page references: a
+    definition whose claim is gone cites nothing.
+    """
+    refs = footnote_refs(page)
+    return {(target, loc) for label, target, loc in footnotes(page) if label in refs}
 
 
 def cited_paths(page: Page) -> set[str]:
     """The raw paths ``page`` cites: its ``sources`` and its footnote targets."""
     paths = {src.path for src in page.fm.sources} if page.fm is not None else set()
-    return paths | {target for target, _ in footnotes(page)}
+    return paths | {target for _, target, _ in footnotes(page)}
 
 
 def _wiki_rel(rel: str) -> str:

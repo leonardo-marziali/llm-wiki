@@ -13,12 +13,17 @@ from llm_wiki.lint import (
     CONSOLIDATE_HINT,
     Finding,
     LintReport,
+    cited_footnotes,
+    cited_paths,
+    footnote_refs,
+    footnotes,
     link_targets,
     lint,
     routing_error,
     write_report,
 )
 from llm_wiki.manifest import Manifest, sha256_file
+from llm_wiki.pages import Page
 
 TODAY = date(2026, 10, 26)
 
@@ -740,3 +745,45 @@ def test_cap_findings_carry_hint(root):
     srcs = [f for f in report.findings if f.code == "cap-sources-warn"]
     assert srcs
     assert all(CONSOLIDATE_HINT not in f.message for f in srcs)
+
+
+# --- footnotes (final review fix wave) ---
+
+
+def note_page(body: str) -> Page:
+    return Page(Path("x.md"), "concepts/x.md", None, body, None, 0)
+
+
+def test_footnotes_label_target_locator():
+    page = note_page(
+        "Fact.[^a] ~~Old claim~~[^2]\n\n"
+        "```\n[^c]: raw/code.md — §0\n```\n\n"
+        "[^a]: raw/x.md — §1\n"
+        "[^2]: raw/y.md -  p.  4\n"
+        "[^3]:raw/z.md\n"
+        "[^n-1]: raw/w.md – §9, table 2\n"
+    )
+    assert footnotes(page) == {
+        ("a", "raw/x.md", "§1"),
+        ("2", "raw/y.md", "p. 4"),
+        ("3", "raw/z.md", ""),
+        ("n-1", "raw/w.md", "§9, table 2"),
+    }
+
+
+def test_cited_footnotes_need_a_reference():
+    # a struck-through claim still references its footnote; a definition alone,
+    # a reference in inline code or one in a code block does not count
+    page = note_page(
+        "Fact.[^a] ~~Old claim~~[^2] and `[^3]`.\n\n"
+        "```\nCode[^4]\n```\n\n"
+        "[^a]: raw/x.md — §1\n"
+        "[^2]: raw/y.md — §2\n"
+        "[^3]: raw/z.md — §3\n"
+        "[^4]: raw/w.md — §4\n"
+        "[^5]: raw/v.md — §5 [^a]\n"
+    )
+    assert footnote_refs(page) == {"a", "2"}
+    assert cited_footnotes(page) == {("raw/x.md", "§1"), ("raw/y.md", "§2")}
+    # cited_paths still counts every definition: no new evidence either way
+    assert {"raw/z.md", "raw/w.md", "raw/v.md"} <= cited_paths(page)

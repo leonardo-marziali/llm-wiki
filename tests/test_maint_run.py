@@ -7,13 +7,16 @@ from typer.testing import CliRunner
 
 from llm_wiki import claude, gitops, maint_run
 from llm_wiki.cli import app
-from llm_wiki.config import load_config
+from llm_wiki.config import LlmSettings, load_config
 from llm_wiki.errors import WikiError
 from llm_wiki.index import build_indexes
-from llm_wiki.maint import Mode
+from llm_wiki.maint import Job, Mode
+from llm_wiki.maint_job import MaintContext, _JobEdit
 from llm_wiki.maint_run import run_maintenance
 from llm_wiki.manifest import Manifest
+from llm_wiki.pages import read_page
 from llm_wiki.registry import WikiRef
+from llm_wiki.schemas import MaintPlan
 
 TODAY = date(2026, 10, 28)
 AGENTS = "# Acme: wiki rules\n\nFollow the rules.\n"
@@ -716,3 +719,126 @@ def test_plan_that_changes_nothing_is_skipped(wiki, fake_claude):
     assert len(fake_claude.calls()) == 1
     assert read(wiki, "wiki/log.md") == log_before
     assert out.cost_usd == pytest.approx(0.05)
+
+
+def merge_plan():
+    return mplan(
+        mpage("concepts.b1", title="Branching", instructions="Keep both facts."),
+        mpage(
+            "concepts.b2",
+            title="Branching",
+            status="superseded",
+            superseded_by="concepts.b1",
+            instructions="Make it a stub.",
+        ),
+        summary="Merge the branching pages",
+    )
+
+
+def b2_stub(root):
+    return text(
+        root,
+        "concepts.b2",
+        "Branching",
+        "# Branching\n\n**TL;DR** See [Branching](b1.md).\n",
+        status="superseded",
+        extra="superseded_by: concepts.b1\n",
+    )
+
+
+def test_merge_renumbers_and_moves_a_footnote(wiki, fake_claude):
+    # b2's [^1] (§2) becomes b1's [^2], in a paragraph of its own
+    merge_pages(wiki)
+    survivor = text(
+        wiki,
+        "concepts.b1",
+        "Branching",
+        body(
+            "Branching",
+            notes=(("1", RAW_REL, "§1"), ("2", RAW_REL, "§2")),
+        ).replace("[^1][^2]", "[^1]\n\nThe second page's fact is kept here.[^2]"),
+    )
+    fake_claude.queue(
+        planned(merge_plan()),
+        edit({rel("concepts.b1"): survivor, rel("concepts.b2"): b2_stub(wiki)}),
+    )
+    report = run(wiki, mode="consolidate")
+    [out] = report.outcomes
+    assert (out.job.kind, out.status) == ("merge", "done"), out.reason
+    assert len(fake_claude.calls()) == 2  # no repair
+    assert "fact is kept here.[^2]" in read(wiki, rel("concepts.b1"))
+
+
+def test_unreferenced_footnote_definition_is_lost(wiki, fake_claude):
+    # the claim is gone but its definition stays: the citation is lost
+    merge_pages(wiki)
+    survivor = text(
+        wiki,
+        "concepts.b1",
+        "Branching",
+        body("Branching") + f"[^2]: {RAW_REL} — §2\n",
+    )
+    writes = {rel("concepts.b1"): survivor, rel("concepts.b2"): b2_stub(wiki)}
+    fake_claude.queue(planned(merge_plan()), edit(writes), edit(writes))
+    report = run(wiki, mode="consolidate")
+    [out] = report.outcomes
+    assert (out.job.kind, out.status) == ("merge", "failed")
+    assert "maint-lost-citation" in out.reason
+    assert "§2" in out.reason
+    assert "maint-lost-citation" in fake_claude.calls()[2]["stdin"]
+
+
+def test_sha_must_come_from_an_input_page(wiki, fake_claude):
+    # A cites a stale sha (sha-mismatch): maintenance may not clear it, and the
+    # current sha is on no input page of A's job
+    stale = "0" * 64
+    commit_pages(
+        wiki,
+        {
+            A: text(
+                wiki,
+                A,
+                "Alpha",
+                body("Alpha", link="[gone](gone.md)"),
+                sources=[(RAW_REL, stale)],
+            )
+        },
+    )
+    before = (wiki / A_REL).read_bytes()
+    cleared = fixed(wiki)  # the current sha
+    fake_claude.queue(planned(mplan()), edit({A_REL: cleared}), edit({A_REL: cleared}))
+    report = run(wiki)
+    [out] = report.outcomes
+    assert out.status == "failed"
+    assert "maint-sha-changed" in out.reason
+    assert RAW_REL in out.reason
+    assert "maint-sha-changed" in fake_claude.calls()[2]["stdin"]
+    assert (wiki / A_REL).read_bytes() == before
+
+
+def test_invalid_frontmatter_page_takes_oldest_input_dates(wiki):
+    # Ruling 2: a page whose old frontmatter was invalid gets the oldest dates of
+    # the job's inputs, in the prompt and in the check
+    bad = "---\nid: concepts.a\ntitle: [unclosed\n---\n" + body("Alpha")
+    (wiki / A_REL).write_text(bad, encoding="utf-8")
+    gitops.commit_all(wiki, "bad frontmatter")
+    ctx = MaintContext(
+        root=wiki,
+        cfg=load_config(wiki),
+        settings=LlmSettings(),
+        today=TODAY,
+        run_dir=wiki / ".wiki" / "runs" / "t",
+        n=1,
+        mode="fix",
+    )
+    job = Job("fix", [A], [A, GIT])
+    plan = MaintPlan.model_validate(mplan())
+    job_edit = _JobEdit(ctx, job, plan)
+    assert (
+        f"`{A_REL}`: update `{A}`; last_verified: 2026-01-01, review_after: 2099-01-01"
+    ) in job_edit.prompt(None)
+    (wiki / A_REL).write_text(fixed(wiki, last_verified="2026-10-28"), encoding="utf-8")
+    [err] = job_edit._date_errors(A_REL, read_page(wiki, wiki / A_REL))
+    assert err.code == "maint-dates-changed"
+    (wiki / A_REL).write_text(fixed(wiki), encoding="utf-8")
+    assert job_edit._date_errors(A_REL, read_page(wiki, wiki / A_REL)) == []

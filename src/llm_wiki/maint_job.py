@@ -16,7 +16,7 @@ from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.errors import STOP, ClaudeError, WikiError
 from llm_wiki.gitops import stage_commit
 from llm_wiki.ingest import _with_repair, page_rel
-from llm_wiki.lint import Finding, _in_raw, cited_paths, footnotes
+from llm_wiki.lint import Finding, _in_raw, cited_footnotes, cited_paths
 from llm_wiki.maint import (
     PLAN_PROMPTS,
     Job,
@@ -147,20 +147,22 @@ class _JobEdit:
             self.before[r] for i in job.inputs if (r := page_rel(i)) in self.before
         ]
         self.cited: set[str] = set().union(*(cited_paths(p) for p in inputs))
-        # every valid footnote of an input page must survive somewhere (Ruling 1)
+        # every valid citation of an input page must survive somewhere (Ruling 1)
         self.notes = {
             (target, loc)
             for p in inputs
-            for target, loc in footnotes(p)
+            for target, loc in cited_footnotes(p)
             if (raw := _in_raw(self.root, target)) is not None and raw.is_file()
+        }
+        # the (path, sha256) pairs an edit may carry: never a new or cleared sha
+        self.shas = {
+            (s.path, s.sha256) for p in inputs if p.fm is not None for s in p.fm.sources
         }
         self.oldest = _oldest(inputs)
 
     def _dates(self, rel: str) -> str:
         page = self.before.get(rel)
-        if page is not None:
-            if page.fm is None:
-                return "keep its last_verified and review_after as they are"
+        if page is not None and page.fm is not None:
             return (
                 f"keep last_verified: {page.fm.last_verified.isoformat()}, "
                 f"review_after: {page.fm.review_after.isoformat()}"
@@ -210,7 +212,9 @@ class _JobEdit:
         }
 
     def extra(self) -> list[Finding]:
-        """Ruling 1 (no new evidence, no lost citation) and Ruling 2 (no new dates)."""
+        """Ruling 1 (no new evidence, no lost citation, no changed sha) and
+        Ruling 2 (no new dates).
+        """
         now = self._pages_now()
         changed = set(self.session.changed())
         out: list[Finding] = []
@@ -219,8 +223,9 @@ class _JobEdit:
             if new:
                 msg = f"cites {', '.join(new)}, which no input page cited"
                 out.append(Finding("error", "maint-new-evidence", r, msg))
+            out += self._sha_errors(r, now[r])
             out += self._date_errors(r, now[r])
-        kept = set().union(*(footnotes(p) for p in now.values()))
+        kept = set().union(*(cited_footnotes(p) for p in now.values()))
         for target, loc in sorted(self.notes - kept):
             where = self._holder(target, loc)
             msg = f"the footnote `{target} — {loc}` is on no page any more"
@@ -229,15 +234,36 @@ class _JobEdit:
 
     def _holder(self, target: str, loc: str) -> str:
         """The input page that held a footnote before the edit."""
-        return next(r for r, p in self.before.items() if (target, loc) in footnotes(p))
+        return next(
+            r for r, p in self.before.items() if (target, loc) in cited_footnotes(p)
+        )
+
+    def _sha_errors(self, rel: str, page: Page) -> list[Finding]:
+        """Each sha256 must be copied from an input page: maintenance never
+        computes one, so it never clears a ``sha-mismatch``.
+        """
+        if page.fm is None:
+            return []
+        return [
+            Finding(
+                "error",
+                "maint-sha-changed",
+                rel,
+                f"sources: {s.path} with sha256 {s.sha256[:12]}… is on no input "
+                "page; copy each sha256 exactly from the input pages",
+            )
+            for s in page.fm.sources
+            if (s.path, s.sha256) not in self.shas
+        ]
 
     def _date_errors(self, rel: str, page: Page) -> list[Finding]:
+        """Ruling 2: the dates the page had, or for a new page (or one whose old
+        frontmatter was invalid) the oldest of the job's inputs.
+        """
         old = self.before.get(rel)
         if page.fm is None:
             return []
-        if old is not None:
-            if old.fm is None:
-                return []
+        if old is not None and old.fm is not None:
             want = (old.fm.last_verified, old.fm.review_after)
         elif self.oldest is not None:
             want = self.oldest
