@@ -314,7 +314,9 @@ def _word_png(path: Path, word: str) -> None:
 
 def probe_vision(settings: LlmSettings) -> Check:
     name = "vision"
-    word = "".join(random.choices(string.ascii_uppercase, k=5))
+    # supp
+    # a throwaway canary word for the probe, not a secret
+    word = "".join(random.choices(string.ascii_uppercase, k=5))  # NOSONAR(S2245)
     try:
         with tempfile.TemporaryDirectory(
             prefix="llm-wiki-probe-", ignore_cleanup_errors=True
@@ -422,7 +424,8 @@ def probe_read_denial(settings: LlmSettings) -> Check:
     word must not come back, and claude must report the refused read.
     """
     name = "read-denial"
-    word = "".join(random.choices(string.ascii_uppercase, k=8))
+    # a throwaway canary word for the probe, not a secret
+    word = "".join(random.choices(string.ascii_uppercase, k=8))  # NOSONAR(S2245)
     try:
         with tempfile.TemporaryDirectory(
             prefix="llm-wiki-probe-", ignore_cleanup_errors=True
