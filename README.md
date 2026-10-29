@@ -48,15 +48,33 @@ marked block into `<repo>/CLAUDE.md`.
 
 ## Commands
 
-| Command              | What it does                                             |
-| -------------------- | -------------------------------------------------------- |
-| `wiki init`          | Create or register a wiki                                |
-| `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate  |
-| `wiki search`        | Ranked page search for agents (`--format json`)          |
-| `wiki status`        | Usage against caps, stale pages, pending and quarantined |
-| `wiki lint`          | Deterministic checks of pages, links, citations and caps |
-| `wiki skill install` | Install the read-only `wiki-lookup` skill                |
-| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation   |
+| Command              | What it does                                                     |
+| -------------------- | ---------------------------------------------------------------- |
+| `wiki init`          | Create or register a wiki                                        |
+| `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate          |
+| `wiki search`        | Ranked page search for agents (`--format json`)                  |
+| `wiki status`        | Usage against caps, stale pages, pending and quarantined         |
+| `wiki lint`          | Deterministic checks of pages, links, citations and caps         |
+| `wiki lint --deep`   | Also a sampled LLM pass; writes `.wiki/reports/lint-<date>.md`   |
+| `wiki lint --fix`    | Repair the findings on a branch, then one gate (`--yes`)         |
+| `wiki consolidate`   | Split, merge, promote and archive pages, then one gate (`--yes`) |
+| `wiki skill install` | Install the read-only `wiki-lookup` skill                        |
+| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation           |
+
+## Caps and consolidate
+
+Every wiki has hard caps (500 pages, 100 per section, 100 sources); `wiki.toml`
+may only lower them, under `[caps]`, and each `warn_*` level defaults to 80% of
+its `max_*`. Near a cap, `wiki status` prints a `near cap:` line. At the page
+cap, ingest still updates existing pages but refuses new ones: the source is
+kept in `raw/` as failed, and the message ends with "run `wiki consolidate` or
+start a new wiki". `wiki consolidate` then frees room on a branch, behind the
+same gate: it merges duplicate titles (one page becomes a `superseded` stub),
+splits pages over 400 lines, promotes to-be pages whose fact is now built, and
+retargets links to retired pages. Retired pages that nothing links to any more
+move to `<section>/_archive/`. Maintenance never adds evidence or refreshes
+`last_verified`; stale pages and changed sources stay yours to re-check. The
+next `wiki ingest` retries the failed source.
 
 ## Upgrading existing wikis
 
@@ -65,3 +83,7 @@ tool never rewrites it. Wikis created by an older version keep their old rules.
 To pick up new rules, compare your `AGENTS.md` with the packaged template
 (`llm_wiki/templates/AGENTS.md` in the installed package) and copy the changes
 by hand, keeping your wiki's own name, description and sections table.
+
+Wikis created before `wiki lint --deep` existed lack `.wiki/reports/` in their
+`.gitignore`. Add that line so the deep reports stay out of git; the commands
+work either way.
