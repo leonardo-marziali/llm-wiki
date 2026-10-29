@@ -5,6 +5,13 @@
   "mounts": ["source=claude-config,target=/home/node/.claude,type=volume"],
   "initializeCommand": "touch .env",
   "postCreateCommand": "python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+      }
+    }
+  },
   "remoteEnv": {
     "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}"
   },
