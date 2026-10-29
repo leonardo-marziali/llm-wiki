@@ -404,6 +404,11 @@ def _changed_block(
     return "\n".join(lines)
 
 
+def new_nonce() -> str:
+    """A random tag suffix that untrusted text cannot know."""
+    return secrets.token_hex(8)
+
+
 def build_plan_prompt(
     root: Path,
     cfg: WikiConfig,
@@ -422,7 +427,7 @@ def build_plan_prompt(
     ``src_id`` is the source's src page id (default: its base id).
     """
     root = Path(root)
-    nonce = secrets.token_hex(8)
+    nonce = new_nonce()
     conv = prepared.conversion
     blocks = [
         f"Today is {today.isoformat()}.",

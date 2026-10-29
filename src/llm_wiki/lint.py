@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote
 
 from rapidfuzz import fuzz
@@ -24,6 +24,9 @@ from llm_wiki.pages import (
     iter_pages,
 )
 from llm_wiki.screen import find_injection, redact
+
+if TYPE_CHECKING:
+    from llm_wiki.deep import DeepResult
 
 Severity = Literal["error", "warn"]
 
@@ -669,14 +672,35 @@ def lint(
     return LintReport(findings)
 
 
-def write_report(root: Path, report: LintReport, today: date) -> Path:
-    """Write ``.wiki/reports/lint-YYYY-MM-DD.md`` grouped by severity, then code."""
+_FLAGGED_CODES = {"secret-in-page", "injection-in-page"}
+
+
+def flagged_pages(report: LintReport) -> set[str]:
+    """Paths of pages with a secret or injection finding of any severity.
+
+    Their text never goes to a model again (Ruling 4).
+    """
+    return {f.path for f in report.findings if f.code in _FLAGGED_CODES and f.path}
+
+
+def write_report(
+    root: Path, report: LintReport, today: date, deep: "DeepResult | None" = None
+) -> Path:
+    """Write ``.wiki/reports/lint-YYYY-MM-DD.md`` grouped by severity, then code.
+
+    ``deep`` adds the sampling line of a ``--deep`` run under the header.
+    """
     path = Path(root) / ".wiki" / "reports" / f"lint-{today.isoformat()}.md"
     lines = [
         f"# Lint report {today.isoformat()}",
         "",
         f"{report.errors} errors, {report.warnings} warnings",
     ]
+    if deep is not None:
+        lines.append(
+            f"deep: sampled {deep.sampled} of {deep.eligible} pages, "
+            f"{deep.dropped} dropped, cost ${deep.cost_usd:.2f}"
+        )
     for sev in ("error", "warn"):
         group = [f for f in report.findings if f.severity == sev]
         if not group:

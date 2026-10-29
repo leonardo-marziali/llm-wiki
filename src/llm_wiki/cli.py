@@ -140,35 +140,67 @@ def lint(
     report_file: bool = typer.Option(
         False, "--report", help="Also write .wiki/reports/lint-<date>.md."
     ),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Also run a sampled LLM pass for contradictions, stale claims and "
+        "missing pages or links; always writes the report.",
+    ),
 ) -> None:
     """Check the page contract, links, citations and caps."""
-    from datetime import date
+    from datetime import date, datetime
 
     from llm_wiki import registry
-    from llm_wiki.config import load_config
+    from llm_wiki.claude import claude_binary
+    from llm_wiki.config import load_config, load_llm_settings
+    from llm_wiki.deep import DeepResult, run_deep
+    from llm_wiki.gate import fresh
+    from llm_wiki.lint import LintReport, write_report
     from llm_wiki.lint import lint as run_lint
-    from llm_wiki.lint import write_report
 
     _check_format(fmt)
     ref = registry.resolve(wiki, Path.cwd())
+    if deep:
+        claude_binary()  # a missing CLI stops here, before any work
     today = date.today()
-    report = run_lint(ref.path, load_config(ref.path), today=today)
+    cfg = load_config(ref.path)
+    report = run_lint(ref.path, cfg, today=today)
+    deep_result: DeepResult | None = None
+    if deep:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_dir = fresh(ref.path / ".wiki" / "runs" / f"deep-{stamp}")
+        deep_result = run_deep(
+            ref.path, cfg, load_llm_settings(ref.path), report, run_dir
+        )
+        merged = sorted(
+            [*report.findings, *deep_result.findings],
+            key=lambda f: (f.path, f.code, f.message),
+        )
+        report = LintReport(merged)
     if fmt == "json":
-        data = {
+        data: dict = {
             "errors": report.errors,
             "warnings": report.warnings,
             "findings": [dataclasses.asdict(f) for f in report.findings],
         }
+        if deep_result is not None:
+            data["deep"] = {
+                "sampled": deep_result.sampled,
+                "eligible": deep_result.eligible,
+                "dropped": deep_result.dropped,
+                "cost_usd": deep_result.cost_usd,
+            }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
     else:
         for f in report.findings:
             typer.echo(f"{f.severity} {f.code} {f.path}: {f.message}")
         typer.echo(f"{report.errors} errors, {report.warnings} warnings")
-    if report_file:
+    if report_file or deep:
         # stderr in json mode keeps stdout parseable
-        typer.echo(
-            f"report: {write_report(ref.path, report, today)}", err=fmt == "json"
-        )
+        path = write_report(ref.path, report, today, deep_result)
+        typer.echo(f"report: {path}", err=fmt == "json")
+    if deep_result is not None:
+        typer.echo(f"cost ${deep_result.cost_usd:.2f}", err=fmt == "json")
     if report.errors or (strict and report.warnings):
         raise typer.Exit(1)
 

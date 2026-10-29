@@ -163,3 +163,43 @@ class Plan(BaseModel):
     pages: list[PagePlan]
     contradictions: list[Contradiction]
     open_questions: list[str]
+
+
+# deep.v1: the `wiki lint --deep` reply; hand-written like PLAN_SCHEMA.
+DEEP_KINDS = ("contradiction", "stale-claim", "missing-page", "missing-link")
+DEEP_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "pages", "message", "evidence"],
+                "properties": {
+                    "kind": {"type": "string", "enum": list(DEEP_KINDS)},
+                    "pages": {"type": "array", "items": {"type": "string"}},
+                    "message": {"type": "string"},
+                    "evidence": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
+
+class DeepFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["contradiction", "stale-claim", "missing-page", "missing-link"]
+    pages: list[str]
+    message: str
+    evidence: str
+
+
+class DeepReply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[DeepFinding]
