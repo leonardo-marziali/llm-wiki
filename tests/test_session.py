@@ -151,3 +151,30 @@ def test_session_open_questions_append_only_by_default(wiki, fake_claude):
         "the earlier text was put back"
     )
     assert (wiki / OPEN_QUESTIONS).read_text(encoding="utf-8") == OQ_TEXT
+
+
+def test_deny_rules_relative_with_spaced_root(tmp_path, make_wiki, fake_claude):
+    root = make_wiki(tmp_path / "my wiki (x)")
+    (root / "AGENTS.md").write_text("# Acme: wiki rules\n", encoding="utf-8")
+    gitops.init_repo(root)
+    gitops.commit_all(root, "init")
+    s = session(root)
+    s.deny.add("wiki/concepts/flagged.md")
+    fake_claude.queue(edit({}))
+    s.edit("do it", "", "edit")
+    argv = fake_claude.calls()[0]["argv"]
+    i = argv.index("--disallowed-tools")
+    assert argv[i + 1 :][:2] == [
+        "Read(./.wiki/quarantine/**)",
+        "Read(./wiki/concepts/flagged.md)",
+    ]
+    assert not any(str(tmp_path) in a for a in argv[i + 1 :])
+
+
+def test_edit_session_denies_quarantine(wiki, fake_claude):
+    s = session(wiki)
+    assert s.deny == {".wiki/quarantine/"}
+    fake_claude.queue(edit({}))
+    s.edit("do it", "", "edit")
+    argv = fake_claude.calls()[0]["argv"]
+    assert "Read(./.wiki/quarantine/**)" in argv

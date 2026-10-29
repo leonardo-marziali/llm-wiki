@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -45,6 +45,7 @@ REQUIRED_FLAGS = (
     "--json-schema",
     "--permission-mode",
     "--restricted",
+    "--disallowed-tools",
 )
 
 # Accepted by claude 2.1.310 but absent from --help; doctor's model probe proves it is
@@ -76,6 +77,7 @@ class Call:
     role: Role | None = None  # names the settings key in budget errors
     max_retries: int = 3  # transient retries; the one schema retry is separate
     images: tuple[Path, ...] = ()  # raw files; `run` prepares them for the model
+    deny_read: tuple[str, ...] = ()  # permission rules, `deny_rules`; edit calls only
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,7 @@ def make_call(
     cwd: Path | None = None,
     json_schema: dict | None = None,
     images: tuple[Path, ...] = (),
+    deny_read: tuple[str, ...] = (),
 ) -> Call:
     edit = role == "edit"
     # Edit sessions are never re-run: a half-applied edit is ingest's
@@ -114,6 +117,21 @@ def make_call(
         role=role,
         max_retries=0 if edit else 3,
         images=images,
+        deny_read=deny_read,
+    )
+
+
+def deny_rules(rels: Iterable[str]) -> tuple[str, ...]:
+    """Deny-read permission rules for paths relative to the call's cwd; a path
+    ending in ``/`` denies the whole folder.
+
+    The ``./`` form is relative to the working directory, so the wiki root's own
+    path (spaces included) never enters a rule. Checked on claude 2.1.312: a
+    ``Read`` deny also keeps the file out of Grep, so no ``Grep`` rule is needed;
+    `wiki doctor`'s read-denial probe proves it.
+    """
+    return tuple(
+        sorted({f"Read(./{r}**)" if r.endswith("/") else f"Read(./{r})" for r in rels})
     )
 
 
@@ -177,6 +195,8 @@ def build_argv(call: Call, binary: str, system_prompt_file: Path) -> list[str]:
         ]
     if call.edit:
         argv += ["--permission-mode", "acceptEdits", "--restricted"]
+        if call.deny_read:
+            argv += ["--disallowed-tools", *call.deny_read]
     return argv
 
 

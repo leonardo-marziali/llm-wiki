@@ -10,6 +10,7 @@ from llm_wiki.claude import (
     child_env,
     classify,
     claude_binary,
+    deny_rules,
     make_call,
     parse_output,
     run,
@@ -77,6 +78,36 @@ def test_required_flags_cover_build_argv():
             a for a in build_argv(call, "claude", Path("/s")) if a.startswith("--")
         }
         assert flags <= set(REQUIRED_FLAGS)
+
+
+def test_deny_rules_dirs_and_files():
+    rules = deny_rules(
+        ["wiki/b/x.md", ".wiki/quarantine/", "wiki/a/y.md", "wiki/b/x.md"]
+    )
+    assert rules == (
+        "Read(./.wiki/quarantine/**)",
+        "Read(./wiki/a/y.md)",
+        "Read(./wiki/b/x.md)",
+    )
+    assert deny_rules([]) == ()
+
+
+def test_build_argv_deny_only_for_edit():
+    rules = deny_rules([".wiki/quarantine/", "wiki/a/y.md"])
+    edit = build_argv(_call("edit", deny_read=rules), "claude", Path("/s"))
+    i = edit.index("--disallowed-tools")
+    assert edit[i + 1 : i + 3] == list(rules)
+    plan = build_argv(_call(deny_read=rules), "claude", Path("/s"))
+    assert "--disallowed-tools" not in plan
+    bare_edit = build_argv(_call("edit"), "claude", Path("/s"))
+    assert "--disallowed-tools" not in bare_edit
+
+
+def test_required_flags_include_disallowed_tools():
+    assert "--disallowed-tools" in REQUIRED_FLAGS
+    call = _call("edit", deny_read=deny_rules(["wiki/a.md"]))
+    flags = {a for a in build_argv(call, "claude", Path("/s")) if a.startswith("--")}
+    assert flags <= set(REQUIRED_FLAGS)
 
 
 def test_child_env_strips_api_keys():

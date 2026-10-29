@@ -876,6 +876,9 @@ def test_edit_prompt_names_files_never_to_read(wiki, fake_claude):
     assert f"- `{B_REL}`" in never
     assert "- `.wiki/quarantine/`" in never
     assert f"- `{B_REL}`" not in prompt.split("## Never read these files", 1)[0]
+    argv = fake_claude.calls()[1]["argv"]
+    assert f"Read(./{B_REL})" in argv
+    assert "Read(./.wiki/quarantine/**)" in argv
 
 
 def oq_context(wiki, exclude):

@@ -27,10 +27,9 @@ from llm_wiki.maint import (
 from llm_wiki.pages import Page, page_sources, read_page
 from llm_wiki.plan import _parse, _save_run, redact_plan, screen_plan, system_prompt
 from llm_wiki.schemas import MAINT_SCHEMA, MaintPlan
-from llm_wiki.session import OPEN_QUESTIONS, EditSession, SessionFailed
+from llm_wiki.session import OPEN_QUESTIONS, QUARANTINE, EditSession, SessionFailed
 
 JobStatus = Literal["done", "failed", "skipped"]
-QUARANTINE = ".wiki/quarantine/"  # an edit is told never to read it (R18)
 # the plan call's role: Opus plans consolidation (spec §6)
 PLAN_ROLES: dict[Mode, Literal["plan", "deep"]] = {"fix": "plan", "consolidate": "deep"}
 
@@ -143,6 +142,7 @@ class _JobEdit:
             self.root, ctx.cfg, ctx.settings, ctx.today, ctx.run_dir, _name(ctx, job)
         )
         self.session.allowed |= {page_rel(p.id) for p in plan.pages}
+        self.session.deny |= ctx.exclude  # flagged pages: told, and denied (R18)
         self.session.oq_removable = set(plan.resolved_questions)
         if OPEN_QUESTIONS in ctx.exclude:  # flagged: never edited (Ruling 4, R18)
             self.session.allowed.discard(OPEN_QUESTIONS)

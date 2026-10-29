@@ -10,7 +10,9 @@ echo_token (put the token from the system prompt file into structured_output.tok
 write_abs_from_prompt (write "ok" to the first absolute path found in stdin),
 deny_abs_from_prompt (report a Write permission denial for that path without writing it),
 echo_image_word (put the FAKE_CLAUDE_IMAGE_WORD env value into structured_output.canary),
-stdout_lines (list of dicts/strings: the stream-json stdout, verbatim).
+stdout_lines (list of dicts/strings: the stream-json stdout, verbatim),
+deny_read_rel (report a Read permission denial for that path, relative to cwd),
+echo_file_rel (append that file's text, relative to cwd, to stdout.result).
 With `--input-format stream-json` the stdin line is parsed into the log's `stdin_message`, and
 stdout becomes a stream: a system line, then the response as a `type: "result"` line.
 """
@@ -73,6 +75,13 @@ if resp.get("write_abs_from_prompt"):
         with open(m.group(0), "w", encoding="utf-8") as fh:
             fh.write("ok")
 out = resp.get("stdout", "")
+if resp.get("deny_read_rel"):
+    denial = {"tool_name": "Read", "tool_use_id": "toolu_fake",
+              "tool_input": {"file_path": os.path.join(cwd, resp["deny_read_rel"])}}
+    out = dict(out, permission_denials=[*out.get("permission_denials", []), denial])
+if resp.get("echo_file_rel"):
+    with open(os.path.join(cwd, resp["echo_file_rel"]), encoding="utf-8") as fh:
+        out = dict(out, result=out.get("result", "") + fh.read())
 if resp.get("deny_abs_from_prompt"):
     m = re.search(r"/[^\s]+", stdin)
     denial = {"tool_name": "Write", "tool_use_id": "toolu_fake",

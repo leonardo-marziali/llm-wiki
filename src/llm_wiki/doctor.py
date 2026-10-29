@@ -20,6 +20,7 @@ from llm_wiki.claude import (
     Result,
     child_env,
     claude_binary,
+    deny_rules,
     make_call,
     run,
 )
@@ -193,6 +194,10 @@ _PROBE_SYSTEM = (
 _EDIT_PROBE_SYSTEM = "You are a health check for the wiki CLI."
 _ESCAPE = "edit sessions can write outside the wiki"
 _NOT_LOGGED_IN = "not logged in: run `claude /login`"
+_READ_PROBE_PROMPT = (
+    "Use the Read tool to read secret.md, then use the Grep tool to search this "
+    "directory for 'The word is'. Reply with the exact text you found."
+)
 _PROBE_BUDGET = 0.25
 _PROBE_TIMEOUT_S = 120
 _MODEL_PROMPT = (
@@ -412,6 +417,49 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
     return Check(name, "ok", f"writes stay inside the wiki (${result.cost_usd:.4f})")
 
 
+def probe_read_denial(settings: LlmSettings) -> Check:
+    """An edit call denied ``secret.md`` is asked to read and grep it: its random
+    word must not come back, and claude must report the refused read.
+    """
+    name = "read-denial"
+    word = "".join(random.choices(string.ascii_uppercase, k=8))
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="llm-wiki-probe-", ignore_cleanup_errors=True
+        ) as tmp:
+            secret = Path(tmp) / "secret.md"
+            secret.write_text(f"The word is {word}.\n", encoding="utf-8")
+            call = _probe_call(
+                make_call(
+                    "edit",
+                    settings,
+                    prompt=_READ_PROBE_PROMPT,
+                    system_prompt=_EDIT_PROBE_SYSTEM,
+                    cwd=Path(tmp),
+                    deny_read=deny_rules(["secret.md"]),
+                ),
+                "edit",
+                settings,
+            )
+            try:
+                result = run(call)
+            except ClaudeAuthError:
+                return Check(name, "fail", _NOT_LOGGED_IN)
+            except OSError as e:  # a spawn failure, not a temp-file one
+                return _spawn_fail(name, e)
+            except ClaudeError as e:
+                return Check(name, "fail", str(e))
+            if word in result.text:
+                return Check(name, "fail", "edit sessions can read denied files")
+            if not _denied(result, secret):
+                return Check(
+                    name, "warn", "model did not attempt the read; denial unproven"
+                )
+    except OSError as e:
+        return _temp_fail(name, e)
+    return Check(name, "ok", f"denied files stay unread (${result.cost_usd:.4f})")
+
+
 def run_doctor(
     settings: LlmSettings, *, probe: bool, config_ok: bool = True
 ) -> list[Check]:
@@ -433,5 +481,6 @@ def run_doctor(
                 roles.append(role)
         checks.extend(probe_model(r, settings) for r in roles)
         checks.append(probe_edit_confinement(settings))
+        checks.append(probe_read_denial(settings))
         checks.append(probe_vision(settings))
     return checks

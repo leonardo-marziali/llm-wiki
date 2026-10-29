@@ -19,6 +19,7 @@ from llm_wiki.pages import SYSTEM_FILES
 from llm_wiki.plan import system_prompt
 
 OPEN_QUESTIONS = "wiki/open-questions.md"
+QUARANTINE = ".wiki/quarantine/"
 _FINALIZE_CODES = {"not-in-index"}  # finalize rebuilds the indexes after all edits
 _APPEND_ONLY = (
     "may only grow: append entries, never edit or remove existing ones; "
@@ -71,6 +72,8 @@ class EditSession:
         self.run_dir = Path(run_dir)
         self.name = name  # prefixes the run-dir files
         self.allowed: set[str] = {OPEN_QUESTIONS}
+        # paths the edit may never read (a trailing / denies a folder)
+        self.deny: set[str] = {QUARANTINE}
         self.reverted: list[str] = []
         self.cost_usd = 0.0
         self.oq_removable: set[str] = set()  # lines an edit may remove (rule 6)
@@ -120,6 +123,7 @@ class EditSession:
             prompt=prompt,
             system_prompt=system_prompt(self.root, self.prompt_file),
             cwd=self.root,
+            deny_read=claude.deny_rules(self.deny),
         )
         result = claude.run(call)
         self.cost_usd += result.cost_usd

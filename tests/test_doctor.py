@@ -14,6 +14,7 @@ from llm_wiki.doctor import (
     parse_version,
     probe_edit_confinement,
     probe_model,
+    probe_read_denial,
     probe_vision,
     run_doctor,
 )
@@ -275,16 +276,18 @@ def test_probe_model_usage_limit_fails_cleanly(fake_claude):
 
 def test_probes_dedupe_models(fake_claude, monkeypatch):
     _vision_word(monkeypatch)
-    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK, VISION_RESP)
+    fake_claude.queue(PROBE_RESP, PROBE_RESP, EDIT_OK, READ_OK, VISION_RESP)
     checks = run_doctor(S, probe=True)
     names = [c.name for c in checks]
-    assert names[-4:] == [
+    assert names[-5:] == [
         f"model:{S.model('plan')}",
         f"model:{S.model('deep')}",
         "edit-confinement",
+        "read-denial",
         "vision",
     ]
-    assert len(fake_claude.calls()) == 4
+    assert len(fake_claude.calls()) == 5
+    assert {c.name: c.status for c in checks}["read-denial"] == "ok"
     assert {c.name: c.status for c in checks}["vision"] == "ok"
 
 
@@ -296,6 +299,38 @@ def _vision_word(monkeypatch, word="KIWIS"):
 
 VISION_RESP = {"stdout": ok(structured={"canary": ""}), "echo_image_word": True}
 EDIT_OK = {"stdout": ok(), "write": {"inside.txt": "ok"}, "deny_abs_from_prompt": True}
+READ_OK = {"stdout": ok(), "deny_read_rel": "secret.md"}
+
+
+def test_read_probe_ok(fake_claude):
+    fake_claude.queue(READ_OK)
+    c = probe_read_denial(S)
+    assert (c.name, c.status) == ("read-denial", "ok")
+    (call,) = fake_claude.calls()
+    argv = call["argv"]
+    assert argv[argv.index("--disallowed-tools") + 1] == "Read(./secret.md)"
+    assert argv[argv.index("--max-budget-usd") + 1] == "0.25"
+    assert "secret.md" in call["listdir"]
+
+
+def test_read_probe_detects_leak(fake_claude):
+    fake_claude.queue({**READ_OK, "echo_file_rel": "secret.md"})
+    c = probe_read_denial(S)
+    assert c.status == "fail"
+    assert "denied" in c.detail
+
+
+def test_read_probe_without_attempt_is_unproven(fake_claude):
+    fake_claude.queue({"stdout": ok()})
+    c = probe_read_denial(S)
+    assert c.status == "warn"
+    assert "denial unproven" in c.detail
+
+
+def test_read_probe_error_fails(fake_claude):
+    fake_claude.queue(OVERLOADED)
+    assert probe_read_denial(S).status == "fail"
+    assert len(fake_claude.calls()) == 1
 
 
 def test_edit_probe_ok(fake_claude):
