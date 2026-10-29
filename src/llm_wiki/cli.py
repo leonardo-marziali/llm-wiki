@@ -416,6 +416,30 @@ def ingest(
         raise typer.Exit(report.exit_code)
 
 
+@app.command()
+def consolidate(
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+    yes: bool = typer.Option(
+        False, "--yes", help="Accept without asking when lint passes."
+    ),
+) -> None:
+    """Split oversized pages, merge duplicates, promote built to-be pages and
+    archive unlinked retired ones, on a branch, then accept or reject at one gate.
+    """
+    from llm_wiki import maint_run, registry
+
+    ref = registry.resolve(wiki, Path.cwd())
+    try:
+        report = maint_run.run_maintenance(
+            ref, mode="consolidate", yes=yes, interactive=sys.stdin.isatty()
+        )
+    except KeyboardInterrupt:
+        typer.echo("interrupted: the consolidate was rolled back", err=True)
+        raise typer.Exit(130) from None
+    if report.exit_code:
+        raise typer.Exit(report.exit_code)
+
+
 skill_app = typer.Typer(no_args_is_help=True, help="Manage the wiki-lookup skill.")
 app.add_typer(skill_app, name="skill")
 

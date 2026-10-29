@@ -137,7 +137,19 @@ def changed_paths(root: Path, ignored: bool = False) -> list[str]:
     """
     top, prefix = _scope(root)
     flags = ["--ignored"] if ignored else []
-    out = _pgit(top, "status", "--porcelain=v1", "-z", "-uall", *flags, "--", prefix)
+    # no renames: a staged ``git mv`` lists both its paths, so a rollback
+    # restores the source as well as dropping the destination
+    out = _pgit(
+        top,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "-uall",
+        "--no-renames",
+        *flags,
+        "--",
+        prefix,
+    )
     fields = out.split("\0")
     paths: list[str] = []
     i = 0
@@ -227,6 +239,12 @@ def stage_commit(
     extra = ["--allow-empty"] + (["--amend"] if amend else [])
     _pgit(top, "commit", "-q", "--only", *extra, "-m", message, "--", *paths)
     return git(top, "rev-parse", "HEAD").strip()
+
+
+def move(root: Path, src: str, dest: str) -> None:
+    """``git mv`` wiki path ``src`` to ``dest``, whose folder must exist."""
+    top, prefix = _scope(root)
+    _pgit(top, "mv", "--", *_repo_paths(prefix, [src, dest]))
 
 
 def is_ignored(root: Path, rel: str) -> bool:

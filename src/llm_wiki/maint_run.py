@@ -15,6 +15,7 @@ from typing import Literal
 import typer
 
 from llm_wiki import gate, gitops
+from llm_wiki.archive import archive_candidates, archive_unlinked
 from llm_wiki.claude import claude_binary
 from llm_wiki.config import LlmSettings, WikiConfig, load_config, load_llm_settings
 from llm_wiki.deep import run_deep
@@ -167,21 +168,28 @@ def _squash_message(report: MaintReport) -> str:
     if len(targets) > _MAX_TARGETS:
         targets = [*targets[:_MAX_TARGETS], "…"]
     head = f"{_COMMAND[report.mode]}: {n} job{'' if n == 1 else 's'}"
+    if report.archived:
+        head += f", {len(report.archived)} archived"
     return f"{head} ({', '.join(targets)})" if targets else head
 
 
 def _finalize(ctx: MaintContext, base: str, report: MaintReport) -> None:
     """Archive, indexes, manifest, log, lint, then one squashed commit."""
     root, cfg = Path(ctx.root), ctx.cfg
-    archived: list[str] = []  # Task 6: archive_unlinked runs here (consolidate)
-    report.archived = archived
+    files = [LOG]
+    if ctx.mode == "consolidate":  # after every job: a page relinked now goes too
+        manifest = Manifest.load(root)
+        report.archived = archive_unlinked(root, manifest)
+        if report.archived:
+            manifest.save(root)
+            files.append(MANIFEST)
     indexes = build_indexes(root, cfg)
     live = [
         p
         for p in gitops.changed_since(root, base)
         if is_page(p) and (root / p).is_file()
     ]
-    files = [p.relative_to(root).as_posix() for p in indexes] + [LOG]
+    files += [p.relative_to(root).as_posix() for p in indexes]
     if _refresh_manifest(root, live):
         files.append(MANIFEST)
     gate.append_log(root, _log_lines(report, ctx.today))
@@ -288,7 +296,11 @@ def run_maintenance(
     found, report.cost_usd = _lint(root, cfg, settings, today, run_dir, deep)
     jobs = _jobs(root, cfg, mode, found, report)
     # finalize's index rebuild is the fix for not-in-index (Ruling 3)
-    if not jobs and not any(f.code == "not-in-index" for f in found.findings):
+    if (
+        not jobs
+        and not any(f.code == "not-in-index" for f in found.findings)
+        and not (mode == "consolidate" and archive_candidates(root))
+    ):
         lines = [
             f"nothing to {'fix' if mode == 'fix' else 'consolidate'}",
             *_left_lines(report),
