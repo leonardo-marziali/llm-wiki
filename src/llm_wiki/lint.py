@@ -476,7 +476,7 @@ def glued_footnotes(page: Page) -> list[str]:
             if prev == "text":
                 out.append(m.group(1))
             prev = "note"
-        elif not line.strip():
+        elif not line.strip() or _HEADING.match(line):  # a heading ends no paragraph
             prev = "blank"
         elif not (prev == "note" and line[:1] in " \t"):
             prev = "text"

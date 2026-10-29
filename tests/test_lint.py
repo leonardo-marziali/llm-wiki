@@ -821,3 +821,7 @@ def test_footnote_spacing_ignores_code_and_runs():
     assert glued_footnotes(
         note_page("Fact.[^1]\n[^1]: raw/a.md\n[^2]: raw/b.md\n")
     ) == ["1"]
+
+
+def test_footnote_spacing_ignores_heading():
+    assert glued_footnotes(note_page("Fact.[^1]\n\n## Sources\n[^1]: raw/a.md\n")) == []

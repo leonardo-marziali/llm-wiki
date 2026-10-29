@@ -358,14 +358,18 @@ def _communicate(
 ) -> subprocess.CompletedProcess | None:
     """Feed stdin and collect the output. On timeout, kill the child's whole
     process group (the tool processes it started included), reap it, give None.
+    Ctrl-C and other exits kill it too: in its own session, the terminal's
+    SIGINT never reaches it, and an edit must not outlive a rollback.
     """
     try:
         stdout, stderr = proc.communicate(stdin, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
+    except BaseException as exc:
         with contextlib.suppress(ProcessLookupError):  # the group is already gone
             os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
-        return None
+        if isinstance(exc, subprocess.TimeoutExpired):
+            return None
+        raise
     return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
 

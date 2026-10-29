@@ -2,6 +2,7 @@ import dataclasses
 import json
 import os
 import stat
+import subprocess
 import time
 from pathlib import Path
 
@@ -905,3 +906,26 @@ def test_timeout_kill_tolerates_gone_group(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "killpg", killpg)
     call = dataclasses.replace(_call(), timeout_s=1)
     assert claude_mod._spawn(call, str(script), tmp_path) is None
+
+
+def test_interrupt_kills_grandchild(tmp_path, monkeypatch):
+    script, pid_file = _hanging_claude(tmp_path)
+    real = subprocess.Popen.communicate
+
+    def communicate(self, input=None, timeout=None):
+        if timeout is not None:  # the first, bounded wait: Ctrl-C lands here
+            deadline = time.monotonic() + 2
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            raise KeyboardInterrupt
+        return real(self, input, timeout)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
+    with pytest.raises(KeyboardInterrupt):
+        claude_mod._spawn(_call(), str(script), tmp_path)
+    pid = int(pid_file.read_text())
+    try:
+        assert _gone_within(pid, 2)
+    finally:
+        if _alive(pid):
+            os.kill(pid, 9)

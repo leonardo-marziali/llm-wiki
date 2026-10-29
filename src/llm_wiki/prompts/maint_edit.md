@@ -40,9 +40,10 @@ say.
 
 ## Open questions
 
-Only when the allowed list names `wiki/open-questions.md`: add the plan's `open_questions` to `wiki/open-questions.md` as new entries at
-the end. Remove only the exact lines the plan lists in `resolved_questions`;
-leave every other line as it is.
+Only when the allowed list names `wiki/open-questions.md`: add the plan's
+`open_questions` to `wiki/open-questions.md` as new entries at the end. Remove
+only the exact lines the plan lists in `resolved_questions`; leave every other
+line as it is.
 
 ## Repair
 
