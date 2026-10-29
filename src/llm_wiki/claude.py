@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -352,25 +353,42 @@ def _final_result(stdout: str) -> str:
     return ""
 
 
+def _communicate(
+    proc: subprocess.Popen, stdin: str, timeout_s: float
+) -> subprocess.CompletedProcess | None:
+    """Feed stdin and collect the output. On timeout, kill the child's whole
+    process group (the tool processes it started included), reap it, give None.
+    """
+    try:
+        stdout, stderr = proc.communicate(stdin, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):  # the group is already gone
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return None
+    return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+
+
 def _spawn(call: Call, binary: str, cwd: Path) -> subprocess.CompletedProcess | None:
-    """One subprocess; None on timeout (subprocess.run has already killed the child)."""
+    """One subprocess; None on timeout (its process group has been killed)."""
     # The system prompt goes through a file: AGENTS.md-sized prompts can exceed the argv
     # limit.
     prompt_file = _write_prompt_file(call.system_prompt)
     try:
-        return subprocess.run(
+        # every exit code is classified by the caller; its own session, so a
+        # timeout can kill the grandchildren too
+        with subprocess.Popen(
             build_argv(call, binary, prompt_file),
-            check=False,  # every exit code is classified by the caller
-            input=_stdin_text(call),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             cwd=cwd,
             env=child_env(os.environ),
-            timeout=call.timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return None
+            start_new_session=True,
+        ) as proc:
+            return _communicate(proc, _stdin_text(call), call.timeout_s)
     except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
         if not cwd.is_dir() or not os.access(cwd, os.X_OK):
             raise ClaudeError(

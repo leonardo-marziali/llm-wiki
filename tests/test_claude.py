@@ -1,9 +1,14 @@
+import dataclasses
 import json
+import os
+import stat
+import time
 from pathlib import Path
 
 import pytest
 from conftest import ok
 
+from llm_wiki import claude as claude_mod
 from llm_wiki.claude import (
     REQUIRED_FLAGS,
     build_argv,
@@ -845,3 +850,58 @@ def test_prepare_for_vision_accepts_cmyk_jpeg(tmp_path):
     with Image.open(out) as im:
         assert im.format == "PNG"
         assert im.mode == "RGB"
+
+
+def _hanging_claude(tmp_path):
+    """A claude that starts a grandchild, records its pid, then hangs."""
+    pid_file = tmp_path / "grandchild.pid"
+    script = tmp_path / "hang"
+    script.write_text(
+        f"#!/bin/sh\nsleep 60 &\necho $! > '{pid_file}'\nwait\n", encoding="utf-8"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return script, pid_file
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # a zombie still answers kill(0); count it as gone
+    stat_file = Path(f"/proc/{pid}/stat")
+    return not (stat_file.exists() and stat_file.read_text().split()[2] == "Z")
+
+
+def _gone_within(pid: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_timeout_kills_grandchild(tmp_path):
+    script, pid_file = _hanging_claude(tmp_path)
+    call = dataclasses.replace(_call(), timeout_s=1)
+    assert claude_mod._spawn(call, str(script), tmp_path) is None
+    pid = int(pid_file.read_text())
+    try:
+        assert _gone_within(pid, 2)
+    finally:
+        if _alive(pid):
+            os.kill(pid, 9)
+
+
+def test_timeout_kill_tolerates_gone_group(tmp_path, monkeypatch):
+    script, _ = _hanging_claude(tmp_path)
+    real = os.killpg
+
+    def killpg(pgid, sig):  # the group dies just before the kill lands
+        real(pgid, sig)
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    call = dataclasses.replace(_call(), timeout_s=1)
+    assert claude_mod._spawn(call, str(script), tmp_path) is None
