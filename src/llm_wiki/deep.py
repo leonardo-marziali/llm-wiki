@@ -39,9 +39,7 @@ def _text(page: Page) -> str:
     return page.path.read_text(encoding="utf-8")
 
 
-def sample_pages(
-    root: Path, cfg: WikiConfig, report: LintReport
-) -> tuple[list[Page], int]:
+def sample_pages(root: Path, report: LintReport) -> tuple[list[Page], int]:
     """The pages for the deep call, and how many pages were eligible.
 
     Flagged pages (secret or injection findings) are never eligible. The overview
@@ -125,7 +123,7 @@ def run_deep(
     A failed call raises its ``ClaudeError``; nothing partial is returned.
     """
     root = Path(root)
-    sample, eligible = sample_pages(root, cfg, report)
+    sample, eligible = sample_pages(root, report)
     if not sample:
         return DeepResult([], 0, eligible, 0, 0.0)
     call = claude.make_call(

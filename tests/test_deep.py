@@ -85,13 +85,13 @@ def test_deep_sample_order_and_budget(root, monkeypatch):
     cfg = load_config(root)
     report = lint(root, cfg, today=TODAY)
     monkeypatch.setattr(deep_mod, "DEEP_CHARS", 1)  # the first other page crosses it
-    sample, eligible = sample_pages(root, cfg, report)
+    sample, eligible = sample_pages(root, report)
     ids = [p.fm.id for p in sample if p.fm]
     assert ids[:2] == ["overview", "glossary"]
     assert ids[2:] == ["conventions.old"]  # the page that crosses the budget stays
     assert eligible == 6
     monkeypatch.setattr(deep_mod, "DEEP_CHARS", 10**6)
-    sample, _ = sample_pages(root, cfg, report)
+    sample, _ = sample_pages(root, report)
     assert [p.fm.id for p in sample if p.fm] == [
         "overview",
         "glossary",
