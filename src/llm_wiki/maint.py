@@ -578,9 +578,19 @@ def _consolidate_cap_errors(
 
 
 def validate_maint_plan(
-    plan: MaintPlan, job: Job, *, root: Path, cfg: WikiConfig, mode: Mode
+    plan: MaintPlan,
+    job: Job,
+    *,
+    root: Path,
+    cfg: WikiConfig,
+    mode: Mode,
+    oq_locked: bool = False,
 ) -> list[str]:
-    """Human-readable problems with ``plan``; an empty list means it may proceed."""
+    """Human-readable problems with ``plan``; an empty list means it may proceed.
+
+    ``oq_locked``: open-questions.md is flagged, so the plan may neither add nor
+    resolve a question.
+    """
     root = Path(root)
     kinds = {s.name: s.kind for s in cfg.sections}
     limit = cfg.effective_caps().max_pages_per_ingest
@@ -598,6 +608,11 @@ def validate_maint_plan(
         seen.add(p.id)
         errors += _maint_page_errors(p, job, root, kinds, planned, inputs, cited)
     errors += _question_errors(plan, job, root, inputs)
+    if oq_locked and (plan.open_questions or plan.resolved_questions):
+        errors.append(
+            "open_questions/resolved_questions must be empty: "
+            f"{OPEN_QUESTIONS} is flagged this run"
+        )
     if mode == "fix":
         return errors + _cap_errors(plan.pages, root, cfg, kinds, None)
     return errors + _consolidate_cap_errors(plan, inputs, root, cfg, kinds)
@@ -606,8 +621,15 @@ def validate_maint_plan(
 # --- the plan prompt ---
 
 
-def _job_block(cfg: WikiConfig, job: Job, mode: Mode, cited: list[str]) -> str:
+def _job_block(
+    cfg: WikiConfig, job: Job, mode: Mode, cited: list[str], oq_locked: bool
+) -> str:
     limit = cfg.effective_caps().max_pages_per_ingest
+    lock = (
+        f"- open questions: none this run ({OPEN_QUESTIONS} is flagged); "
+        "leave open_questions and resolved_questions empty"
+    )
+    locked = [lock] if oq_locked else []
     return "\n".join(
         [
             "## Job",
@@ -618,6 +640,7 @@ def _job_block(cfg: WikiConfig, job: Job, mode: Mode, cited: list[str]) -> str:
             f"- input pages (only these may be updated): {', '.join(job.inputs)}",
             f"- page limit: at most {limit} pages in this plan",
             f"- raw paths you may cite: {', '.join(cited) or '(none)'}",
+            *locked,
         ]
     )
 
@@ -674,7 +697,7 @@ def build_maint_plan_prompt(
     )
     blocks = [
         f"Today is {(today or date.today()).isoformat()}.",
-        _job_block(cfg, job, mode, cited),
+        _job_block(cfg, job, mode, cited, OPEN_QUESTIONS in exclude),
         "## Allowed sections\n\n" + sections_table(cfg.sections),
         _data_block(
             "Findings",

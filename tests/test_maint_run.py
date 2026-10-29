@@ -906,6 +906,22 @@ def test_flagged_open_questions_is_no_allowed_file(wiki):
     assert "- `wiki/open-questions.md`" in never
 
 
+def test_flagged_oq_plan_with_questions_rejected(wiki, fake_claude):
+    oq = wiki / "wiki/open-questions.md"
+    oq.write_text(f"# Open questions\n{SECRET}", encoding="utf-8")
+    commit_pages(wiki, {A: broken(wiki)})
+    before = oq.read_bytes()
+    asking = {**mplan(), "open_questions": ["Is the link right?"]}
+    fake_claude.queue(planned(asking), planned(mplan()), edit({A_REL: fixed(wiki)}))
+    report = run(wiki)
+    [out] = report.outcomes
+    assert out.status == "done", out.reason
+    calls = fake_claude.calls()
+    assert len(calls) == 3
+    assert "wiki/open-questions.md is flagged this run" in calls[1]["stdin"]
+    assert oq.read_bytes() == before
+
+
 def test_failed_deep_call_of_fix_prints_its_cost(wiki, fake_claude, capsys):
     fake_claude.queue(failing("boom", cost=0.3))
     with pytest.raises(ClaudeError):

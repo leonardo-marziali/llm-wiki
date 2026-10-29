@@ -110,7 +110,12 @@ def plan_job(ctx: MaintContext, job: Job) -> tuple[MaintPlan | None, list[str], 
         plan, errors = _parse(result.structured, MaintPlan)
         if plan is not None:
             errors = validate_maint_plan(
-                plan, job, root=root, cfg=ctx.cfg, mode=ctx.mode
+                plan,
+                job,
+                root=root,
+                cfg=ctx.cfg,
+                mode=ctx.mode,
+                oq_locked=OPEN_QUESTIONS in ctx.exclude,
             )
             if not errors:
                 return plan, [], cost

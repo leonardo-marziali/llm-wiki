@@ -593,6 +593,55 @@ def test_resolved_question_must_exist(root):
     assert check(root, mplan(git_update(), resolved=[other]), promote) == []
 
 
+OQ_LOCK_LINE = (
+    "- open questions: none this run (wiki/open-questions.md is flagged); "
+    "leave open_questions and resolved_questions empty"
+)
+OQ_LOCK_ERROR = (
+    "open_questions/resolved_questions must be empty: "
+    "wiki/open-questions.md is flagged this run"
+)
+
+
+def test_validate_maint_plan_oq_locked(root):
+    line = "- [2026-10-01] Why? — [Git flow](conventions/git-flow.md)"
+    (root / "wiki" / "open-questions.md").write_text(
+        f"# Open questions\n\n{line}\n", encoding="utf-8"
+    )
+    j = job("fix")
+    asked = mplan(git_update())
+    asked.open_questions = ["Who owns it?"]
+    resolved = mplan(git_update(), resolved=[line])
+    for plan in (asked, resolved):
+        unlocked = validate_maint_plan(
+            plan, j, root=root, cfg=load_config(root), mode="fix"
+        )
+        assert OQ_LOCK_ERROR not in unlocked
+        locked = validate_maint_plan(
+            plan, j, root=root, cfg=load_config(root), mode="fix", oq_locked=True
+        )
+        assert OQ_LOCK_ERROR in locked
+    quiet = validate_maint_plan(
+        mplan(git_update()),
+        j,
+        root=root,
+        cfg=load_config(root),
+        mode="fix",
+        oq_locked=True,
+    )
+    assert OQ_LOCK_ERROR not in quiet
+
+
+def test_maint_prompt_flagged_oq_line(root):
+    j = job("fix")
+    flagged_oq = build_maint_plan_prompt(
+        root, load_config(root), j, "fix", exclude={"wiki/open-questions.md"}
+    )
+    assert OQ_LOCK_LINE in flagged_oq
+    clean = build_maint_plan_prompt(root, load_config(root), j, "fix", exclude=set())
+    assert OQ_LOCK_LINE not in clean
+
+
 SHARED = [
     ("Concepts.X", {}),  # grammar
     ("log", {"action": "update"}),  # a system page
