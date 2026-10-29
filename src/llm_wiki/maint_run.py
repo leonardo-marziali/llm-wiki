@@ -31,7 +31,7 @@ from llm_wiki.lint import (
     lint,
     write_report,
 )
-from llm_wiki.maint import Job, Mode, consolidate_jobs, fix_jobs, hint
+from llm_wiki.maint import RETIRED, Job, Mode, consolidate_jobs, fix_jobs, hint
 from llm_wiki.maint_job import JobOutcome, MaintContext, process_job
 from llm_wiki.manifest import MANIFEST, Manifest
 from llm_wiki.pages import read_page
@@ -39,7 +39,6 @@ from llm_wiki.registry import WikiRef
 from llm_wiki.session import is_page
 
 _MAX_TARGETS = 5
-_RETIRED = {"deprecated", "superseded"}
 _COMMAND: dict[Mode, str] = {
     "fix": "wiki lint --fix",
     "consolidate": "wiki consolidate",
@@ -72,9 +71,11 @@ def _jobs(
 ) -> list[Job]:
     if mode == "fix":
         jobs, report.left, report.more = fix_jobs(root, cfg, found)
-    else:
-        jobs, report.more = consolidate_jobs(root, cfg, found)
-    report.left_hints = [hint(f, cfg) for f in report.left]
+        report.left_hints = [hint(f, cfg) for f in report.left]
+        return jobs
+    jobs, left, report.more = consolidate_jobs(root, cfg, found)
+    report.left = [f for f, _ in left]
+    report.left_hints = [why for _, why in left]
     return jobs
 
 
@@ -147,7 +148,7 @@ def _refresh_manifest(root: Path, pages: list[str]) -> bool:
     changed = False
     for rel in pages:
         page = read_page(root, root / rel)
-        if page.fm is None or page.fm.status in _RETIRED:
+        if page.fm is None or page.fm.status in RETIRED:
             continue
         for raw in sorted(cited_paths(page)):
             entry = manifest.entries.get(raw)

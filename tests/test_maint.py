@@ -9,11 +9,20 @@ from llm_wiki.index import build_indexes
 from llm_wiki.ingest import page_rel
 from llm_wiki.lint import CONSOLIDATE_HINT, Finding, LintReport, lint
 from llm_wiki.maint import (
+    CAP_HINT,
     FIX_CODES,
+    FLAGGED_HINT,
     HAND_HINT,
+    HELD_HINT,
     HINTS,
+    INGEST_ONLY_HINT,
     MAX_JOBS,
+    MAX_PROMOTES,
+    MAX_QUESTIONS,
+    NO_ROOM_HINT,
     PLAN_PROMPTS,
+    RETIRED_TWIN_HINT,
+    TWIN_HINT,
     Job,
     JobKind,
     Mode,
@@ -238,7 +247,7 @@ def test_flagged_pages_never_in_jobs(root):
     cfg = load_config(root)
 
     fixes, left, _ = fix_jobs(root, cfg, rep)
-    consolidates, _ = consolidate_jobs(root, cfg, rep)
+    consolidates, _, _ = consolidate_jobs(root, cfg, rep)
 
     assert "concepts.s" not in ids_in(fixes) | ids_in(consolidates)
     assert any(j.targets == ["concepts.a"] for j in fixes)  # not vacuous
@@ -314,14 +323,15 @@ def seed_consolidate(root):
 
 def test_consolidate_jobs_kinds_and_order(root):
     question = seed_consolidate(root)
-    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, _ = consolidate_jobs(root, load_config(root), report(root))
+    # R17: merges and splits free room at the cap, so they come before promotes
     assert [(j.kind, j.targets) for j in jobs] == [
         ("relink", ["concepts.old"]),
-        ("promote", ["requirements.sso"]),
         ("merge", ["components.cache", "concepts.cache"]),
         ("split", ["concepts.long"]),
+        ("promote", ["requirements.sso"]),
     ]
-    relink, promote, merge, split = jobs
+    relink, merge, split, promote = jobs
     assert relink.inputs == ["concepts.old", "concepts.user"]
     assert promote.inputs == ["requirements.sso", "components.auth"]  # as-is only
     assert promote.questions == [question]
@@ -342,7 +352,7 @@ def test_consolidate_linkers_capped_at_8(root):
             type_="component",
         )
     reindex(root)
-    (job,), _ = consolidate_jobs(root, load_config(root), report(root))
+    (job,), _, _ = consolidate_jobs(root, load_config(root), report(root))
     assert job.inputs == ["concepts.old", *(f"components.u{n}" for n in range(7))]
 
 
@@ -352,7 +362,7 @@ def test_consolidate_page_only_in_first_job(root):
     add(root, "components.cache", "Caching layer", type_="component")
     add(root, "concepts.user", "User", "# User\n\n**TL;DR** U.\n\n[c](cache.md)\n")
     reindex(root)
-    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, _ = consolidate_jobs(root, load_config(root), report(root))
     assert [(j.kind, j.targets) for j in jobs] == [("relink", ["concepts.cache"])]
 
 
@@ -364,7 +374,7 @@ def test_src_pages_never_merged(root):
         add(root, f"sources.{name}", "Guide", body, type_="source-summary")
     add(root, "concepts.guide", "Guide")
     reindex(root)
-    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, _ = consolidate_jobs(root, load_config(root), report(root))
     assert not any(i.startswith("sources.") for j in jobs for i in j.targets)
     assert not [j for j in jobs if j.kind in ("merge", "split")]
 
@@ -699,7 +709,7 @@ def test_flagged_open_questions_give_no_promote_job(root):
     oq.write_text(oq.read_text(encoding="utf-8") + SECRET, encoding="utf-8")
     rep = report(root)
     assert "wiki/open-questions.md" in flagged(rep)
-    jobs, _ = consolidate_jobs(root, load_config(root), rep)
+    jobs, _, _ = consolidate_jobs(root, load_config(root), rep)
     assert [j.kind for j in jobs] == ["relink", "merge", "split"]
 
 
@@ -793,7 +803,7 @@ def test_consolidate_jobs_carry_target_questions(root):
     line = "- [2026-10-02] Too long? — [Long](concepts/long.md)"
     oq = root / "wiki" / "open-questions.md"
     oq.write_text(oq.read_text(encoding="utf-8") + line + "\n", encoding="utf-8")
-    jobs, _ = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, _ = consolidate_jobs(root, load_config(root), report(root))
     by_kind = {j.kind: j for j in jobs}
     assert by_kind["split"].questions == [line]
     assert by_kind["relink"].questions == []
@@ -848,7 +858,7 @@ def test_page_linked_only_by_stub_gets_no_relink(root):
     reindex(root)
     assert live_linkers(root, "concepts.old") == []
     assert live_linkers(root, GIT) == ["overview"]
-    jobs, more = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, more = consolidate_jobs(root, load_config(root), report(root))
     assert jobs == []
     assert more == 0
 
@@ -864,6 +874,134 @@ def test_consolidate_jobs_report_overflow(root):
             type_="component",
         )
     reindex(root)
-    jobs, more = consolidate_jobs(root, load_config(root), report(root))
+    jobs, _, more = consolidate_jobs(root, load_config(root), report(root))
     assert len(jobs) == MAX_JOBS
     assert more == 2
+
+
+# --- final review fix wave ---
+
+
+def pair_hints(left) -> dict[frozenset, str]:
+    return {frozenset(f.pages): h for f, h in left if f.code == "duplicate-title"}
+
+
+def test_to_be_twin_gets_no_merge_job(root):
+    # R16: a to-be page and the as-is page that built it share a title
+    add(root, "requirements.sso", "SSO login", type_="requirement", status="to-be")
+    add(root, "components.sso", "SSO login", type_="component")
+    reindex(root)
+    jobs, left, _ = consolidate_jobs(root, load_config(root), report(root))
+    assert not [j for j in jobs if j.kind == "merge"]
+    assert pair_hints(left) == {
+        frozenset({"requirements.sso", "components.sso"}): TWIN_HINT
+    }
+    assert TWIN_HINT == "a to-be twin of an as-is page: promote it, or retitle one"
+
+
+def test_stub_and_survivor_get_no_merge_job(root):
+    # R16: after a merge the stub keeps its title until it is archived
+    add(root, "concepts.b1", "Branching")
+    add(
+        root,
+        "concepts.b2",
+        "Branching",
+        "# Branching\n\n**TL;DR** See [Branching](b1.md).\n",
+        status="superseded",
+        extra="superseded_by: concepts.b1\n",
+    )
+    reindex(root)
+    jobs, left, _ = consolidate_jobs(root, load_config(root), report(root))
+    assert not [j for j in jobs if j.kind == "merge"]
+    assert pair_hints(left) == {
+        frozenset({"concepts.b1", "concepts.b2"}): RETIRED_TWIN_HINT
+    }
+    assert RETIRED_TWIN_HINT == "a retired page shares this title; retitle or relink it"
+
+
+def to_be_with_question(root, n):
+    lines = []
+    for i in range(n):
+        add(
+            root,
+            f"requirements.r{i}",
+            f"Req {i} item",
+            type_="requirement",
+            status="to-be",
+        )
+        lines.append(f"- [2026-10-01] Built? — [R{i}](requirements/r{i}.md)")
+    (root / "wiki" / "open-questions.md").write_text(
+        "# Open questions\n\n" + "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    reindex(root)
+
+
+def test_promotes_capped_per_run(root):
+    to_be_with_question(root, MAX_PROMOTES + 2)
+    jobs, _, more = consolidate_jobs(root, load_config(root), report(root))
+    assert MAX_PROMOTES == 3
+    assert [j.kind for j in jobs] == ["promote"] * MAX_PROMOTES
+    assert more == 2
+
+
+def test_job_questions_capped(root):
+    lines = [
+        f"- [2026-10-01] Q{n}? — [Git flow](conventions/git-flow.md)"
+        for n in range(MAX_QUESTIONS + 2)
+    ]
+    (root / "wiki" / "open-questions.md").write_text(
+        "# Open questions\n\n" + "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    edit(root, GIT_REL, "for every change.", "for every change. See [x](x.md).")
+    (job,), _, _ = fix_jobs(root, load_config(root), report(root))
+    assert MAX_QUESTIONS == 10
+    assert job.questions == lines[:MAX_QUESTIONS]
+
+
+def long_page(root, id_="concepts.long", **kw):
+    body = "# Long\n\n**TL;DR** Long.\n\n" + "".join(
+        f"- item {n}\n" for n in range(420)
+    )
+    add(root, id_, "Long page", body, **kw)
+
+
+@pytest.mark.parametrize("cap", ["max_pages", "max_section_pages"])
+def test_split_dropped_without_room(root, cap):
+    # 4 pages: overview, glossary, git-flow and the long one (alone in concepts)
+    long_page(root)
+    reindex(root)
+    cfg = set_caps(root, **{cap: 4 if cap == "max_pages" else 1})
+    jobs, left, _ = consolidate_jobs(root, cfg, report(root, cfg))
+    assert not [j for j in jobs if j.kind == "split"]
+    assert [(f.code, h) for f, h in left if f.code == "page-too-long"] == [
+        ("page-too-long", NO_ROOM_HINT)
+    ]
+    assert NO_ROOM_HINT == "no room to split at the cap: archive or merge first"
+    # one slot free: the split runs
+    cfg = set_caps(root, **{cap: 5 if cap == "max_pages" else 2})
+    jobs, _, _ = consolidate_jobs(root, cfg, report(root, cfg))
+    assert [j.kind for j in jobs] == ["split"]
+
+
+def test_consolidate_left_lists_every_unjobbed_finding(root):
+    # a flagged long page, a long source page, a held page, a cap warning
+    long_page(root, "concepts.leaky")
+    edit(root, "wiki/concepts/leaky.md", "- item 0\n", f"- item 0\n{SECRET}")
+    long_page(root, "sources.src-docs-a-md", type_="source-summary")
+    add(root, "concepts.old", "Old thing", status="deprecated")
+    long_page(root, "concepts.user")
+    edit(root, "wiki/concepts/user.md", "- item 0\n", "- [old](old.md)\n")
+    reindex(root)
+    cfg = set_caps(root, max_pages=500, warn_pages=3)
+    rep = report(root, cfg)
+    jobs, left, _ = consolidate_jobs(root, cfg, rep)
+    assert [(j.kind, j.targets) for j in jobs] == [("relink", ["concepts.old"])]
+    got = {(f.code, f.path): h for f, h in left}
+    assert got[("page-too-long", "wiki/concepts/leaky.md")] == FLAGGED_HINT
+    assert got[("page-too-long", "wiki/sources/src-docs-a-md.md")] == INGEST_ONLY_HINT
+    assert got[("page-too-long", "wiki/concepts/user.md")] == HELD_HINT
+    assert got[("cap-pages-warn", "")] == CAP_HINT
+    consolidate_codes = {"page-too-long", "duplicate-title"}
+    assert {f.code for f, _ in left} <= consolidate_codes | {
+        f.code for f in rep.findings if f.code.startswith("cap-")
+    }

@@ -840,3 +840,39 @@ def test_cli_consolidate_interrupt_exit_130(wiki, monkeypatch):
     r = invoke(wiki, "--yes")
     assert r.exit_code == 130
     assert "interrupted: the consolidate was rolled back" in r.output
+
+
+# --- final review fix wave ---
+
+
+def test_only_unjobbed_findings_is_a_noop_with_hints(wiki, fake_claude, capsys):
+    # R16: a to-be twin of an as-is page gets no merge job, only a hint
+    sso, auth = "requirements.sso", "components.sso"
+    commit_pages(
+        wiki,
+        {
+            sso: text(
+                wiki,
+                sso,
+                "SSO login",
+                body("SSO login"),
+                type_="requirement",
+                status="to-be",
+            ),
+            auth: text(wiki, auth, "SSO login", body("SSO login"), type_="component"),
+        },
+        linked=[sso, auth],
+    )
+    report = run(wiki)
+    out = capsys.readouterr().out
+    assert report.decision == "noop", out
+    assert fake_claude.calls() == []
+    assert branches(wiki) == ["main"]
+    lines = out.splitlines()
+    assert lines[0] == "nothing to consolidate"
+    assert "left for you:" in lines
+    assert any(
+        ln.startswith("  duplicate-title wiki/")
+        and ln.endswith(": a to-be twin of an as-is page: promote it, or retitle one")
+        for ln in lines
+    ), out

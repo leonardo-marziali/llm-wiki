@@ -41,6 +41,8 @@ JobKind = Literal["fix", "split", "merge", "promote", "relink"]
 Mode = Literal["fix", "consolidate"]
 
 MAX_JOBS = 10  # per run, errors first (Ruling 7)
+MAX_PROMOTES = 3  # promote jobs per run; the rest wait (R17)
+MAX_QUESTIONS = 10  # open-questions lines carried per job (R17)
 MAX_INPUTS = 8  # a consolidate job's pages: its targets, then their linkers
 ORPHAN_HOSTS = 3  # search hits offered to an orphan's job as pages to link it from
 PLAN_PROMPTS: dict[Mode, str] = {"fix": "fix.md", "consolidate": "consolidate.md"}
@@ -96,7 +98,17 @@ HINTS: dict[str, str] = {
 HAND_HINT = "fix it by hand"
 # a fixable finding on a source page, which only ingest writes
 SOURCE_PAGE_HINT = "re-run `wiki ingest`"
-_RETIRED = {"deprecated", "superseded"}
+RETIRED = frozenset({"deprecated", "superseded"})
+
+# consolidate's "left for you": why a consolidate finding got no job (R16, #11)
+TWIN_HINT = "a to-be twin of an as-is page: promote it, or retitle one"
+RETIRED_TWIN_HINT = "a retired page shares this title; retitle or relink it"
+TO_BE_PAIR_HINT = "two to-be pages share this title: merge or retitle them by hand"
+NO_ROOM_HINT = "no room to split at the cap: archive or merge first"
+FLAGGED_HINT = "clear the page's secret or injection finding by hand first"
+INGEST_ONLY_HINT = "source pages are written by `wiki ingest`, never consolidated"
+HELD_HINT = "an earlier job of this run holds the page: run `wiki consolidate` again"
+CAP_HINT = "merge and archive pages to free room, or start a new wiki"
 
 # Ruling 4: one copy of the rule, shared with lint --deep
 flagged = flagged_pages
@@ -163,7 +175,7 @@ def _orphan_hosts(
             if (
                 hit_id not in {id_, *exclude}
                 and _section(hit_id) not in sources
-                and hit.status not in _RETIRED
+                and hit.status not in RETIRED
             ):
                 hosts.append(hit_id)
     hosts = hosts[:ORPHAN_HOSTS]
@@ -196,9 +208,11 @@ def _question_lines(root: Path) -> list[tuple[str, set[Path]]]:
 def _questions(
     root: Path, targets: list[str], lines: list[tuple[str, set[Path]]]
 ) -> list[str]:
-    """The open-questions lines that link any of ``targets``."""
+    """The open-questions lines that link any of ``targets`` (the first
+    ``MAX_QUESTIONS``).
+    """
     here = {_page_file(root, t).resolve() for t in targets}
-    return [ln for ln, linked in lines if linked & here]
+    return [ln for ln, linked in lines if linked & here][:MAX_QUESTIONS]
 
 
 def fix_jobs(
@@ -257,7 +271,7 @@ def _live_linker_map(root: Path) -> dict[str, list[str]]:
     out: dict[str, list[str]] = defaultdict(list)
     for i in sorted(pages):
         page = pages[i]
-        if _status(pages, i) in _RETIRED:
+        if _status(pages, i) in RETIRED:
             continue
         for target in sorted(link_targets(page.path.parent, page.body)):
             t = by_path.get(target)
@@ -286,13 +300,54 @@ def _with_linkers(
     return job
 
 
+def _to_be(pages: dict[str, Page], kinds: dict[str, str], id_: str) -> bool:
+    return _status(pages, id_) == "to-be" or kinds.get(_section(id_)) == "to-be"
+
+
+def _unmergeable(
+    pages: dict[str, Page], kinds: dict[str, str], pair: tuple[str, ...]
+) -> str | None:
+    """Why a duplicate-title pair gets no merge job, as its hint (None: it gets
+    one). R16: both pages live, with one status, neither in a to-be section, so
+    a merge never mixes as-is and to-be facts or re-merges a retired stub.
+    """
+    statuses = [_status(pages, i) for i in pair]
+    if any(s in RETIRED for s in statuses):
+        return RETIRED_TWIN_HINT
+    to_be = [_to_be(pages, kinds, i) for i in pair]
+    if all(to_be):
+        return TO_BE_PAIR_HINT
+    if any(to_be):
+        return TWIN_HINT
+    if None in statuses or len(set(statuses)) > 1:
+        return HAND_HINT
+    return None
+
+
 def _candidates(
-    root: Path, report: LintReport, lines: list[tuple[str, set[Path]]]
-) -> list[Job]:
-    """Every consolidate job, in kind order, before selection."""
+    root: Path,
+    cfg: WikiConfig,
+    report: LintReport,
+    lines: list[tuple[str, set[Path]]],
+) -> tuple[list[Job], list[tuple[Finding, str]]]:
+    """Every consolidate job, in kind order (relink, merge, split, promote: R17),
+    before selection, and the duplicate-title pairs that may not be merged, each
+    with its hint (R16).
+    """
     pages = {id_for(p.rel): p for p in iter_pages(root)}
+    kinds = {s.name: s.kind for s in cfg.sections}
     linkers = _live_linker_map(root)
     ids = sorted(pages)
+    merges: list[Job] = []
+    left: list[tuple[Finding, str]] = []
+    for f in report.findings:
+        if f.code != "duplicate-title" or not f.pages:
+            continue
+        why = _unmergeable(pages, kinds, f.pages)
+        if why is None:
+            merges.append(_with_linkers("merge", list(f.pages), linkers, f))
+        else:
+            left.append((f, why))
     promote = [
         Job(
             "promote",
@@ -304,59 +359,99 @@ def _candidates(
         for i in ids
         if _status(pages, i) == "to-be" and (qs := _questions(root, [i], lines))
     ]
-    return [
+    jobs = [
         *(
             Job("relink", [i], [i, *linkers[i]])
             for i in ids
-            if _status(pages, i) in _RETIRED and linkers[i]
+            if _status(pages, i) in RETIRED and linkers[i]
         ),
-        *promote,
-        *(
-            _with_linkers("merge", list(f.pages), linkers, f)
-            for f in report.findings
-            if f.code == "duplicate-title" and f.pages
-        ),
+        *merges,
         *(
             _with_linkers("split", [i], linkers, f)
             for f in report.findings
             if f.code == "page-too-long" and (i := _page_id(f.path)) is not None
         ),
+        *promote,
+    ]
+    return jobs, left
+
+
+def _no_room_to_split(root: Path, cfg: WikiConfig, id_: str) -> bool:
+    """A split creates at least one page: is there no slot for it? (#8)"""
+    caps = cfg.effective_caps()
+    total, per_section = _page_counts(root)
+    section = _section(id_)
+    return total + 1 > caps.max_pages or (
+        section != "" and per_section[section] + 1 > caps.max_section_pages
+    )
+
+
+def _left_reason(
+    job: Job, root: Path, cfg: WikiConfig, bad: set[str], used: set[str]
+) -> str | None:
+    """Why a candidate gets no job this run, as its hint (None: it may run)."""
+    targets = set(job.targets)
+    if targets & bad:
+        return FLAGGED_HINT
+    if job.kind in ("merge", "split") and any(
+        _section(t) in _source_sections(cfg) for t in targets
+    ):
+        return INGEST_ONLY_HINT
+    if targets & used:
+        return HELD_HINT
+    if job.kind == "split" and _no_room_to_split(root, cfg, job.targets[0]):
+        return NO_ROOM_HINT
+    return None
+
+
+def _cap_left(report: LintReport) -> list[tuple[Finding, str]]:
+    """The cap findings, which no job targets: consolidate frees what it can."""
+    return [
+        (f, HINTS[f.code] if f.code.startswith("cap-sources") else CAP_HINT)
+        for f in report.findings
+        if f.code.startswith("cap-")
     ]
 
 
 def consolidate_jobs(
     root: Path, cfg: WikiConfig, report: LintReport
-) -> tuple[list[Job], int]:
-    """relink, promote, merge, then split jobs (at most ``MAX_JOBS``), and how
-    many jobs the cap cut.
+) -> tuple[list[Job], list[tuple[Finding, str]], int]:
+    """relink, merge, split, then promote jobs (at most ``MAX_JOBS``, and at most
+    ``MAX_PROMOTES`` promotes), the consolidate findings that got no job, each
+    with its hint, and how many jobs the caps cut.
 
     Linkers are live linkers (``live_linkers``). A page is in one job at most: a
     later job that would target a page an earlier job holds is skipped, and such
     pages are dropped from its other inputs. Flagged pages are never targets or
-    inputs; source pages are never merged or split.
+    inputs; source pages are never merged or split; a split waits while the cap
+    leaves no room for one new page.
     """
     root = Path(root).resolve()
     bad = _flagged_ids(report)
-    sources = _source_sections(cfg)
     lines = _job_question_lines(root, report)
+    candidates, left = _candidates(root, cfg, report, lines)
     jobs: list[Job] = []
     used: set[str] = set()
-    for job in _candidates(root, report, lines):
-        targets = set(job.targets)
-        if targets & (used | bad):
+    promotes = cut = 0
+    for job in candidates:
+        why = _left_reason(job, root, cfg, bad, used)
+        if why is not None:
+            left += [(f, why) for f in job.findings]
             continue
-        if job.kind in ("merge", "split") and any(
-            _section(t) in sources for t in targets
-        ):
-            continue
-        job.inputs = [i for i in job.inputs if i in targets or i not in used | bad]
+        job.inputs = [i for i in job.inputs if i in job.targets or i not in used | bad]
         job.inputs = job.inputs[:MAX_INPUTS]
         if job.kind == "relink" and len(job.inputs) == 1:
             continue  # every linker is flagged or held by an earlier job
+        if job.kind == "promote":
+            if promotes == MAX_PROMOTES:
+                cut += 1
+                continue
+            promotes += 1
         job.questions = _questions(root, job.targets, lines)
         used |= set(job.inputs)
         jobs.append(job)
-    return jobs[:MAX_JOBS], max(0, len(jobs) - MAX_JOBS)
+    left += _cap_left(report)
+    return jobs[:MAX_JOBS], left, cut + max(0, len(jobs) - MAX_JOBS)
 
 
 # --- the validator ---
@@ -381,10 +476,10 @@ def _successor_live(
         return False
     if s in planned:
         q = planned[s]
-        return q.status not in _RETIRED and (q.action == "create" or s in inputs)
+        return q.status not in RETIRED and (q.action == "create" or s in inputs)
     if s in inputs:
         fm = inputs[s].fm
-        return fm is not None and fm.status not in _RETIRED
+        return fm is not None and fm.status not in RETIRED
     current = inputs[p.id].fm if p.id in inputs else None
     if current is None or current.superseded_by != s or "." not in s:
         return False
@@ -393,7 +488,7 @@ def _successor_live(
         return False
     page = read_page(root, f)
     return (
-        page.fm is not None and page.fm.status not in _RETIRED and not is_flagged(page)
+        page.fm is not None and page.fm.status not in RETIRED and not is_flagged(page)
     )
 
 
@@ -450,7 +545,8 @@ def _consolidate_cap_errors(
     plan: MaintPlan, inputs: dict[str, Page], root: Path, cfg: WikiConfig, kinds: dict
 ) -> list[str]:
     """Like ingest's caps, but an input page this plan retires (sets to superseded
-    or deprecated) frees its slot, so a split or merge can run at the cap.
+    or deprecated) frees its slot for a create. A split still needs room for
+    one new page, so ``consolidate_jobs`` holds it back at the cap.
     """
     creates = [p.id for p in plan.pages if p.action == "create"]
     if not creates:
@@ -461,8 +557,8 @@ def _consolidate_cap_errors(
         p.id
         for p in plan.pages
         if p.action == "update"
-        and p.status in _RETIRED
-        and _status(inputs, p.id) not in (None, *_RETIRED)
+        and p.status in RETIRED
+        and _status(inputs, p.id) not in (None, *RETIRED)
     ]
     errors = []
     if total + len(creates) - len(retired) > caps.max_pages:

@@ -10,7 +10,7 @@ from pathlib import Path
 from llm_wiki import gitops
 from llm_wiki.index import GENERATED_MARK
 from llm_wiki.lint import is_flagged, link_targets
-from llm_wiki.maint import _RETIRED, live_linkers
+from llm_wiki.maint import RETIRED, live_linkers
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import id_for, iter_pages
 
@@ -54,7 +54,7 @@ def _candidates(root: Path) -> dict[str, str]:
         id_ = id_for(p.rel)
         if (
             p.fm is not None
-            and p.fm.status in _RETIRED
+            and p.fm.status in RETIRED
             and id_ not in _ALWAYS_LINKED
             and not is_flagged(p)
             and not live_linkers(root, id_)

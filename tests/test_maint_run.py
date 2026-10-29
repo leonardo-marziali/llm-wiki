@@ -694,3 +694,25 @@ def test_empty_edit_fails_job(wiki, fake_claude):
     assert out.pages_updated == []
     assert read(wiki, "wiki/log.md") == log_before
     assert gitops.git(wiki, "rev-parse", "HEAD") == head
+
+
+# --- final review fix wave ---
+
+
+def test_plan_that_changes_nothing_is_skipped(wiki, fake_claude):
+    # R17: no edit call, no log line, no commit
+    commit_pages(wiki, {A: broken(wiki)})
+    log_before = read(wiki, "wiki/log.md")
+    nothing = {
+        "summary": "Nothing to change",
+        "pages": [],
+        "resolved_questions": [],
+        "open_questions": [],
+    }
+    fake_claude.queue(planned(nothing))
+    report = run(wiki)
+    [out] = report.outcomes
+    assert (out.status, out.reason) == ("skipped", "the plan changes nothing")
+    assert len(fake_claude.calls()) == 1
+    assert read(wiki, "wiki/log.md") == log_before
+    assert out.cost_usd == pytest.approx(0.05)

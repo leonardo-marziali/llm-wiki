@@ -283,6 +283,9 @@ def process_job(ctx: MaintContext, job: Job) -> JobOutcome:
     if plan is None:
         out.reason = "plan rejected: " + "; ".join(errors)
         return out
+    if not (plan.pages or plan.open_questions or plan.resolved_questions):
+        out.status, out.reason = "skipped", "the plan changes nothing"  # R17
+        return out
     plan, _ = redact_plan(plan)
     if screen_plan(plan):
         out.status, out.reason = "skipped", "plan-text injection"
