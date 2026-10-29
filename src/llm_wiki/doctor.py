@@ -480,7 +480,11 @@ def run_doctor(
                 seen.add(settings.model(role))
                 roles.append(role)
         checks.extend(probe_model(r, settings) for r in roles)
-        checks.append(probe_edit_confinement(settings))
-        checks.append(probe_read_denial(settings))
-        checks.append(probe_vision(settings))
+        checks.extend(
+            [
+                probe_edit_confinement(settings),
+                probe_read_denial(settings),
+                probe_vision(settings),
+            ]
+        )
     return checks
