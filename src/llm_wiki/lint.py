@@ -463,8 +463,36 @@ def _placement_issues(page: Page, path: str, ctx: dict) -> list[Finding]:
     return out
 
 
+def glued_footnotes(page: Page) -> list[str]:
+    """Labels of footnote definitions (outside code) that directly follow a text
+    line: one that is neither blank, a definition, nor a definition's indented
+    continuation. Some renderers then read the block as part of the paragraph.
+    """
+    out: list[str] = []
+    prev = "blank"  # the kind of the previous line: blank, note or text
+    for line in _strip_code(page.body):
+        m = _FOOTNOTE.match(line)
+        if m:
+            if prev == "text":
+                out.append(m.group(1))
+            prev = "note"
+        elif not line.strip():
+            prev = "blank"
+        elif not (prev == "note" and line[:1] in " \t"):
+            prev = "text"
+    return out
+
+
 def _footnote_issues(root: Path, page: Page, path: str) -> list[Finding]:
-    out: list[Finding] = []
+    out: list[Finding] = [
+        Finding(
+            "warn",
+            "footnote-spacing",
+            path,
+            f"footnote [^{label}] follows text with no blank line",
+        )
+        for label in glued_footnotes(page)
+    ]
     for m in _FOOTNOTE.finditer("\n".join(_strip_code(page.body))):
         label, target = m.group(1), m.group(2)
         p = _in_raw(root, target)

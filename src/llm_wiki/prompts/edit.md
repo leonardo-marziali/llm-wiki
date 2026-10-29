@@ -30,6 +30,7 @@ everything this section does not say.
 - Cite every claim with a footnote whose definition starts with the `raw/` path,
   then the locator: `[^n]: raw/<path> — <locator>`. Never cite a wiki page or
   `.wiki/converted/`.
+- Keep one blank line between the text and the first footnote definition.
 - On an update, keep the content the plan does not change, with its footnotes.
 
 ## Contradictions

@@ -17,6 +17,7 @@ from llm_wiki.lint import (
     cited_paths,
     footnote_refs,
     footnotes,
+    glued_footnotes,
     link_targets,
     lint,
     routing_error,
@@ -787,3 +788,36 @@ def test_cited_footnotes_need_a_reference():
     assert cited_footnotes(page) == {("raw/x.md", "§1"), ("raw/y.md", "§2")}
     # cited_paths still counts every definition: no new evidence either way
     assert {"raw/z.md", "raw/w.md", "raw/v.md"} <= cited_paths(page)
+
+
+# --- footnote spacing (M6) ---
+
+
+def test_footnote_spacing_glued(root):
+    body = (
+        "# Glued\n\n**TL;DR** Short.\n\nShort fact.[^1]\n[^1]: " + RAW_REL + " — §1\n"
+    )
+    add_page(root, "conventions/glued.md", "Glued", body=body)
+    found = [
+        f
+        for f in lint(root, load_config(root), today=TODAY).findings
+        if f.code == "footnote-spacing"
+    ]
+    assert [(f.severity, f.path, f.message) for f in found] == [
+        (
+            "warn",
+            "wiki/conventions/glued.md",
+            "footnote [^1] follows text with no blank line",
+        )
+    ]
+
+
+def test_footnote_spacing_ignores_code_and_runs():
+    assert glued_footnotes(note_page("[^1]: raw/a.md — §1\nFact.[^1]\n")) == []
+    runs = "Fact.[^1][^2]\n\n[^1]: raw/a.md — §1\n    more locator\n[^2]: raw/b.md\n"
+    assert glued_footnotes(note_page(runs)) == []
+    fenced = "Fact.\n\n```\ntext\n[^9]: raw/c.md\n```\n"
+    assert glued_footnotes(note_page(fenced)) == []
+    assert glued_footnotes(
+        note_page("Fact.[^1]\n[^1]: raw/a.md\n[^2]: raw/b.md\n")
+    ) == ["1"]
