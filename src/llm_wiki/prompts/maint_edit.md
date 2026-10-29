@@ -14,7 +14,8 @@ say.
   and reports it. Never touch `raw/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`,
   `wiki.toml`, `.wiki/`, the indexes, `log.md` or anything under `_archive/`.
 - Read the wiki pages you change, and other pages only to link them or to keep
-  their content. Never read or cite anything under `raw/` or `.wiki/`.
+  their content. Never read or cite anything under `raw/` or `.wiki/`, and
+  never read the files the message lists under "Never read these files".
 
 ## Maintenance rules
 

@@ -15,7 +15,7 @@ from typing import Literal
 import typer
 
 from llm_wiki import gate, gitops
-from llm_wiki.archive import archive_candidates, archive_unlinked
+from llm_wiki.archive import archive_candidates, archive_unlinked, archive_waiting
 from llm_wiki.claude import claude_binary
 from llm_wiki.config import LlmSettings, WikiConfig, load_config, load_llm_settings
 from llm_wiki.deep import run_deep
@@ -53,6 +53,8 @@ class MaintReport:
     branch: str | None = None
     outcomes: list[JobOutcome] = field(default_factory=list)
     archived: list[str] = field(default_factory=list)
+    # retired pages that wait: id -> the files that link them and stay
+    waiting: dict[str, list[str]] = field(default_factory=dict)
     left: list[Finding] = field(default_factory=list)  # left for you (Ruling 3)
     left_hints: list[str] = field(default_factory=list)  # one per ``left`` finding
     more: int = 0  # the jobs over MAX_JOBS, left for the next run
@@ -181,6 +183,7 @@ def _finalize(ctx: MaintContext, base: str, report: MaintReport) -> None:
     if ctx.mode == "consolidate":  # after every job: a page relinked now goes too
         manifest = Manifest.load(root)
         report.archived = archive_unlinked(root, manifest)
+        report.waiting = archive_waiting(root)
         if report.archived:
             manifest.save(root)
             files.append(MANIFEST)
@@ -210,6 +213,13 @@ def _finalize(ctx: MaintContext, base: str, report: MaintReport) -> None:
 
 def _ids(ids: set[str], reviewed: set[str]) -> str:
     return ", ".join(f"{i} !" if i in reviewed else i for i in sorted(ids)) or "none"
+
+
+def _waiting_lines(report: MaintReport) -> list[str]:
+    return [
+        f"waiting: {i} (linked from {', '.join(rels)})"
+        for i, rels in report.waiting.items()
+    ]
 
 
 def _left_lines(report: MaintReport) -> list[str]:
@@ -244,6 +254,7 @@ def summarize_maint(report: MaintReport) -> str:
         lines.append("! = touched a reviewed page: check it before accepting")
     if report.mode == "consolidate":
         lines.append(f"archived: {', '.join(report.archived) or 'none'}")
+        lines += _waiting_lines(report)
     reverted = sorted({p for o in outs for p in o.reverted})
     if reverted:
         lines.append(f"reverted: {', '.join(reverted)}")
@@ -302,8 +313,11 @@ def run_maintenance(
         and not any(f.code == "not-in-index" for f in found.findings)
         and not (mode == "consolidate" and archive_candidates(root))
     ):
+        if mode == "consolidate":
+            report.waiting = archive_waiting(root)
         lines = [
             f"nothing to {'fix' if mode == 'fix' else 'consolidate'}",
+            *_waiting_lines(report),
             *_left_lines(report),
         ]
         if report.cost_usd > 0:  # the --deep pass ran

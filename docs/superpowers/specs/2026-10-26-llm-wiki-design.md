@@ -353,6 +353,12 @@ cross-links.
 - **Dropped findings:** a finding that names pages outside the sample, has the
   wrong number of pages for its kind, or carries injection text is dropped, and
   the report counts the drops. Messages are redacted before they are shown.
+- **Flagged pages in maintenance:** a page with a secret or injection finding
+  (error or warn) gets no `--fix` or `consolidate` job, and its text never
+  enters a plan or deep prompt. A flagged `open-questions.md` is no allowed
+  file of an edit. Edit sessions run in the wiki root with file tools, so they
+  are only told never to read the flagged files or `.wiki/quarantine/`; a
+  deny-read permission rule for them is left to M6.
 
 Exit codes: 0 ok, 1 findings, 2 error.
 

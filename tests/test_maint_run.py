@@ -842,3 +842,48 @@ def test_invalid_frontmatter_page_takes_oldest_input_dates(wiki):
     assert err.code == "maint-dates-changed"
     (wiki / A_REL).write_text(fixed(wiki), encoding="utf-8")
     assert job_edit._date_errors(A_REL, read_page(wiki, wiki / A_REL)) == []
+
+
+SECRET = "\npassword = Sup3rS3cret!x\n"  # a fake password value
+
+
+def test_edit_prompt_names_files_never_to_read(wiki, fake_claude):
+    # R18: the edit session is told never to read flagged pages or quarantine
+    leaky = text(wiki, B, "Beta", body("Beta", extra=SECRET + "\n"))
+    commit_pages(wiki, {A: broken(wiki), B: leaky})
+    fake_claude.queue(planned(mplan()), edit({A_REL: fixed(wiki)}))
+    report = run(wiki, yes=False, interactive=True, decide=lambda s: "reject")
+    assert [o.status for o in report.outcomes] == ["done"]
+    prompt = fake_claude.calls()[1]["stdin"]
+    never = prompt.split("## Never read these files", 1)[1]
+    assert f"- `{B_REL}`" in never
+    assert "- `.wiki/quarantine/`" in never
+    assert f"- `{B_REL}`" not in prompt.split("## Never read these files", 1)[0]
+
+
+def oq_context(wiki, exclude):
+    return MaintContext(
+        root=wiki,
+        cfg=load_config(wiki),
+        settings=LlmSettings(),
+        today=TODAY,
+        run_dir=wiki / ".wiki" / "runs" / "t",
+        n=1,
+        mode="fix",
+        exclude=exclude,
+    )
+
+
+def test_flagged_open_questions_is_no_allowed_file(wiki):
+    question = "- Does [Alpha](concepts/a.md) still link a missing page?"
+    plan = MaintPlan.model_validate(mplan(resolved=[question]))
+    job = Job("fix", [A], [A])
+    clean = _JobEdit(oq_context(wiki, set()), job, plan)
+    assert "wiki/open-questions.md" in clean.session.allowed
+    assert clean.session.oq_removable == {question}
+    flagged = _JobEdit(oq_context(wiki, {"wiki/open-questions.md"}), job, plan)
+    assert "wiki/open-questions.md" not in flagged.session.allowed
+    assert flagged.session.oq_removable == set()
+    allowed, never = flagged.prompt(None).split("## Never read these files", 1)
+    assert "wiki/open-questions.md" not in allowed.split("## Allowed files", 1)[1]
+    assert "- `wiki/open-questions.md`" in never

@@ -876,3 +876,77 @@ def test_only_unjobbed_findings_is_a_noop_with_hints(wiki, fake_claude, capsys):
         and ln.endswith(": a to-be twin of an as-is page: promote it, or retitle one")
         for ln in lines
     ), out
+
+
+def test_archive_waiting_names_the_linking_files(wiki):
+    old, stub, user = "concepts.old", "concepts.stub", "concepts.user"
+    asked = "concepts.asked"
+    commit_pages(
+        wiki,
+        {
+            old: deprecated(wiki, old, "Old thing"),
+            stub: deprecated(wiki, stub, "Stub", link(old)),
+            user: page(wiki, user, "User", link(stub)),
+            asked: deprecated(wiki, asked, "Asked"),
+        },
+        linked=[user],
+    )
+    (wiki / "wiki/open-questions.md").write_text(
+        "# Open questions\n\n- Is [Asked](concepts/asked.md) still true?\n",
+        encoding="utf-8",
+    )
+    gitops.commit_all(wiki, "question")
+    assert archive.archive_waiting(wiki) == {
+        asked: ["wiki/open-questions.md"],
+        old: ["wiki/concepts/stub.md"],
+    }
+
+
+def test_only_waiting_pages_is_a_noop(wiki, fake_claude, capsys):
+    asked = "concepts.asked"
+    commit_pages(wiki, {asked: deprecated(wiki, asked, "Asked")})
+    (wiki / "wiki/open-questions.md").write_text(
+        "# Open questions\n\n- Is [Asked](concepts/asked.md) still true?\n",
+        encoding="utf-8",
+    )
+    gitops.commit_all(wiki, "question")
+    report = run(wiki)
+    out = capsys.readouterr().out
+    assert report.decision == "noop", out
+    assert report.branch is None
+    assert branches(wiki) == ["main"]
+    assert fake_claude.calls() == []
+    assert out.splitlines()[:2] == [
+        "nothing to consolidate",
+        "waiting: concepts.asked (linked from wiki/open-questions.md)",
+    ]
+
+
+def test_summary_lists_waiting_pages(wiki, fake_claude, capsys):
+    # a relink job runs; a page linked only from open-questions.md waits
+    old, user, asked = "concepts.old", "concepts.user", "concepts.asked"
+    commit_pages(
+        wiki,
+        {
+            old: deprecated(wiki, old, "Old thing"),
+            user: page(wiki, user, "User", link(old)),
+            asked: deprecated(wiki, asked, "Asked"),
+        },
+        linked=[user],
+    )
+    (wiki / "wiki/open-questions.md").write_text(
+        "# Open questions\n\n- Is [Asked](concepts/asked.md) still true?\n",
+        encoding="utf-8",
+    )
+    gitops.commit_all(wiki, "question")
+    fake_claude.queue(
+        planned(mplan(mpage(user, "User"))),
+        edit({rel(user): page(wiki, user, "User")}),
+    )
+    report = run(wiki)
+    out = capsys.readouterr().out
+    assert report.decision == "accept", out
+    assert report.archived == [old]
+    assert report.waiting == {asked: ["wiki/open-questions.md"]}
+    assert "archived: concepts.old" in out
+    assert "waiting: concepts.asked (linked from wiki/open-questions.md)" in out

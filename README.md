@@ -76,6 +76,12 @@ move to `<section>/_archive/`. Maintenance never adds evidence or refreshes
 `last_verified`; stale pages and changed sources stay yours to re-check. The
 next `wiki ingest` retries the failed source.
 
+A page with a secret or injection finding gets no maintenance job, and its text
+never enters a plan or `--deep` prompt; when `wiki/open-questions.md` has such a
+finding, no edit may change it. Edit sessions work in the wiki root with file
+tools, so they are only told never to read the flagged files or
+`.wiki/quarantine/`: that part is an instruction, not a sandbox.
+
 ## Upgrading existing wikis
 
 `wiki init` writes a wiki's `AGENTS.md` (its rules for the model) once, and the

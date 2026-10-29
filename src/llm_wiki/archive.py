@@ -40,8 +40,9 @@ def _linked_from(root: Path) -> dict[Path, set[Path]]:
     return out
 
 
-def _candidates(root: Path) -> dict[str, str]:
-    """id -> wiki-root-relative path of every page ``archive_unlinked`` moves.
+def _select(root: Path) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """(id -> wiki-root-relative path of every page ``archive_unlinked`` moves,
+    id -> the root-relative files that hold back each page that waits).
 
     A candidate is retired and has no live linker (``maint.live_linkers``, R10:
     the predicate relink jobs use). It still waits while any file that stays
@@ -49,6 +50,7 @@ def _candidates(root: Path) -> dict[str, str]:
     header): archiving it would break that link. A flagged page stays in sight
     of lint (Ruling 4), and index.md always links the overview and glossary.
     """
+    root = Path(root)
     picked: dict[Path, tuple[str, str]] = {}
     for p in iter_pages(root):
         id_ = id_for(p.rel)
@@ -61,15 +63,29 @@ def _candidates(root: Path) -> dict[str, str]:
         ):
             picked[p.path.resolve()] = (id_, f"wiki/{p.rel}")
     linked_from = _linked_from(root)
+    first = dict(picked)
     while blocked := [t for t in picked if linked_from[t] - set(picked)]:
         for t in blocked:
             del picked[t]
-    return dict(sorted(picked.values()))
+    top = root.resolve()
+    waiting = {
+        id_: sorted(f.relative_to(top).as_posix() for f in linked_from[t] - set(picked))
+        for t, (id_, _) in first.items()
+        if t not in picked
+    }
+    return dict(sorted(picked.values())), dict(sorted(waiting.items()))
 
 
 def archive_candidates(root: Path) -> list[str]:
     """The ids ``archive_unlinked`` would archive now."""
-    return list(_candidates(Path(root)))
+    return list(_select(Path(root))[0])
+
+
+def archive_waiting(root: Path) -> dict[str, list[str]]:
+    """The retired pages without a live linker that still wait, each with the
+    root-relative files that link it and stay.
+    """
+    return _select(Path(root))[1]
 
 
 def _dest(root: Path, rel: str) -> str:
@@ -91,7 +107,7 @@ def archive_unlinked(root: Path, manifest: Manifest) -> list[str]:
     caller saves it). Returns the archived ids.
     """
     root = Path(root)
-    found = _candidates(root)
+    found = _select(root)[0]
     moved: list[str] = []
     made: list[Path] = []  # the _archive/ folders this call creates
     try:
