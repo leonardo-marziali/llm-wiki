@@ -22,7 +22,14 @@ from llm_wiki.errors import STOP, WikiError
 from llm_wiki.gate import LOG, Decision, Undo, plain
 from llm_wiki.index import build_indexes
 from llm_wiki.intake import TMP_DIR
-from llm_wiki.lint import Finding, LintReport, cited_paths, flagged_pages, lint
+from llm_wiki.lint import (
+    Finding,
+    LintReport,
+    cited_paths,
+    flagged_pages,
+    lint,
+    write_report,
+)
 from llm_wiki.maint import Job, Mode, consolidate_jobs, fix_jobs, hint
 from llm_wiki.maint_job import JobOutcome, MaintContext, process_job
 from llm_wiki.manifest import MANIFEST, Manifest
@@ -78,15 +85,22 @@ def _lint(
     run_dir: Path,
     deep: bool,
 ) -> tuple[LintReport, float]:
-    """The lint report, with the ``--deep`` findings merged in, and their cost."""
+    """The lint report, with the ``--deep`` findings merged in, and their cost.
+
+    ``--deep`` writes the report before any job runs (spec §2, R12).
+    """
     found = lint(root, cfg, today=today)
     if not deep:
         return found, 0.0
     result = run_deep(root, cfg, settings, found, run_dir)
-    merged = sorted(
-        [*found.findings, *result.findings], key=lambda f: (f.path, f.code, f.message)
+    merged = LintReport(
+        sorted(
+            [*found.findings, *result.findings],
+            key=lambda f: (f.path, f.code, f.message),
+        )
     )
-    return LintReport(merged), result.cost_usd
+    typer.echo(f"report: {write_report(root, merged, today, result)}")
+    return merged, result.cost_usd
 
 
 def _process(ctx: MaintContext, jobs: list[Job], report: MaintReport) -> None:
@@ -275,13 +289,13 @@ def run_maintenance(
     jobs = _jobs(root, cfg, mode, found, report)
     # finalize's index rebuild is the fix for not-in-index (Ruling 3)
     if not jobs and not any(f.code == "not-in-index" for f in found.findings):
-        report.summary = "\n".join(
-            plain(line)
-            for line in [
-                f"nothing to {'fix' if mode == 'fix' else 'consolidate'}",
-                *_left_lines(report),
-            ]
-        )
+        lines = [
+            f"nothing to {'fix' if mode == 'fix' else 'consolidate'}",
+            *_left_lines(report),
+        ]
+        if report.cost_usd > 0:  # the --deep pass ran
+            lines.append(f"cost ${report.cost_usd:.2f}")
+        report.summary = "\n".join(plain(line) for line in lines)
         typer.echo(report.summary)
         return report
     undo = Undo(root, gate.fresh(root / TMP_DIR / f"{mode}-{run_dir.name}"), run_dir)

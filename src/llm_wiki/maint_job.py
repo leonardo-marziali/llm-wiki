@@ -252,7 +252,11 @@ class _JobEdit:
         return [Finding("error", "maint-dates-changed", rel, msg)]
 
     def commit(self, out: JobOutcome) -> None:
+        """Commit the allowed files the edit changed; with none, the job fails."""
         staged = [p for p in self.session.changed() if p in self.session.allowed]
+        if not staged:
+            out.reason = "the edit changed nothing"
+            return
         message = f"{self.ctx.mode}({self.job.kind}): {', '.join(self.job.targets)}"
         stage_commit(self.root, staged, message, force=staged)
         actions = {p.id: p.action for p in self.plan.pages}

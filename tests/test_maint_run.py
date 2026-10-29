@@ -612,3 +612,85 @@ def test_cli_fix_flag_errors(wiki):
     assert r.exit_code == 2
     assert "--fix" in r.output
     assert "json" in r.output
+
+
+# --- Task 5 follow-ups ---
+
+
+def deep_missing_link(wiki, fake_claude, *more):
+    plain_a = text(wiki, A, "Alpha", body("Alpha", link="the git flow"))
+    commit_pages(wiki, {A: plain_a})
+    finding = {
+        "kind": "missing-link",
+        "pages": [A, GIT],
+        "message": "Alpha should link the git flow page.",
+        "evidence": "Alpha follows the git flow",
+    }
+    fake_claude.queue(planned({"findings": [finding]}, cost=0.5), *more)
+
+
+def test_fix_deep_writes_pre_fix_report(wiki, fake_claude, capsys):
+    # spec §2: --deep writes the report, --fix or not (R12)
+    deep_missing_link(
+        wiki,
+        fake_claude,
+        planned(mplan(mpage(instructions="Link the git flow page."))),
+        edit({A_REL: fixed(wiki)}),
+    )
+    report = run(wiki, deep=True)
+    assert report.decision == "accept"
+    path = wiki / ".wiki" / "reports" / "lint-2026-10-28.md"
+    saved = path.read_text(encoding="utf-8")
+    assert "deep: sampled" in saved
+    assert "### deep-missing-link" in saved
+    assert "Alpha should link the git flow page." in saved
+    assert f"report: {path}" in capsys.readouterr().out
+
+
+def test_cli_fix_deep_report_keeps_deep_findings(wiki, fake_claude):
+    deep_missing_link(
+        wiki,
+        fake_claude,
+        planned(mplan(mpage(instructions="Link the git flow page."))),
+        edit({A_REL: fixed(wiki)}),
+    )
+    r = invoke(wiki, "--fix", "--deep", "--yes", "--report")
+    assert r.exit_code == 0, r.output
+    [path] = (wiki / ".wiki" / "reports").glob("lint-*.md")
+    assert "deep-missing-link" in path.read_text(encoding="utf-8")
+
+
+def test_noop_prints_cost(wiki, fake_claude, capsys):
+    fake_claude.queue(planned({"findings": []}, cost=0.5))
+    report = run(wiki, deep=True)
+    out = capsys.readouterr().out
+    assert report.decision == "noop"
+    assert "nothing to fix" in out
+    assert "cost $0.50" in out
+
+
+def test_noop_without_cost_prints_no_cost(wiki, fake_claude, capsys):
+    run(wiki)
+    assert "cost" not in capsys.readouterr().out
+
+
+def test_empty_edit_fails_job(wiki, fake_claude):
+    # an orphan (a warning): the edit's lint passes although it changed nothing
+    commit_pages(wiki, {A: fixed(wiki)})
+    overview = wiki / "wiki/overview.md"
+    overview.write_text(
+        read(wiki, "wiki/overview.md").replace("- [a](concepts/a.md)\n", ""),
+        encoding="utf-8",
+    )
+    gitops.commit_all(wiki, "orphan")
+    log_before = read(wiki, "wiki/log.md")
+    head = gitops.git(wiki, "rev-parse", "HEAD")
+    fake_claude.queue(
+        planned(mplan(mpage(instructions="Link it from the overview."))), edit({})
+    )
+    report = run(wiki)
+    [out] = report.outcomes
+    assert (out.status, out.reason) == ("failed", "the edit changed nothing")
+    assert out.pages_updated == []
+    assert read(wiki, "wiki/log.md") == log_before
+    assert gitops.git(wiki, "rev-parse", "HEAD") == head

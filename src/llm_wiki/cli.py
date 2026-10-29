@@ -138,13 +138,17 @@ def lint(
     strict: bool = typer.Option(False, "--strict", help="Fail on warnings too."),
     fmt: str = typer.Option("text", "--format", help=_FORMAT_HELP),
     report_file: bool = typer.Option(
-        False, "--report", help="Also write .wiki/reports/lint-<date>.md."
+        False,
+        "--report",
+        help="Also write .wiki/reports/lint-<date>.md (with --fix: after the "
+        "fixes, unless --deep wrote it).",
     ),
     deep: bool = typer.Option(
         False,
         "--deep",
         help="Also run a sampled LLM pass for contradictions, stale claims and "
-        "missing pages or links; always writes the report.",
+        "missing pages or links; always writes the report (with --fix: before "
+        "the fixes, with the deep findings).",
     ),
     fix: bool = typer.Option(
         False,
@@ -240,7 +244,7 @@ def _lint_fix(ref, *, deep: bool, yes: bool, strict: bool, report_file: bool) ->
     today = date.today()
     report = run_lint(ref.path, load_config(ref.path), today=today)
     typer.echo(f"{report.errors} errors, {report.warnings} warnings")
-    if report_file:
+    if report_file and not deep:  # --deep wrote it, with the deep findings
         typer.echo(f"report: {write_report(ref.path, report, today)}")
     if result.exit_code or report.errors or (strict and report.warnings):
         raise typer.Exit(1)
