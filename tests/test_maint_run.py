@@ -204,6 +204,23 @@ def test_fix_broken_link_accept(wiki, fake_claude, capsys):
     assert not any((wiki / ".wiki" / "tmp").glob("*"))
 
 
+def test_fix_frontmatter_invalid_page_with_sources(wiki, fake_claude):
+    bad = fixed(wiki).replace("type: concept", "type: bogus", 1)
+    commit_pages(wiki, {A: bad}, index=False)
+    fake_claude.queue(
+        planned(
+            mplan(
+                mpage(instructions="Set type to concept.", reason="frontmatter-invalid")
+            )
+        ),
+        edit({A_REL: fixed(wiki)}),
+    )
+    report = run(wiki)
+    assert [o.status for o in report.outcomes] == ["done"], report.outcomes[0].reason
+    assert "maint-sha-changed" not in report.outcomes[0].reason
+    assert "type: concept" in read(wiki, A_REL)
+
+
 def test_fix_noop_nothing_to_fix(wiki, fake_claude, capsys):
     page = wiki / "wiki/conventions/git-flow.md"
     page.write_text(

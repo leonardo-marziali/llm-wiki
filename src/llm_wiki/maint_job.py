@@ -24,7 +24,7 @@ from llm_wiki.maint import (
     build_maint_plan_prompt,
     validate_maint_plan,
 )
-from llm_wiki.pages import Page, read_page
+from llm_wiki.pages import Page, page_sources, read_page
 from llm_wiki.plan import _parse, _save_run, redact_plan, screen_plan, system_prompt
 from llm_wiki.schemas import MAINT_SCHEMA, MaintPlan
 from llm_wiki.session import OPEN_QUESTIONS, EditSession, SessionFailed
@@ -159,9 +159,7 @@ class _JobEdit:
             if (raw := _in_raw(self.root, target)) is not None and raw.is_file()
         }
         # the (path, sha256) pairs an edit may carry: never a new or cleared sha
-        self.shas = {
-            (s.path, s.sha256) for p in inputs if p.fm is not None for s in p.fm.sources
-        }
+        self.shas = {(s.path, s.sha256) for p in inputs for s in page_sources(p)}
         self.oldest = _oldest(inputs)
 
     def _dates(self, rel: str) -> str:

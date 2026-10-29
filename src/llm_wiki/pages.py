@@ -172,6 +172,26 @@ def read_page(root: Path, path: Path) -> Page:
     )
 
 
+def page_sources(page: Page) -> list[SourceRef]:
+    """The page's ``sources``; for invalid frontmatter, each entry that validates
+    on its own, so a page under repair keeps its (path, sha256) pairs.
+    """
+    if page.fm is not None:
+        return page.fm.sources
+    try:
+        data, _ = split_frontmatter(page.path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # unreadable, not UTF-8, malformed YAML
+        return []
+    items = data.get("sources") if data is not None else None
+    out: list[SourceRef] = []
+    for item in items if isinstance(items, list) else ():
+        try:
+            out.append(SourceRef.model_validate(item))
+        except ValidationError:
+            continue
+    return out
+
+
 def iter_pages(root: Path) -> Iterator[Page]:
     wiki = root / "wiki"
     paths = [

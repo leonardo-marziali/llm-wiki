@@ -8,6 +8,7 @@ from llm_wiki.pages import (
     Frontmatter,
     id_for,
     iter_pages,
+    page_sources,
     read_page,
     render_frontmatter,
     split_frontmatter,
@@ -168,3 +169,45 @@ def test_source_path_rejects_dotdot(tmp_path):
     assert page.fm is None
     assert page.error
     assert "path" in page.error
+
+
+SRC_OK = f"- path: raw/a.md\n  sha256: {SHA}\n  locator: §1\n"
+SRC_BAD = "- path: raw/b.md\n  sha256: xyz\n  locator: §2\n"
+
+
+def test_page_sources_valid_fm(tmp_path):
+    p = write(tmp_path, "a/x.md", fm_text(sources="\n" + SRC_OK))
+    page = read_page(tmp_path, p)
+    assert page.fm is not None
+    assert page_sources(page) == page.fm.sources
+
+
+def test_page_sources_invalid_fm_keeps_valid_entries(tmp_path):
+    p = write(
+        tmp_path, "a/x.md", fm_text(type="bogus", sources="\n" + SRC_OK + SRC_BAD)
+    )
+    page = read_page(tmp_path, p)
+    assert page.fm is None
+    assert [(s.path, s.sha256) for s in page_sources(page)] == [("raw/a.md", SHA)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "---\nid: [unclosed\n---\nbody\n",
+        "# no frontmatter\n",
+        fm_text(type="bogus", sources='"a string"'),
+        fm_text(type="bogus", sources="\n- just a string\n"),
+    ],
+)
+def test_page_sources_lenient_cases(tmp_path, text):
+    page = read_page(tmp_path, write(tmp_path, "a/x.md", text))
+    assert page.fm is None
+    assert page_sources(page) == []
+
+
+def test_page_sources_non_utf8(tmp_path):
+    p = tmp_path / "wiki" / "a" / "x.md"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"---\nsources: \xff\n---\n")
+    assert page_sources(read_page(tmp_path, p)) == []

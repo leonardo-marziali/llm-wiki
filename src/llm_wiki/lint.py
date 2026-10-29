@@ -22,6 +22,7 @@ from llm_wiki.pages import (
     Page,
     id_for,
     iter_pages,
+    page_sources,
 )
 from llm_wiki.screen import find_injection, redact
 
@@ -334,7 +335,7 @@ def cited_footnotes(page: Page) -> set[tuple[str, str]]:
 
 def cited_paths(page: Page) -> set[str]:
     """The raw paths ``page`` cites: its ``sources`` and its footnote targets."""
-    paths = {src.path for src in page.fm.sources} if page.fm is not None else set()
+    paths = {src.path for src in page_sources(page)}
     return paths | {target for _, target, _ in footnotes(page)}
 
 
