@@ -43,7 +43,7 @@ from llm_wiki.intake import (
     trust,
     write_note,
 )
-from llm_wiki.lint import Finding, lint
+from llm_wiki.lint import SOURCES_HINT, Finding, lint
 from llm_wiki.manifest import MANIFEST, Manifest, sha256_file
 from llm_wiki.pages import read_page
 from llm_wiki.registry import WikiRef
@@ -59,7 +59,6 @@ _LOG_OP = {
     "deleted": "delete",
 }
 _MAX_TITLES = 5
-_HINT = "run `wiki consolidate` or start a new wiki"
 _UNVERIFIED = re.compile(r"^\s*>\s*\[!unverified\]", re.IGNORECASE | re.MULTILINE)
 
 
@@ -228,7 +227,7 @@ def _within_source_cap(
             where = item.rel
         typer.echo(
             f"refused: {item.rel}: a new source would exceed the cap of {cap} "
-            f"sources; {_HINT}. It stays in {where}"
+            f"sources; {SOURCES_HINT}. It stays in {where}"
         )
     return out
 

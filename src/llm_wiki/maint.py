@@ -14,6 +14,7 @@ from llm_wiki.config import WikiConfig
 from llm_wiki.init import sections_table
 from llm_wiki.lint import (
     CONSOLIDATE_HINT,
+    SOURCES_HINT,
     Finding,
     LintReport,
     cited_paths,
@@ -67,9 +68,6 @@ FIX_CODES = frozenset(
     }
 )
 _CONSOLIDATE = "run `wiki consolidate`"
-_SOURCES_HINT = (
-    "remove raw sources you no longer need and run `wiki ingest`, or start a new wiki"
-)
 # Ruling 3: never sent to a model, or left for `wiki consolidate`
 HINTS: dict[str, str] = {
     "secret-in-page": "remove the secret from the page by hand (and rotate it)",
@@ -85,8 +83,8 @@ HINTS: dict[str, str] = {
     ),
     "sha-mismatch": "run `wiki ingest`",
     "duplicate-id": "give each page the id its path implies, by hand",
-    "cap-sources": _SOURCES_HINT,
-    "cap-sources-warn": _SOURCES_HINT,
+    "cap-sources": SOURCES_HINT,
+    "cap-sources-warn": SOURCES_HINT,
     "page-too-long": _CONSOLIDATE,
     "duplicate-title": _CONSOLIDATE,
     "cap-pages": _CONSOLIDATE,

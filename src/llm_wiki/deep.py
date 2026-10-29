@@ -8,9 +8,8 @@ from pydantic import ValidationError
 from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.errors import ClaudeError
-from llm_wiki.ingest import page_rel
 from llm_wiki.lint import Finding, LintReport, flagged_pages
-from llm_wiki.pages import Page, iter_pages
+from llm_wiki.pages import Page, id_for, iter_pages
 from llm_wiki.plan import _save_run, indexes_block, new_nonce, system_prompt
 from llm_wiki.schemas import DEEP_SCHEMA, DeepFinding, DeepReply
 from llm_wiki.screen import find_injection, redact
@@ -39,6 +38,13 @@ def _text(page: Page) -> str:
     return page.path.read_text(encoding="utf-8")
 
 
+def _id(page: Page) -> str:
+    """The id the page's path implies: an ``id-mismatch`` never names a missing
+    file, and a dotless id never reaches ``page_rel``.
+    """
+    return id_for(page.rel)
+
+
 def sample_pages(root: Path, report: LintReport) -> tuple[list[Page], int]:
     """The pages for the deep call, and how many pages were eligible.
 
@@ -52,10 +58,10 @@ def sample_pages(root: Path, report: LintReport) -> tuple[list[Page], int]:
         for p in iter_pages(Path(root))
         if p.fm is not None and "wiki/" + p.rel not in flagged
     ]
-    sample = [p for name in _ALWAYS for p in eligible if p.fm and p.fm.id == name]
+    sample = [p for name in _ALWAYS for p in eligible if _id(p) == name]
     others = sorted(
         (p for p in eligible if p not in sample),
-        key=lambda p: (p.fm.last_verified, p.fm.id),  # type: ignore[union-attr]
+        key=lambda p: (p.fm.last_verified, _id(p)),  # type: ignore[union-attr]
     )
     total = 0
     for p in others:
@@ -79,9 +85,8 @@ def build_deep_prompt(
         ),
     ]
     for p in sample:
-        assert p.fm is not None
         blocks.append(
-            f"<untrusted-page-{nonce}>\nid: {p.fm.id}\n\n{_text(p).rstrip()}\n"
+            f"<untrusted-page-{nonce}>\nid: {_id(p)}\n\n{_text(p).rstrip()}\n"
             f"</untrusted-page-{nonce}>"
         )
     return "\n\n".join(blocks) + "\n"
@@ -100,12 +105,12 @@ def _valid(f: DeepFinding, ids: set[str]) -> bool:
     )
 
 
-def _as_finding(f: DeepFinding) -> Finding:
+def _as_finding(f: DeepFinding, rels: dict[str, str]) -> Finding:
     message, evidence = redact(f.message)[0], redact(f.evidence)[0]
     return Finding(
         "warn",
         f"deep-{f.kind}",
-        page_rel(f.pages[0]),
+        rels[f.pages[0]],
         f"{message} (pages: {', '.join(f.pages)}; evidence: {evidence})",
         tuple(f.pages),
     )
@@ -142,10 +147,10 @@ def run_deep(
             f"the deep reply does not match its schema: {exc.error_count()} errors",
             cost_usd=result.cost_usd,
         ) from None
-    ids = {p.fm.id for p in sample if p.fm}
-    kept = [f for f in reply.findings if _valid(f, ids)]
+    rels = {_id(p): f"wiki/{p.rel}" for p in sample}
+    kept = [f for f in reply.findings if _valid(f, set(rels))]
     return DeepResult(
-        [_as_finding(f) for f in kept],
+        [_as_finding(f, rels) for f in kept],
         len(sample),
         eligible,
         len(reply.findings) - len(kept),

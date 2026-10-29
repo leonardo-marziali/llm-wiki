@@ -294,3 +294,49 @@ def test_deep_page_text_wrapped_with_nonce(root, fake_claude, tmp_path):
 def test_write_report_without_deep_has_no_deep_line(root):
     path = write_report(root, LintReport([]), TODAY)
     assert "deep:" not in path.read_text(encoding="utf-8")
+
+
+# --- final review fix wave ---
+
+
+def test_deep_ids_come_from_the_path(root, fake_claude, tmp_path):
+    # an id-mismatch and a dotless id: the sample and the findings use the
+    # path's id, so page_rel never crashes and no finding names a missing file
+    path = add_page(root, "conventions.real", "Real")
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "id: conventions.real", "id: conventions.ghost"
+        ),
+        encoding="utf-8",
+    )
+    notes = root / "wiki" / "notes.md"
+    notes.write_text(page_text("notes", "Notes", "# N\n\n**TL;DR** n.\n"))
+    reply = {
+        "findings": [
+            finding("stale-claim", ["conventions.real"], "Real is old."),
+            finding("stale-claim", ["notes"], "Notes are old."),
+            finding("stale-claim", ["conventions.ghost"], "Ghost."),
+        ]
+    }
+    fake_claude.queue({"stdout": ok(structured=reply)})
+    result = deep_run(root, tmp_path)
+    (c,) = fake_claude.calls()
+    headers = set(re.findall(r"<untrusted-page-[0-9a-f]{16}>\nid: (\S+)", c["stdin"]))
+    assert {"conventions.real", "notes"} <= headers
+    assert "conventions.ghost" not in headers
+    assert sorted(f.path for f in result.findings) == [
+        "wiki/conventions/real.md",
+        "wiki/notes.md",
+    ]
+    assert result.dropped == 1
+    assert all((root / f.path).is_file() for f in result.findings)
+
+
+def test_failed_deep_call_prints_its_cost(root, fake_claude, monkeypatch):
+    monkeypatch.chdir(root)
+    bad = {"stdout": {**ok(cost=0.3), "is_error": True, "result": "boom"}, "exit": 1}
+    fake_claude.queue(bad)
+    r = CliRunner().invoke(app, ["lint", "--wiki", str(root), "--deep"])
+    assert r.exit_code == 2
+    assert "cost $0.30" in r.stderr
+    assert r.stderr.index("cost $0.30") < r.stderr.index("error:")

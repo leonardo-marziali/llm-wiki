@@ -69,10 +69,15 @@ its `max_*`. Near a cap, `wiki status` prints a `near cap:` line. At the page
 cap, ingest still updates existing pages but refuses new ones: the source is
 kept in `raw/` as failed, and the message ends with "run `wiki consolidate` or
 start a new wiki". `wiki consolidate` then frees room on a branch, behind the
-same gate: it merges duplicate titles (one page becomes a `superseded` stub),
-splits pages over 400 lines, promotes to-be pages whose fact is now built, and
-retargets links to retired pages. Retired pages that nothing links to any more
-move to `<section>/_archive/`. Maintenance never adds evidence or refreshes
+same gate: it retargets links to retired pages, merges duplicate titles (one
+page becomes a `superseded` stub; a to-be twin of an as-is page or a retired
+page is left to you), splits pages over 400 lines while the cap leaves room for
+one new page, and promotes to-be pages whose fact is now built (at most 3 a
+run). Retired pages that nothing links to any more move to
+`<section>/_archive/`, and their ids are never reused; the summary names each
+retired page that still waits and the files that link it. At the source cap,
+ingest refuses new sources instead: start a new wiki or delete obsolete raw
+sources. Maintenance never adds evidence or refreshes
 `last_verified`; stale pages and changed sources stay yours to re-check. The
 next `wiki ingest` retries the failed source.
 

@@ -953,7 +953,9 @@ def test_sources_cap_refuses_new_sources_before_any_call(wiki, fake_claude, caps
     assert report.exit_code == 0
     assert "inbox/deploy.md" in out
     assert "cap of 1 sources" in out
-    assert "wiki consolidate" in out
+    # consolidate frees pages, not sources (#7)
+    assert "start a new wiki or delete obsolete raw sources" in out
+    assert "wiki consolidate" not in out
     assert inbox_files(wiki) == ["inbox/deploy.md"]
     assert branches(wiki) == ["main"]
 

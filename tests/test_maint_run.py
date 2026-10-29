@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from llm_wiki import claude, gitops, maint_run
 from llm_wiki.cli import app
 from llm_wiki.config import LlmSettings, load_config
-from llm_wiki.errors import WikiError
+from llm_wiki.errors import ClaudeError, WikiError
 from llm_wiki.index import build_indexes
 from llm_wiki.maint import Job, Mode
 from llm_wiki.maint_job import MaintContext, _JobEdit
@@ -887,3 +887,11 @@ def test_flagged_open_questions_is_no_allowed_file(wiki):
     allowed, never = flagged.prompt(None).split("## Never read these files", 1)
     assert "wiki/open-questions.md" not in allowed.split("## Allowed files", 1)[1]
     assert "- `wiki/open-questions.md`" in never
+
+
+def test_failed_deep_call_of_fix_prints_its_cost(wiki, fake_claude, capsys):
+    fake_claude.queue(failing("boom", cost=0.3))
+    with pytest.raises(ClaudeError):
+        run(wiki, deep=True)
+    assert "cost $0.30" in capsys.readouterr().err
+    assert branches(wiki) == ["main"]

@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from llm_wiki.config import load_config
+from llm_wiki.lint import SOURCES_HINT
 from llm_wiki.manifest import Manifest
 from llm_wiki.pages import iter_pages
 from llm_wiki.registry import WikiRef
@@ -81,10 +82,7 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
         near_cap.append(f"pages {pages}/{caps.max_pages}: run `wiki consolidate`")
     live = manifest.live()
     if live >= caps.warn_sources:
-        near_cap.append(
-            f"sources {live}/{caps.max_sources}: "
-            "start a new wiki or delete obsolete raw sources"
-        )
+        near_cap.append(f"sources {live}/{caps.max_sources}: {SOURCES_HINT}")
 
     return WikiStatus(
         name=ref.name,

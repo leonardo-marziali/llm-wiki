@@ -131,6 +131,17 @@ def test_create_existing_rejected(root):
     assert any("conventions.git-flow" in e and "already exists" in e for e in errors)
 
 
+def test_create_archived_id_rejected(root):
+    archived = root / "wiki" / "conventions" / "_archive" / "old-flow.md"
+    archived.parent.mkdir()
+    archived.write_text("archived\n", encoding="utf-8")
+    errors = check(root, page("conventions.old-flow"))
+    assert (
+        "conventions.old-flow: id conventions.old-flow is archived; ids are never "
+        "reused"
+    ) in errors
+
+
 def test_update_missing_rejected(root):
     errors = check(root, page("concepts.ghost", action="update"))
     assert any("concepts.ghost" in e and "does not exist" in e for e in errors)

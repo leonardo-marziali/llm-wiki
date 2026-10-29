@@ -19,7 +19,7 @@ from llm_wiki.archive import archive_candidates, archive_unlinked, archive_waiti
 from llm_wiki.claude import claude_binary
 from llm_wiki.config import LlmSettings, WikiConfig, load_config, load_llm_settings
 from llm_wiki.deep import run_deep
-from llm_wiki.errors import STOP, WikiError
+from llm_wiki.errors import STOP, ClaudeError, WikiError
 from llm_wiki.gate import LOG, Decision, Undo, plain
 from llm_wiki.index import build_indexes
 from llm_wiki.intake import TMP_DIR
@@ -96,7 +96,11 @@ def _lint(
     found = lint(root, cfg, today=today)
     if not deep:
         return found, 0.0
-    result = run_deep(root, cfg, settings, found, run_dir)
+    try:
+        result = run_deep(root, cfg, settings, found, run_dir)
+    except ClaudeError as exc:  # what the failed call billed, then exit 2
+        typer.echo(f"cost ${exc.cost_usd:.2f}", err=True)
+        raise
     merged = LintReport(
         sorted(
             [*found.findings, *result.findings],

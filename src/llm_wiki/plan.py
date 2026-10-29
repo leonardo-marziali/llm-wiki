@@ -78,9 +78,12 @@ def _id_errors(p: PlannedPage, kinds: dict[str, str]) -> list[str]:
 
 
 def _existence_error(p: PlannedPage, root: Path) -> str | None:
-    exists = _page_file(root, p.id).is_file()
+    f = _page_file(root, p.id)
+    exists = f.is_file()
     if p.action == "create" and exists:
         return f"{p.id}: action is create but the page already exists"
+    if p.action == "create" and (f.parent / "_archive" / f.name).is_file():
+        return f"{p.id}: id {p.id} is archived; ids are never reused"
     if p.action == "update" and not exists:
         return f"{p.id}: action is update but the page does not exist"
     return None

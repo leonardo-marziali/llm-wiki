@@ -1005,3 +1005,18 @@ def test_consolidate_left_lists_every_unjobbed_finding(root):
     assert {f.code for f, _ in left} <= consolidate_codes | {
         f.code for f in rep.findings if f.code.startswith("cap-")
     }
+
+
+@pytest.mark.parametrize(
+    ("id_", "archived_rel"),
+    [
+        ("concepts.gone", "wiki/concepts/_archive/gone.md"),
+        ("components.old-cache", "wiki/components/_archive/old-cache.md"),
+    ],
+)
+def test_archived_id_is_never_reused(root, id_, archived_rel):
+    (root / archived_rel).parent.mkdir(parents=True)
+    (root / archived_rel).write_text("archived\n", encoding="utf-8")
+    errors = check(root, mplan(mpage(id_)))
+    assert f"{id_}: id {id_} is archived; ids are never reused" in errors
+    assert check(root, mplan(mpage("concepts.fresh"))) == []

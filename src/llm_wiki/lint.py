@@ -278,6 +278,8 @@ def _routing(kind: str, page: Page) -> str | None:
 
 
 CONSOLIDATE_HINT = "run `wiki consolidate` or start a new wiki"
+# consolidate frees pages, never sources
+SOURCES_HINT = "start a new wiki or delete obsolete raw sources"
 
 
 def _cap(

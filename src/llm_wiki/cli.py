@@ -9,7 +9,7 @@ import typer
 from typer.core import TyperGroup
 
 from llm_wiki import __version__
-from llm_wiki.errors import WikiError
+from llm_wiki.errors import ClaudeError, WikiError
 
 _WIKI_HELP = "Wiki name or path."
 _FORMAT_HELP = "text or json."
@@ -189,9 +189,13 @@ def lint(
     if deep:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         run_dir = fresh(ref.path / ".wiki" / "runs" / f"deep-{stamp}")
-        deep_result = run_deep(
-            ref.path, cfg, load_llm_settings(ref.path), report, run_dir
-        )
+        try:
+            deep_result = run_deep(
+                ref.path, cfg, load_llm_settings(ref.path), report, run_dir
+            )
+        except ClaudeError as exc:  # what the failed call billed, then exit 2
+            typer.echo(f"cost ${exc.cost_usd:.2f}", err=True)
+            raise
         merged = sorted(
             [*report.findings, *deep_result.findings],
             key=lambda f: (f.path, f.code, f.message),
