@@ -146,6 +146,15 @@ def lint(
         help="Also run a sampled LLM pass for contradictions, stale claims and "
         "missing pages or links; always writes the report.",
     ),
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Repair the findings through planned, confined edits on a branch, "
+        "then accept or reject them at one gate.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="With --fix: accept without asking when lint passes."
+    ),
 ) -> None:
     """Check the page contract, links, citations and caps."""
     from datetime import date, datetime
@@ -159,7 +168,14 @@ def lint(
     from llm_wiki.lint import lint as run_lint
 
     _check_format(fmt)
+    if yes and not fix:
+        raise WikiError("--yes needs --fix")
+    if fix and fmt == "json":
+        raise WikiError("--fix prints text only; drop --format json")
     ref = registry.resolve(wiki, Path.cwd())
+    if fix:
+        _lint_fix(ref, deep=deep, yes=yes, strict=strict, report_file=report_file)
+        return
     if deep:
         claude_binary()  # a missing CLI stops here, before any work
     today = date.today()
@@ -202,6 +218,31 @@ def lint(
     if deep_result is not None:
         typer.echo(f"cost ${deep_result.cost_usd:.2f}", err=fmt == "json")
     if report.errors or (strict and report.warnings):
+        raise typer.Exit(1)
+
+
+def _lint_fix(ref, *, deep: bool, yes: bool, strict: bool, report_file: bool) -> None:
+    """``wiki lint --fix``: the run, then a lint of the base it left."""
+    from datetime import date
+
+    from llm_wiki import maint_run
+    from llm_wiki.config import load_config
+    from llm_wiki.lint import lint as run_lint
+    from llm_wiki.lint import write_report
+
+    try:
+        result = maint_run.run_maintenance(
+            ref, mode="fix", deep=deep, yes=yes, interactive=sys.stdin.isatty()
+        )
+    except KeyboardInterrupt:
+        typer.echo("interrupted: the fix was rolled back", err=True)
+        raise typer.Exit(130) from None
+    today = date.today()
+    report = run_lint(ref.path, load_config(ref.path), today=today)
+    typer.echo(f"{report.errors} errors, {report.warnings} warnings")
+    if report_file:
+        typer.echo(f"report: {write_report(ref.path, report, today)}")
+    if result.exit_code or report.errors or (strict and report.warnings):
         raise typer.Exit(1)
 
 

@@ -14,7 +14,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal, Protocol
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from llm_wiki import claude
 from llm_wiki.config import LlmSettings, WikiConfig
@@ -569,11 +569,14 @@ def _save_run(run_dir: Path, name: str, result: claude.Result) -> None:
         )
 
 
-def _parse(structured: dict | None) -> tuple[Plan | None, list[str]]:
+def _parse[M: BaseModel](
+    structured: dict | None, model: type[M] = Plan
+) -> tuple[M | None, list[str]]:
+    """The reply as a ``model`` (ingest's Plan, or maint's MaintPlan), or why not."""
     if structured is None:
         return None, ["the reply carried no structured plan"]
     try:
-        return Plan.model_validate(structured), []
+        return model.model_validate(structured), []
     except ValidationError as exc:
         return None, [
             f"{'.'.join(str(x) for x in err['loc']) or 'plan'}: {err['msg']}"
@@ -687,16 +690,16 @@ def _redact_value(value: object, counts: Counter[str]) -> object:
     return value
 
 
-def redact_plan(plan: Plan) -> tuple[Plan, Counter[str]]:
-    """The plan with every string redacted, and the redaction counts: a secret
-    read from an image never passed the text screen.
+def redact_plan[M: BaseModel](plan: M) -> tuple[M, Counter[str]]:
+    """The plan (a Plan or a MaintPlan) with every string redacted, and the
+    redaction counts: a secret read from an image never passed the text screen.
     """
     counts: Counter[str] = Counter()
     data = _redact_value(plan.model_dump(), counts)
-    return (Plan.model_validate(data) if counts else plan), counts
+    return (type(plan).model_validate(data) if counts else plan), counts
 
 
-def screen_plan(plan: Plan) -> list[Hit]:
+def screen_plan(plan: BaseModel) -> list[Hit]:
     """Injection hits in the plan's own text, which an image source can smuggle.
 
     Every string is screened, so a field added later cannot be missed.

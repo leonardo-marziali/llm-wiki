@@ -33,7 +33,9 @@ Severity = Literal["error", "warn"]
 LOG_RE = r"^## \[\d{4}-\d{2}-\d{2}\] [a-z-]+ \| .+$"
 _LOG = re.compile(LOG_RE)
 _ID = re.compile(ID_RE)
-_FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*(\S+)", re.MULTILINE)
+# a footnote definition: label, target, then the locator text after it
+_FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*(\S+)(.*)$", re.MULTILINE)
+_LOCATOR_LEAD = " \t—–-:,;"
 _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 _HEADING = re.compile(r"^(#{1,6})\s++(.*)$")
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -296,11 +298,21 @@ def _cap(
         out.append(Finding("warn", code + "-warn", path, msg))
 
 
+def footnotes(page: Page) -> set[tuple[str, str]]:
+    """(target, locator) of each footnote definition outside code; the locator
+    is the text after the target, without its leading dash and spacing.
+    """
+    body = "\n".join(_strip_code(page.body))
+    return {
+        (m.group(2), " ".join(m.group(3).split()).lstrip(_LOCATOR_LEAD))
+        for m in _FOOTNOTE.finditer(body)
+    }
+
+
 def cited_paths(page: Page) -> set[str]:
     """The raw paths ``page`` cites: its ``sources`` and its footnote targets."""
     paths = {src.path for src in page.fm.sources} if page.fm is not None else set()
-    body = "\n".join(_strip_code(page.body))
-    return paths | {m.group(2) for m in _FOOTNOTE.finditer(body)}
+    return paths | {target for target, _ in footnotes(page)}
 
 
 def _wiki_rel(rel: str) -> str:
