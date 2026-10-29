@@ -61,6 +61,7 @@ class Finding:
     code: str
     path: str  # wiki-root-relative (e.g. "wiki/x/y.md") or ""
     message: str
+    pages: tuple[str, ...] = ()  # page ids a finding names (deep, duplicate-title)
 
 
 @dataclass
@@ -138,6 +139,13 @@ def _md_links(text: str) -> list[str]:
 
 def _resolve(base_dir: Path, target: str) -> Path:
     return (base_dir / target).resolve()
+
+
+def link_targets(base_dir: Path, text: str) -> set[Path]:
+    """Resolved targets of the relative ``.md`` links in ``text``, a file in
+    ``base_dir``.
+    """
+    return {_resolve(base_dir, t) for t in _md_links(text)}
 
 
 def _in_raw(root: Path, target: str) -> Path | None:
@@ -490,8 +498,7 @@ def _inbound(pages: list[Page]) -> set[Path]:
     """Targets of links between pages; system files (indexes, log) do not count."""
     inbound: set[Path] = set()
     for p in pages:
-        here = p.path.resolve()
-        inbound |= {_resolve(p.path.parent, t) for t in _md_links(p.body)} - {here}
+        inbound |= link_targets(p.path.parent, p.body) - {p.path.resolve()}
     return inbound
 
 
@@ -535,7 +542,10 @@ def _duplicate_titles(valid: list[Page]) -> list[Finding]:
             ratio = fuzz.token_sort_ratio(a_title.casefold(), b_title.casefold())
             if ratio >= _TITLE_RATIO:
                 msg = f"title '{b_title}' is close to '{a_title}' (wiki/{a.rel})"
-                out.append(Finding("warn", "duplicate-title", _wiki_rel(b.rel), msg))
+                pair = (id_for(a.rel), id_for(b.rel))
+                out.append(
+                    Finding("warn", "duplicate-title", _wiki_rel(b.rel), msg, pair)
+                )
     return out
 
 

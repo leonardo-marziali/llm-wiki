@@ -8,10 +8,11 @@ import json
 import re
 import secrets
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import date
 from importlib import resources
 from pathlib import Path
+from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -33,14 +34,29 @@ _TOP_LEVEL = {"overview", "glossary"}  # pages outside any section; update only
 _SYSTEM_IDS = {name.removesuffix(".md") for name in SYSTEM_FILES}
 
 
+class PlannedPage(Protocol):
+    """What the shared checks read from a planned page (ingest's or maint's)."""
+
+    @property
+    def id(self) -> str: ...
+    @property
+    def action(self) -> Literal["create", "update"]: ...
+    @property
+    def type(self) -> str: ...
+    @property
+    def status(self) -> str: ...
+    @property
+    def adr_status(self) -> str | None: ...
+
+
 def _page_file(root: Path, id_: str) -> Path:
-    if id_ in _TOP_LEVEL:
+    if "." not in id_:  # overview, glossary (or any other top-level page)
         return root / "wiki" / f"{id_}.md"
     section, slug = id_.split(".", 1)
     return root / "wiki" / section / f"{slug}.md"
 
 
-def _id_errors(p: PagePlan, kinds: dict[str, str]) -> list[str]:
+def _id_errors(p: PlannedPage, kinds: dict[str, str]) -> list[str]:
     """Why ``p.id`` cannot name a plannable page (empty: it can)."""
     if p.id in _SYSTEM_IDS or p.id.startswith("_"):
         return [f"{p.id}: system pages are maintained by the tool, not planned"]
@@ -61,7 +77,7 @@ def _id_errors(p: PagePlan, kinds: dict[str, str]) -> list[str]:
     return []
 
 
-def _existence_error(p: PagePlan, root: Path) -> str | None:
+def _existence_error(p: PlannedPage, root: Path) -> str | None:
     exists = _page_file(root, p.id).is_file()
     if p.action == "create" and exists:
         return f"{p.id}: action is create but the page already exists"
@@ -90,7 +106,7 @@ def _page_counts(root: Path) -> tuple[int, dict[str, int]]:
 
 
 def _section_cap_errors(
-    creates: list[PagePlan], per_section: dict[str, int], kinds: dict, cap: int
+    creates: Sequence[PlannedPage], per_section: dict[str, int], kinds: dict, cap: int
 ) -> list[str]:
     by_section: dict[str, list[str]] = defaultdict(list)
     for p in creates:
@@ -106,17 +122,22 @@ def _section_cap_errors(
 
 
 def _cap_errors(
-    plan: Plan, root: Path, cfg: WikiConfig, kinds: dict, src_id: str
+    pages: Sequence[PlannedPage],
+    root: Path,
+    cfg: WikiConfig,
+    kinds: dict,
+    src_id: str | None,
 ) -> list[str]:
     """Creates are blocked once a cap would be exceeded; updates never are.
 
-    The source's own src- page counts too while it does not exist yet: lint counts
-    it, so a plan that fills the cap exactly would fail after the paid edit.
+    The source's own src- page (``src_id``; None: there is none) counts too while
+    it does not exist yet: lint counts it, so a plan that fills the cap exactly
+    would fail after the paid edit.
     """
     caps = cfg.effective_caps()
     total, per_section = _page_counts(root)
-    reserve = 0 if _page_file(root, src_id).is_file() else 1
-    creates = [p for p in plan.pages if p.action == "create"]
+    reserve = 0 if src_id is None or _page_file(root, src_id).is_file() else 1
+    creates = [p for p in pages if p.action == "create"]
     errors: list[str] = []
     if (creates or reserve) and total + len(creates) + reserve > caps.max_pages:
         ids = ", ".join(p.id for p in creates) or src_id
@@ -125,7 +146,7 @@ def _cap_errors(
             f"{ids}: {total} pages + {len(creates)} creates{src_note} "
             f"exceeds the cap of {caps.max_pages}; {CONSOLIDATE_HINT}"
         )
-    src_section = src_id.split(".", 1)[0]
+    src_section = (src_id or "").split(".", 1)[0]
     if reserve and per_section[src_section] + 1 > caps.max_section_pages:
         errors.append(
             f"{src_id}: section '{src_section}' already holds "
@@ -136,6 +157,24 @@ def _cap_errors(
     return errors + _section_cap_errors(
         creates, per_section, kinds, caps.max_section_pages
     )
+
+
+def _routing_errors(p: PlannedPage, kinds: dict[str, str]) -> list[str]:
+    """Why ``p``'s type and status do not fit its section (empty: they do)."""
+    kind = kinds.get(p.id.split(".", 1)[0])
+    if kind is not None and (
+        reason := routing_error(kind, p.type, p.status, p.adr_status)
+    ):
+        return [f"{p.id}: {reason}"]
+    if kind == "to-be" and p.action == "create" and p.status != "to-be":
+        # routing lets history stay in a to-be section; it is never created there
+        return [
+            (
+                f"{p.id}: status '{p.status}' on a new page in a to-be section "
+                "(must be 'to-be')"
+            )
+        ]
+    return []
 
 
 def _page_errors(
@@ -152,17 +191,7 @@ def _page_errors(
         return errors
     if (err := _existence_error(p, root)) is not None:
         errors.append(err)
-    kind = kinds.get(p.id.split(".", 1)[0])
-    if kind is not None and (
-        reason := routing_error(kind, p.type, p.status, p.adr_status)
-    ):
-        errors.append(f"{p.id}: {reason}")
-    elif kind == "to-be" and p.action == "create" and p.status != "to-be":
-        # routing lets history stay in a to-be section; it is never created there
-        errors.append(
-            f"{p.id}: status '{p.status}' on a new page in a to-be section "
-            "(must be 'to-be')"
-        )
+    errors += _routing_errors(p, kinds)
     errors += [
         f"{p.id}: claim cites '{c.source}', not this source or a known raw file"
         for c in p.claims
@@ -229,7 +258,7 @@ def validate_plan(
         if (err := _contradiction_error(c.page_id, Path(root), planned))
     ]
     src_id = src_id_for(cfg, manifest, source)
-    return errors + _cap_errors(plan, Path(root), cfg, kinds, src_id)
+    return errors + _cap_errors(plan.pages, Path(root), cfg, kinds, src_id)
 
 
 def _contradiction_error(id_: str, root: Path, planned: set[str]) -> str | None:

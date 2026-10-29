@@ -174,6 +174,7 @@ def test_deep_drops_unknown_pages_and_injection(root, fake_claude, tmp_path):
         "deep-missing-link",
         "wiki/conventions/git-flow.md",
         f"Link them. (pages: {GIT}, overview; evidence: both mention x)",
+        pages=(GIT, "overview"),
     )
     run_files = sorted(p.name for p in (tmp_path / "run").iterdir())
     assert run_files == ["1-deep.plan.json", "1-deep.plan.result.json"]

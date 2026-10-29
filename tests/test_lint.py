@@ -13,6 +13,7 @@ from llm_wiki.lint import (
     CONSOLIDATE_HINT,
     Finding,
     LintReport,
+    link_targets,
     lint,
     routing_error,
     write_report,
@@ -122,6 +123,21 @@ def test_duplicate_id(root):
 def test_duplicate_title(root):
     add_page(root, "conventions/git-flow-hub.md", "Git Flow", type_="hub")
     assert codes(root) == {("warn", "duplicate-title")}
+
+
+def test_duplicate_title_names_both_pages(root):
+    add_page(root, "conventions/git-flow-hub.md", "Git Flow", type_="hub")
+    (f,) = lint(root, load_config(root), today=TODAY).findings
+    assert f.pages == ("conventions.git-flow-hub", "conventions.git-flow")
+
+
+def test_link_targets_resolve_relative_md_links(root):
+    base = root / "wiki" / "conventions"
+    text = "[a](a.md#x) [b](../b.md) [w](https://x.org/c.md)\n```\n[c](c.md)\n```\n"
+    assert link_targets(base, text) == {
+        (base / "a.md").resolve(),
+        (root / "wiki" / "b.md").resolve(),
+    }
 
 
 def test_duplicate_title_ignores_source_summaries(root):

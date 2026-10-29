@@ -109,6 +109,7 @@ def _as_finding(f: DeepFinding) -> Finding:
         f"deep-{f.kind}",
         page_rel(f.pages[0]),
         f"{message} (pages: {', '.join(f.pages)}; evidence: {evidence})",
+        tuple(f.pages),
     )
 
 
