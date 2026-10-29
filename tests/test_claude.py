@@ -921,8 +921,9 @@ def test_interrupt_kills_grandchild(tmp_path, monkeypatch):
         return real(self, input, timeout)
 
     monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
+    call = _call()
     with pytest.raises(KeyboardInterrupt):
-        claude_mod._spawn(_call(), str(script), tmp_path)
+        claude_mod._spawn(call, str(script), tmp_path)
     pid = int(pid_file.read_text())
     try:
         assert _gone_within(pid, 2)

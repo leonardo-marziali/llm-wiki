@@ -739,7 +739,8 @@ def test_maint_prompt_wraps_pages_with_nonce(root):
     assert prompt.count("We branch from main for every change.") == 1
     assert "We branch from main for every change." in pages[0]
     assert "2026-10-28" in prompt
-    assert "fix" in prompt and GIT in prompt
+    assert "fix" in prompt
+    assert GIT in prompt
     assert f"broken-link {GIT_REL}: link target 'x.md' does not exist" in prompt
     assert f"<untrusted-indexes-{nonce}>" in prompt
     assert "Hidden secret page" not in prompt  # its index line is dropped
