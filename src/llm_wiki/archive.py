@@ -129,7 +129,7 @@ def archive_unlinked(root: Path, manifest: Manifest) -> list[str]:
                 folder.rmdir()
         raise
     gone = set(found)
-    for entry in list(manifest.entries.values()):
+    for entry in manifest.entries.values():
         kept = [i for i in entry.pages_touched if i not in gone]
         if len(kept) < len(entry.pages_touched):
             manifest.record(entry.model_copy(update={"pages_touched": kept}))

@@ -201,24 +201,7 @@ def lint(
             key=lambda f: (f.path, f.code, f.message),
         )
         report = LintReport(merged)
-    if fmt == "json":
-        data: dict = {
-            "errors": report.errors,
-            "warnings": report.warnings,
-            "findings": [dataclasses.asdict(f) for f in report.findings],
-        }
-        if deep_result is not None:
-            data["deep"] = {
-                "sampled": deep_result.sampled,
-                "eligible": deep_result.eligible,
-                "dropped": deep_result.dropped,
-                "cost_usd": deep_result.cost_usd,
-            }
-        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
-    else:
-        for f in report.findings:
-            typer.echo(f"{f.severity} {f.code} {f.path}: {f.message}")
-        typer.echo(f"{report.errors} errors, {report.warnings} warnings")
+    _print_lint(report, deep_result, fmt)
     if report_file or deep:
         # stderr in json mode keeps stdout parseable
         path = write_report(ref.path, report, today, deep_result)
@@ -227,6 +210,27 @@ def lint(
         typer.echo(f"cost ${deep_result.cost_usd:.2f}", err=fmt == "json")
     if report.errors or (strict and report.warnings):
         raise typer.Exit(1)
+
+
+def _print_lint(report, deep_result, fmt: str) -> None:
+    if fmt != "json":
+        for f in report.findings:
+            typer.echo(f"{f.severity} {f.code} {f.path}: {f.message}")
+        typer.echo(f"{report.errors} errors, {report.warnings} warnings")
+        return
+    data: dict = {
+        "errors": report.errors,
+        "warnings": report.warnings,
+        "findings": [dataclasses.asdict(f) for f in report.findings],
+    }
+    if deep_result is not None:
+        data["deep"] = {
+            "sampled": deep_result.sampled,
+            "eligible": deep_result.eligible,
+            "dropped": deep_result.dropped,
+            "cost_usd": deep_result.cost_usd,
+        }
+    typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _lint_fix(ref, *, deep: bool, yes: bool, strict: bool, report_file: bool) -> None:

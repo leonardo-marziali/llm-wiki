@@ -42,6 +42,18 @@ def _count_files(d: Path, skip: tuple[str, ...]) -> int:
     )
 
 
+def _log_entries(log: Path) -> list[str]:
+    if not log.is_file():
+        return []
+    try:
+        text = log.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return [LOG_NOT_UTF8]
+    except OSError as e:
+        return [f"error: log.md unreadable: {e.strerror or e}"]
+    return [ln for ln in text.splitlines() if ln.startswith("## [")]
+
+
 def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
     today = today or date.today()
     root = ref.path
@@ -63,19 +75,7 @@ def wiki_status(ref: WikiRef, today: date | None = None) -> WikiStatus:
         if page.fm.review_after < today:
             stale.append(page.fm.id)
 
-    log = root / "wiki" / "log.md"
-    entries = []
-    if log.is_file():
-        try:
-            entries = [
-                ln
-                for ln in log.read_text(encoding="utf-8").splitlines()
-                if ln.startswith("## [")
-            ]
-        except UnicodeDecodeError:
-            entries = [LOG_NOT_UTF8]
-        except OSError as e:
-            entries = [f"error: log.md unreadable: {e.strerror or e}"]
+    entries = _log_entries(root / "wiki" / "log.md")
 
     near_cap: list[str] = []
     if pages >= caps.warn_pages:
