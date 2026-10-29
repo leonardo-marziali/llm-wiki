@@ -35,7 +35,7 @@ LOG_RE = r"^## \[\d{4}-\d{2}-\d{2}\] [a-z-]+ \| .+$"
 _LOG = re.compile(LOG_RE)
 _ID = re.compile(ID_RE)
 # a footnote definition: label, target, then the locator text after it
-_FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*(\S+)(.*)$", re.MULTILINE)
+_FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*+(\S++)(.*)$", re.MULTILINE)
 _FOOTNOTE_REF = re.compile(r"\[\^([^\]]+)\]")
 _LOCATOR_LEAD = " \t—–-:,;"
 _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
