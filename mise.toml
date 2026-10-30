@@ -1,0 +1,11 @@
+[tools]
+python = "3.13"
+
+[env]
+_.file = [".env", ".env.local"]
+_.python.venv = { path = ".venv", create = true }
+
+# Outside the DevContainer: `mise install && mise run setup`
+[tasks.setup]
+description = "Install the package with dev extras and the git hooks"
+run = ["pip install -e '.[dev]'", "pre-commit install"]

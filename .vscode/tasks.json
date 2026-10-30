@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest -q",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "ruff check src tests && ruff format --check src tests",
+      "problemMatcher": []
+    },
+    {
+      "label": "typecheck",
+      "type": "shell",
+      "command": "pyright",
+      "problemMatcher": []
+    },
+    {
+      "label": "markdown",
+      "type": "shell",
+      "command": "prettier --check '*.md' 'docs/**/*.md' 'src/**/*.md' && markdownlint '*.md' 'docs/**/*.md' 'src/**/*.md'",
+      "problemMatcher": []
+    },
+    {
+      "label": "check",
+      "detail": "Every check AGENTS.md asks for before a change is done",
+      "dependsOn": ["test", "lint", "typecheck", "markdown"],
+      "dependsOrder": "sequence",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "format",
+      "type": "shell",
+      "command": "ruff check --fix src tests && ruff format src tests && prettier --write '*.md' 'docs/**/*.md' 'src/**/*.md'",
+      "problemMatcher": []
+    },
+    {
+      "label": "install git hooks",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pre-commit install",
+      "problemMatcher": []
+    }
+  ]
+}

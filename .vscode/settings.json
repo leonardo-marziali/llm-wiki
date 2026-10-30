@@ -1,0 +1,6 @@
+{
+  "sonarlint.connectedMode.project": {
+    "connectionId": "leonardo-marziali",
+    "projectKey": "leonardo-marziali_llm-wiki"
+  }
+}

@@ -24,8 +24,10 @@ manual is [README.md](README.md).
 
 ## Setup and checks
 
-The DevContainer creates `.venv` and runs `pip install -e '.[dev]'`; the tools
-on `PATH` come from its image. Run these before you call a change done:
+The DevContainer creates `.venv`, runs `pip install -e '.[dev]'` and
+`pre-commit install`; the tools on `PATH` come from its image. Outside it,
+`mise install && mise run setup` does the same. Run these before you call a
+change done (the VS Code task `check` runs them all):
 
 ```sh
 .venv/bin/pytest -q             # offline; never reaches the real claude
@@ -119,6 +121,24 @@ Work went milestone by milestone, with the Superpowers skills:
   `test`, `chore`, …). The subject says what changed in plain words; the body
   says why, and what was broken before.
 - Keep `README.md` in step with the CLI when a command or flag changes.
+
+## Git hooks and releases
+
+- `.pre-commit-config.yaml` installs two hooks:
+  - `commit-msg` rejects a message that is not a Conventional Commit;
+  - `pre-push` refuses a push to `main`.
+- Every change reaches `main` through a pull request. Its title must be a
+  Conventional Commit too (`.github/workflows/pr-title.yml`): a squash merge
+  makes it the commit message.
+- `.github/workflows/release.yml` runs python-semantic-release on every push to
+  `main`, configured under `[tool.semantic_release]` in `pyproject.toml`:
+  - `feat` makes a minor release, and `fix` or `perf` a patch;
+  - it bumps `__version__`, writes `CHANGELOG.md`, then commits, tags `vX.Y.Z`
+    and creates the GitHub release;
+  - never edit `__version__` or `CHANGELOG.md` by hand.
+- `.github/workflows/publish.yml` runs on that release. It tests, builds and
+  uploads `llm-wiki-cli` to PyPI with trusted publishing, then attaches the
+  files to the release.
 
 ## Writing style
 

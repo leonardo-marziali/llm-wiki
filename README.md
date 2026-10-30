@@ -16,9 +16,12 @@ the read-only `wiki-lookup` skill, at no LLM cost.
 ## Install
 
 ```sh
-pip install llm-wiki            # or: pip install 'llm-wiki[docling]'
+pipx install llm-wiki-cli       # or: pipx install 'llm-wiki-cli[docling]'
 wiki doctor                     # checks claude, its flags, login, isolation and image input
 ```
+
+The package is `llm-wiki-cli` on PyPI; the command it installs is `wiki`.
+Releases and their notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      # REPO_ADMIN (a personal access token), not GITHUB_TOKEN, for two
+      # reasons:
+      # - the push of the release commit and tag must bypass the branch
+      #   protection on main;
+      # - a release created with GITHUB_TOKEN triggers no other workflow, so
+      #   publish.yml would never run.
+      # pre-commit hooks are never installed here, so the pre-push guard on
+      # main does not block this push.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.REPO_ADMIN }}
+
+      # Release only what this run was started for, even if main moved since
+      - name: Reset to the workflow commit
+        run: git reset --hard "$GITHUB_SHA"
+
+      # Reads [tool.semantic_release] in pyproject.toml. When the commits since
+      # the last tag call for a release, it bumps __version__, updates
+      # CHANGELOG.md, commits "chore(release): X.Y.Z [skip ci]", tags vX.Y.Z
+      # and creates the GitHub release; publish.yml then uploads to PyPI.
+      - name: Release
+        id: release
+        uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278 # v10.7.0
+        with:
+          github_token: ${{ secrets.REPO_ADMIN }}
+          git_committer_name: github-actions[bot]
+          git_committer_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Summary
+        env:
+          RELEASED: ${{ steps.release.outputs.released }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [ "$RELEASED" = "true" ]; then
+            echo "Released $TAG." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No release-worthy commits since the last tag." >> "$GITHUB_STEP_SUMMARY"
+          fi
