@@ -371,8 +371,10 @@ cross-links.
   edit call passes `--disallowed-tools` with a `Read(./<path>)` rule per
   flagged file and `Read(./.wiki/quarantine/**)`. The rules are relative to
   the wiki root, so its absolute path never enters one, and a `Read` deny also
-  keeps the file out of Grep. `wiki doctor` probes the denial
-  (`read-denial`) with a canary file.
+  keeps the file out of Grep. Ingest edit sessions get the same rules for
+  the pages flagged when the run starts; a file an edit may change is never
+  denied, since it must be read to be edited. `wiki doctor` probes the
+  denial (`read-denial`) with a canary file.
 
 Exit codes: 0 ok, 1 findings, 2 error.
 

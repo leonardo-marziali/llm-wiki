@@ -137,7 +137,8 @@ class EditSession:
             prompt=prompt,
             system_prompt=system_prompt(self.root, self.prompt_file),
             cwd=self.root,
-            deny_read=claude.deny_rules(self.deny),
+            # a file the edit must change is read to be edited, so never denied
+            deny_read=claude.deny_rules(self.deny - self.allowed),
         )
         result = claude.run(call)
         self.cost_usd += result.cost_usd

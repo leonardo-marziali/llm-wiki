@@ -43,7 +43,7 @@ from llm_wiki.intake import (
     trust,
     write_note,
 )
-from llm_wiki.lint import SOURCES_HINT, Finding, lint
+from llm_wiki.lint import SOURCES_HINT, Finding, flagged_pages, lint
 from llm_wiki.manifest import MANIFEST, Manifest, sha256_file
 from llm_wiki.pages import read_page
 from llm_wiki.registry import WikiRef
@@ -440,6 +440,7 @@ def run_ingest(
             today=today,
             run_dir=run_dir,
             n=0,
+            flagged=flagged_pages(lint(root, cfg, today=today)),
         )
         _process(ctx, items, report, undo)
         _finalize(ctx, base, report)

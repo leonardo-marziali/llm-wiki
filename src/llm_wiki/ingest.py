@@ -58,6 +58,9 @@ class RunContext:
     today: date
     run_dir: Path
     n: int  # 1-based source number, for run-dir file names
+    # pages with a secret or injection finding when the run began: edits are
+    # denied reading them (R18)
+    flagged: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -329,6 +332,7 @@ class _Source:
             f"{ctx.n}-{source_slug(prepared.rel)}",
         )
         self.allowed = self.session.allowed
+        self.session.deny |= ctx.flagged
         if self.src_existed or prepared.kind != "deleted":  # never created then
             self.allowed.add(page_rel(self.src_id))
         self.planned: dict[str, str] = {}  # id -> its first planned action

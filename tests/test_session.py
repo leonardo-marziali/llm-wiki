@@ -183,3 +183,15 @@ def test_edit_session_denies_quarantine(wiki, fake_claude):
     s.edit("do it", "", "edit")
     argv = fake_claude.calls()[0]["argv"]
     assert "Read(./.wiki/quarantine/**)" in argv
+
+
+def test_allowed_file_never_denied(wiki, fake_claude):
+    s = session(wiki)
+    s.allowed.add(PAGE)
+    s.deny |= {PAGE, "wiki/concepts/other.md"}
+    fake_claude.queue(edit({PAGE: bad_page()}))
+    s.edit("do it", "", "edit")
+    argv = fake_claude.calls()[0]["argv"]
+    assert f"Read(./{PAGE})" not in argv
+    assert "Read(./wiki/concepts/other.md)" in argv
+    assert "Read(./.wiki/quarantine/**)" in argv
