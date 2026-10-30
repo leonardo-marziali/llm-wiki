@@ -5,10 +5,10 @@
   "MD013": {
     "line_length": 80,
     "tables": false,
-    "code_blocks": false,
+    "code_blocks": false
   },
   // The CLAUDE.md template is just an `@AGENTS.md` import, with no heading
   "MD041": {
-    "allow_preamble": true,
-  },
+    "allow_preamble": true
+  }
 }
