@@ -64,7 +64,7 @@ jobs:
     # publisher on pypi.org before the first release.
     environment:
       name: pypi
-      url: https://pypi.org/p/llm-wiki-cli
+      url: https://pypi.org/p/llm-wiki-tool
     permissions:
       id-token: write
     steps:

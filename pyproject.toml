@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# The import package is llm_wiki and the command is `wiki`; PyPI refuses
-# "llm-wiki" as too close to the existing "llmwiki"
-name = "llm-wiki-cli"
+# The import package is llm_wiki and the command is `wiki`. PyPI refuses
+# "llm-wiki" and "llm-wiki-cli" as too close to "llmwiki" and "llmwiki-cli"
+name = "llm-wiki-tool"
 dynamic = ["version"]
 description = "CLI that keeps small, capped, LLM-maintained wikis for coding agents"
 readme = "README.md"

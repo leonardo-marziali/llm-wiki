@@ -137,7 +137,7 @@ Work went milestone by milestone, with the Superpowers skills:
     and creates the GitHub release;
   - never edit `__version__` or `CHANGELOG.md` by hand.
 - `.github/workflows/publish.yml` runs on that release. It tests, builds and
-  uploads `llm-wiki-cli` to PyPI with trusted publishing, then attaches the
+  uploads `llm-wiki-tool` to PyPI with trusted publishing, then attaches the
   files to the release.
 
 ## Writing style
