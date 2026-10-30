@@ -883,8 +883,24 @@ def _gone_within(pid: int, seconds: float) -> bool:
     return False
 
 
-def test_timeout_kills_grandchild(tmp_path):
+def _await_pid_file(pid_file: Path) -> None:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if pid_file.exists() and pid_file.read_text().strip():
+            return
+        time.sleep(0.05)
+
+
+def test_timeout_kills_grandchild(tmp_path, monkeypatch):
     script, pid_file = _hanging_claude(tmp_path)
+    real = subprocess.Popen.communicate
+
+    def communicate(self, input=None, timeout=None):
+        if timeout is not None:  # under load, let the grandchild start first
+            _await_pid_file(pid_file)
+        return real(self, input, timeout)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", communicate)
     call = dataclasses.replace(_call(), timeout_s=1)
     assert claude_mod._spawn(call, str(script), tmp_path) is None
     pid = int(pid_file.read_text())
@@ -914,9 +930,7 @@ def test_interrupt_kills_grandchild(tmp_path, monkeypatch):
 
     def communicate(self, input=None, timeout=None):
         if timeout is not None:  # the first, bounded wait: Ctrl-C lands here
-            deadline = time.monotonic() + 2
-            while not pid_file.exists() and time.monotonic() < deadline:
-                time.sleep(0.05)
+            _await_pid_file(pid_file)
             raise KeyboardInterrupt
         return real(self, input, timeout)
 
