@@ -207,6 +207,22 @@ def test_large_sheet_profile_numbered(root, make_xlsx):
     assert "| 2 | 0 | 0 |" in text
 
 
+def test_blank_only_csv_is_empty(root):
+    p = root / "raw" / "b.csv"
+    p.write_text("\n\n,\n", encoding="utf-8")
+    c = convert(root, p, SHA, HARD_CAPS)
+    assert "(empty)" in out(root, c)
+
+
+def test_table_below_blank_rows_numbered_from_its_header(root, make_xlsx):
+    rows = [["", ""], ["", ""], ["", ""], ["h1", "h2"], ["1", "2"]]
+    p = make_xlsx(root / "raw" / "w.xlsx", {"s": rows})
+    text = out(root, convert(root, p, SHA, HARD_CAPS))
+    assert "- range: A4:B5 (row 4 is the header)" in text
+    assert "| (row) | h1 | h2 |" in text
+    assert "| 5 | 1 | 2 |" in text
+
+
 def test_long_cells_kept_up_to_the_cap(root):
     kept, long = "k" * 900, "z" * 1500
     p = root / "raw" / "c.csv"

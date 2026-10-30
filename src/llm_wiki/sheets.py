@@ -22,9 +22,10 @@ def _clip(v) -> str:
     return (s[:MAX_CELL] + "…") if len(s) > MAX_CELL else s
 
 
-def _md_table(rows: list[list[str]]) -> str:
+def _md_table(rows: list[list[str]], first: int) -> str:
     """The rows as a table whose first column is each row's sheet row number
-    (``rows[0]`` is row 1, the header), so a locator can name a cell range."""
+    (``rows[0]``, the header, is row ``first``), so a locator can name a cell
+    range."""
     if not rows:
         return ""
     width = max(len(r) for r in rows)
@@ -33,27 +34,30 @@ def _md_table(rows: list[list[str]]) -> str:
         for r in rows
     ]
     out = ["| (row) | " + " | ".join(rows[0]) + " |", "|" + "---|" * (width + 1)]
-    out += [f"| {n} | " + " | ".join(r) + " |" for n, r in enumerate(rows[1:], 2)]
+    out += [
+        f"| {n} | " + " | ".join(r) + " |" for n, r in enumerate(rows[1:], first + 1)
+    ]
     return "\n".join(out)
 
 
-def _range(rows: list[list[str]]) -> str:
-    width = max(len(r) for r in rows)
-    return f"- range: A1:{get_column_letter(width)}{len(rows)} (row 1 is the header)"
+def _range(rows: list[list[str]], first: int) -> str:
+    col = get_column_letter(max(len(r) for r in rows))
+    last = first + len(rows) - 1
+    return f"- range: A{first}:{col}{last} (row {first} is the header)"
 
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "sheet"
 
 
-def _profile(rows: list[list[str]]) -> str:
+def _profile(rows: list[list[str]], first: int) -> str:
     header, body = rows[0], rows[1:]
     lines = [
         f"- columns: {', '.join(_clip(h) or '(blank)' for h in header)}",
         f"- rows: {len(rows)}",
-        _range(rows),
+        _range(rows, first),
         "",
-        _md_table(rows[: PROFILE_ROWS + 1]),
+        _md_table(rows[: PROFILE_ROWS + 1], first),
     ]
     distinct_lines = []
     for i, name in enumerate(header):
@@ -75,12 +79,15 @@ def convert_sheets(
     csvs: list[Path] = []
     for name, rows in rows_by_sheet.items():
         parts.append(f"## Sheet: {name}\n")
-        if not rows:
+        # the table starts at its first non-blank row, its header
+        top = next((i for i, r in enumerate(rows) if any(c.strip() for c in r)), None)
+        if top is None:
             parts.append("(empty)\n")
             continue
-        width = max(len(r) for r in rows)
-        if len(rows) <= MAX_INLINE_ROWS and width <= MAX_INLINE_COLS:
-            parts.append(f"{_range(rows)}\n\n{_md_table(rows)}\n")
+        table, first = rows[top:], top + 1
+        width = max(len(r) for r in table)
+        if len(table) <= MAX_INLINE_ROWS and width <= MAX_INLINE_COLS:
+            parts.append(f"{_range(table, first)}\n\n{_md_table(table, first)}\n")
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         slug, n = _slug(name), 1
@@ -89,9 +96,10 @@ def convert_sheets(
         ) in csvs:
             n += 1
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
-            csv.writer(fh).writerows(rows)
+            csv.writer(fh).writerows(rows)  # whole, so its line n is sheet row n
         csvs.append(csv_path)
         parts.append(
-            f"Large sheet, full data in `{csv_path.name}`.\n\n{_profile(rows)}\n"
+            f"Large sheet, full data in `{csv_path.name}`.\n\n"
+            f"{_profile(table, first)}\n"
         )
     return "\n".join(parts), csvs
