@@ -188,6 +188,34 @@ def test_corrupt_file_refused(root, suffix):
         convert(root, p, SHA, HARD_CAPS)
 
 
+def test_sheet_rows_carry_their_sheet_row_number(root, make_xlsx):
+    rows = [["a", "b", "c"]] + [[str(i), "x", "y"] for i in range(3)]
+    p = make_xlsx(root / "raw" / "w.xlsx", {"s": rows})
+    text = out(root, convert(root, p, SHA, HARD_CAPS))
+    assert "- range: A1:C4 (row 1 is the header)" in text
+    assert "| (row) | a | b | c |" in text
+    assert "| 2 | 0 | x | y |" in text
+    assert "| 4 | 2 | x | y |" in text
+
+
+def test_large_sheet_profile_numbered(root, make_xlsx):
+    rows = [["id", "n"]] + [[str(i), str(i)] for i in range(250)]
+    p = make_xlsx(root / "raw" / "w.xlsx", {"big": rows})
+    text = out(root, convert(root, p, SHA, HARD_CAPS))
+    assert "- range: A1:B251 (row 1 is the header)" in text
+    assert "| (row) | id | n |" in text
+    assert "| 2 | 0 | 0 |" in text
+
+
+def test_long_cells_kept_up_to_the_cap(root):
+    kept, long = "k" * 900, "z" * 1500
+    p = root / "raw" / "c.csv"
+    p.write_text(f"a,b\n{kept},{long}\n", encoding="utf-8")
+    text = out(root, convert(root, p, SHA, HARD_CAPS))
+    assert f"| {kept} |" in text
+    assert f"| {'z' * 1000}… |" in text
+
+
 def test_csv_quoted_newline_survives(root):
     p = root / "raw" / "q.csv"
     p.write_text('a,b\n"line1\nline2",x\n', encoding="utf-8")

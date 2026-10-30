@@ -4,7 +4,11 @@ import csv
 import re
 from pathlib import Path
 
-MAX_CELL = 200
+from openpyxl.utils import get_column_letter
+
+# long enough for a reminder schedule or a group list in one cell, short enough
+# that a pasted blob cannot fill a part on its own
+MAX_CELL = 1000
 MAX_INLINE_ROWS = 200
 MAX_INLINE_COLS = 30
 PROFILE_ROWS = 5
@@ -19,6 +23,8 @@ def _clip(v) -> str:
 
 
 def _md_table(rows: list[list[str]]) -> str:
+    """The rows as a table whose first column is each row's sheet row number
+    (``rows[0]`` is row 1, the header), so a locator can name a cell range."""
     if not rows:
         return ""
     width = max(len(r) for r in rows)
@@ -26,9 +32,14 @@ def _md_table(rows: list[list[str]]) -> str:
         [_clip(c).replace("|", "\\|") for c in r] + [""] * (width - len(r))
         for r in rows
     ]
-    out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * width]
-    out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    out = ["| (row) | " + " | ".join(rows[0]) + " |", "|" + "---|" * (width + 1)]
+    out += [f"| {n} | " + " | ".join(r) + " |" for n, r in enumerate(rows[1:], 2)]
     return "\n".join(out)
+
+
+def _range(rows: list[list[str]]) -> str:
+    width = max(len(r) for r in rows)
+    return f"- range: A1:{get_column_letter(width)}{len(rows)} (row 1 is the header)"
 
 
 def _slug(name: str) -> str:
@@ -40,6 +51,7 @@ def _profile(rows: list[list[str]]) -> str:
     lines = [
         f"- columns: {', '.join(_clip(h) or '(blank)' for h in header)}",
         f"- rows: {len(rows)}",
+        _range(rows),
         "",
         _md_table(rows[: PROFILE_ROWS + 1]),
     ]
@@ -68,7 +80,7 @@ def convert_sheets(
             continue
         width = max(len(r) for r in rows)
         if len(rows) <= MAX_INLINE_ROWS and width <= MAX_INLINE_COLS:
-            parts.append(_md_table(rows) + "\n")
+            parts.append(f"{_range(rows)}\n\n{_md_table(rows)}\n")
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         slug, n = _slug(name), 1
