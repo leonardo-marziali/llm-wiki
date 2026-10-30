@@ -314,7 +314,6 @@ def _word_png(path: Path, word: str) -> None:
 
 def probe_vision(settings: LlmSettings) -> Check:
     name = "vision"
-    # supp
     # a throwaway canary word for the probe, not a secret
     word = "".join(random.choices(string.ascii_uppercase, k=5))  # NOSONAR(S2245)
     try:
@@ -354,13 +353,14 @@ def probe_vision(settings: LlmSettings) -> Check:
     )
 
 
-def _denied(result: Result, path: Path) -> bool:
-    """True if claude reports refusing a tool call that targeted path."""
+def _denied(result: Result, path: Path, cwd: Path) -> bool:
+    """True if claude reports refusing a tool call that targeted path; a relative
+    target is relative to the call's ``cwd``."""
     denials = result.raw.get("permission_denials")
     for d in denials if isinstance(denials, list) else ():
         tool_input = d.get("tool_input") if isinstance(d, dict) else None
         target = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-        if isinstance(target, str) and Path(target).resolve() == path.resolve():
+        if isinstance(target, str) and (cwd / target).resolve() == path.resolve():
             return True
     return False
 
@@ -408,7 +408,7 @@ def probe_edit_confinement(settings: LlmSettings) -> Check:
                     name, "fail", "edit sessions cannot write (permission mode)"
                 )
             # No file proves nothing unless claude tried the escape and was refused.
-            if not _denied(result, escape):
+            if not _denied(result, escape, inside):
                 return Check(
                     name,
                     "warn",
@@ -454,7 +454,7 @@ def probe_read_denial(settings: LlmSettings) -> Check:
                 return Check(name, "fail", str(e))
             if word in result.text:
                 return Check(name, "fail", "edit sessions can read denied files")
-            if not _denied(result, secret):
+            if not _denied(result, secret, Path(tmp)):
                 return Check(
                     name, "warn", "model did not attempt the read; denial unproven"
                 )

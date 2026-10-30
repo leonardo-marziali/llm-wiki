@@ -313,6 +313,16 @@ def test_read_probe_ok(fake_claude):
     assert "secret.md" in call["listdir"]
 
 
+def test_read_probe_relative_denial_counts(fake_claude):
+    rel = {
+        "permission_denials": [
+            {"tool_name": "Read", "tool_input": {"file_path": "secret.md"}}
+        ]
+    }
+    fake_claude.queue({"stdout": {**ok(), **rel}})
+    assert probe_read_denial(S).status == "ok"
+
+
 def test_read_probe_detects_leak(fake_claude):
     fake_claude.queue({**READ_OK, "echo_file_rel": "secret.md"})
     c = probe_read_denial(S)
