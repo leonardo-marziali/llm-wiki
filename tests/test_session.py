@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from importlib import resources
 
@@ -95,6 +96,10 @@ def test_session_repair_then_fail(wiki, fake_claude):
     runs = wiki / ".wiki" / "runs" / "r1"
     assert (runs / "2-job-p1.edit.json").is_file()
     assert (runs / "2-job-p1.repair.json").is_file()
+    found = json.loads((runs / "2-job-p1.repair.findings.json").read_text())
+    assert found == [
+        {"path": f.path, "code": f.code, "message": f.message} for f in prompts[1]
+    ]
     assert s.cost_usd == pytest.approx(0.3)
 
 

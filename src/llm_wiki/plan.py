@@ -558,7 +558,8 @@ def _old_text(root: Path, manifest: Manifest, rel: str) -> str | None:
     return f.read_text(encoding="utf-8") if f.is_file() else None
 
 
-def _save_run(run_dir: Path, name: str, result: claude.Result) -> None:
+def _save_run(run_dir: Path, name: str, result: claude.Result) -> str:
+    """Save the plan and the raw result; return their ``<n>-<name>`` prefix."""
     run_dir.mkdir(parents=True, exist_ok=True)
     n = len(list(run_dir.glob("*.plan.json"))) + 1
     # both records are redacted like the plan the edit sees (I5): a secret
@@ -569,6 +570,17 @@ def _save_run(run_dir: Path, name: str, result: claude.Result) -> None:
     ):
         (run_dir / f"{n}-{name}{suffix}").write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    return f"{n}-{name}"
+
+
+def save_plan_errors(run_dir: Path, prefix: str, errors: list[str]) -> None:
+    """Keep why a plan was rejected next to it, so a retry can be audited."""
+    if errors:
+        (run_dir / f"{prefix}.plan.errors.json").write_text(
+            json.dumps(_redact_value(errors, Counter()), indent=2, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
         )
 
 
@@ -652,7 +664,7 @@ def plan_source(
         except ClaudeError as exc:
             return None, [f"plan call failed: {exc}"], cost + exc.cost_usd
         cost += result.cost_usd
-        _save_run(Path(run_dir), source_slug(prepared.rel) + suffix, result)
+        saved = _save_run(Path(run_dir), source_slug(prepared.rel) + suffix, result)
         plan, errors = _parse(result.structured)
         if plan is not None:
             errors = validate_plan(
@@ -666,6 +678,7 @@ def plan_source(
             )
             if not errors:
                 return plan, [], cost
+        save_plan_errors(Path(run_dir), saved, errors)
     return None, errors, cost
 
 

@@ -17,6 +17,7 @@ from llm_wiki.gitops import changed_paths, restore
 from llm_wiki.lint import Finding, lint
 from llm_wiki.pages import SYSTEM_FILES
 from llm_wiki.plan import system_prompt
+from llm_wiki.screen import redact
 
 OPEN_QUESTIONS = "wiki/open-questions.md"
 QUARANTINE = ".wiki/quarantine/"
@@ -107,6 +108,7 @@ class EditSession:
         self.edit(prompt(None), suffix, "edit")
         errors_found = self.check(pages_to_lint, extra)
         if errors_found:
+            self._save_findings(errors_found, suffix)
             self.edit(prompt(errors_found), suffix, "repair")
             errors_found = self.check(pages_to_lint, extra)
         if errors_found:
@@ -114,6 +116,18 @@ class EditSession:
                 "lint errors after the repair: "
                 + "; ".join(f"{f.path} {f.code}: {f.message}" for f in errors_found)
             )
+
+    def _save_findings(self, findings: list[Finding], suffix: str) -> None:
+        """Keep the lint errors a repair is asked to fix, so it can be audited."""
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        # an injection excerpt quotes the page, which may hold a secret too
+        rows = [
+            {"path": f.path, "code": f.code, "message": redact(f.message)[0]}
+            for f in findings
+        ]
+        (self.run_dir / f"{self.name}{suffix}.repair.findings.json").write_text(
+            json.dumps(rows, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
 
     def edit(self, prompt: str, suffix: str, kind: str) -> None:
         self.oq_before = _content(self.root / OPEN_QUESTIONS)

@@ -25,7 +25,14 @@ from llm_wiki.maint import (
     validate_maint_plan,
 )
 from llm_wiki.pages import Page, page_sources, read_page
-from llm_wiki.plan import _parse, _save_run, redact_plan, screen_plan, system_prompt
+from llm_wiki.plan import (
+    _parse,
+    _save_run,
+    redact_plan,
+    save_plan_errors,
+    screen_plan,
+    system_prompt,
+)
 from llm_wiki.schemas import MAINT_SCHEMA, MaintPlan
 from llm_wiki.session import OPEN_QUESTIONS, QUARANTINE, EditSession, SessionFailed
 
@@ -105,7 +112,7 @@ def plan_job(ctx: MaintContext, job: Job) -> tuple[MaintPlan | None, list[str], 
         except ClaudeError as exc:
             return None, [f"plan call failed: {exc}"], cost + exc.cost_usd
         cost += result.cost_usd
-        _save_run(Path(ctx.run_dir), _name(ctx, job), result)
+        saved = _save_run(Path(ctx.run_dir), _name(ctx, job), result)
         plan, errors = _parse(result.structured, MaintPlan)
         if plan is not None:
             errors = validate_maint_plan(
@@ -118,6 +125,7 @@ def plan_job(ctx: MaintContext, job: Job) -> tuple[MaintPlan | None, list[str], 
             )
             if not errors:
                 return plan, [], cost
+        save_plan_errors(Path(ctx.run_dir), saved, errors)
     return None, errors, cost
 
 

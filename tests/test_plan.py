@@ -438,11 +438,16 @@ def test_plan_retry_appends_errors_then_succeeds(agents, fake_claude, tmp_path):
     assert error in second["stdin"]
     names = sorted(p.name for p in (tmp_path / "run").iterdir())
     assert names == [
+        "1-docs-new.plan.errors.json",
         "1-docs-new.plan.json",
         "1-docs-new.plan.result.json",
         "2-docs-new.plan.json",
         "2-docs-new.plan.result.json",
     ]
+    recorded = json.loads(
+        (tmp_path / "run" / "1-docs-new.plan.errors.json").read_text()
+    )
+    assert recorded == [error]
 
 
 def test_plan_fail_open_after_retry(agents, fake_claude, tmp_path):
