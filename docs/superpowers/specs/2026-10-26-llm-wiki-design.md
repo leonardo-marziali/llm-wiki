@@ -189,15 +189,15 @@ supersedes: []  superseded_by: null  related: []  tags: []
      xlsx, csv, docx and PDF.
    - docx, pptx, xlsx, csv: MarkItDown; for pptx, python-pptx also extracts the
      speaker notes.
-   - xlsx sheets over 200×30: CSV plus a profile instead of inline tables.
-     Every inline or preview table leads with a `(row)` column (the sheet row
-     number) under a `range:` line, so a locator can name a cell range; cells
-     are clipped at 1,000 characters.
+   - xlsx sheets over 200×30: CSV plus a profile instead of inline tables. Every
+     inline or preview table leads with a `(row)` column (the sheet row number)
+     under a `range:` line, so a locator can name a cell range; cells are
+     clipped at 1,000 characters.
    - PDF: MarkItDown first. If the text layer is thin (< 200 chars/page),
      escalate to Docling when installed; otherwise flag it "needs-vision".
    - Images: no conversion; they are sent to the plan call as image blocks
-     (stream-json stdin; the plan call stays tool-less), and the resulting
-     facts are `confidence: low`.
+     (stream-json stdin; the plan call stays tool-less), and the resulting facts
+     are `confidence: low`.
    - Unknown types fail loudly.
 4. **Screen** (`screen.py`), on the converted text:
    - **Secrets:** the regex set (from kbpipe `secrets.py`, extended) plus
@@ -208,13 +208,12 @@ supersedes: []  superseded_by: null  related: []  tags: []
      gate summary.
    - **Injection heuristics:** text addressing an AI, assistant or agent;
      "ignore previous"-style overrides; requests to run tools or change agent
-     config; direction-mark or Unicode-tag characters, or a run of four or
-     more zero-width ones (single zero-width spaces, common in exports, are
-     stripped before the rules run instead); large base64 blobs of at least
-     four distinct characters. A hit
-     moves the source to quarantine with a reason file, and the rest of the
-     batch continues. `wiki ingest --trust <file>` releases it and records
-     `flags: [trusted]` in the manifest.
+     config; direction-mark or Unicode-tag characters, or a run of four or more
+     zero-width ones (single zero-width spaces, common in exports, are stripped
+     before the rules run instead); large base64 blobs of at least four distinct
+     characters. A hit moves the source to quarantine with a reason file, and
+     the rest of the batch continues. `wiki ingest --trust <file>` releases it
+     and records `flags: [trusted]` in the manifest.
 5. **Branch:** `wiki/ingest-<yyyymmdd>-<slug>`.
 6. **For each source, sequentially:**
    - a. **Plan call** (`claude -p`, `--tools ""`, `--json-schema plan.v1`). It
@@ -228,10 +227,10 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - b. **Validate the plan** (Python): ≤ 15 pages; caps (no new pages at cap);
      ids follow the grammar; as-is/to-be routing matches section and status;
      every locator cites this source or an existing raw path; no edits planned
-     to `AGENTS.md`, `CLAUDE.md`, `.claude/` or `raw/`; a whole new source
-     plans at least one page, or says why not in its open questions. One retry
-     with the errors appended, then the source fails open (reported,
-     skipped). A rejected plan's errors are kept in the run dir
+     to `AGENTS.md`, `CLAUDE.md`, `.claude/` or `raw/`; a whole new source plans
+     at least one page, or says why not in its open questions. One retry with
+     the errors appended, then the source fails open (reported, skipped). A
+     rejected plan's errors are kept in the run dir
      (`<n>-<slug>.plan.errors.json`).
    - c. **Edit session** (`claude -p`, `--tools Read,Edit,Write,Glob,Grep`, cwd
      = wiki, no Bash, no Web, `--permission-mode acceptEdits` or the equivalent
@@ -280,8 +279,7 @@ instead of hanging; `--restricted` confines edits to the cwd).
 - A call with images uses the stream-json variant. `--output-format json`
   becomes `--output-format stream-json --verbose`, `--input-format stream-json`
   follows it, and everything else is unchanged. stdin is then one JSON line,
-  `{"type":"user","message":{"role":"user","content":[{"type":"text",...},
-  {"type":"image","source":{"type":"base64","media_type":...,"data":...}}]}}`.
+  `{"type":"user","message":{"role":"user","content":[{"type":"text",...}, {"type":"image","source":{"type":"base64","media_type":...,"data":...}}]}}`.
   The runner reduces the stdout stream to its last `type:"result"` line (none
   counts as a transient failure) and parses it as usual. Each image is first
   downscaled to a long side of at most 1568 px and re-encoded as PNG, or as JPEG
@@ -366,15 +364,15 @@ cross-links.
   the report counts the drops. Messages are redacted before they are shown.
 - **Flagged pages in maintenance:** a page with a secret or injection finding
   (error or warn) gets no `--fix` or `consolidate` job, and its text never
-  enters a plan or deep prompt. A flagged `open-questions.md` is no allowed
-  file of an edit. Edit sessions run in the wiki root with file tools; each
-  edit call passes `--disallowed-tools` with a `Read(./<path>)` rule per
-  flagged file and `Read(./.wiki/quarantine/**)`. The rules are relative to
-  the wiki root, so its absolute path never enters one, and a `Read` deny also
-  keeps the file out of Grep. Ingest edit sessions get the same rules for
-  the pages flagged when the run starts; a file an edit may change is never
-  denied, since it must be read to be edited. `wiki doctor` probes the
-  denial (`read-denial`) with a canary file.
+  enters a plan or deep prompt. A flagged `open-questions.md` is no allowed file
+  of an edit. Edit sessions run in the wiki root with file tools; each edit call
+  passes `--disallowed-tools` with a `Read(./<path>)` rule per flagged file and
+  `Read(./.wiki/quarantine/**)`. The rules are relative to the wiki root, so its
+  absolute path never enters one, and a `Read` deny also keeps the file out of
+  Grep. Ingest edit sessions get the same rules for the pages flagged when the
+  run starts; a file an edit may change is never denied, since it must be read
+  to be edited. `wiki doctor` probes the denial (`read-denial`) with a canary
+  file.
 
 Exit codes: 0 ok, 1 findings, 2 error.
 
@@ -431,53 +429,49 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    `--permission-mode` and isolation against the real CLI (2.1.310 is installed
    here).
 3. **Ingest:** plan → validate → edit → post-check → finalize → gate; changed
-   and deleted sources; `--note`.
-   _Done 2026-10-28: 621 offline tests; a real `wiki ingest --yes` of an AWS
-   diagram, an annotated Jira screenshot and a docx produced an architecture
-   page, a three-step howto in marker order and a conventions page, accepted
-   with 0 lint errors for $0.39._
+   and deleted sources; `--note`. _Done 2026-10-28: 621 offline tests; a real
+   `wiki ingest --yes` of an AWS diagram, an annotated Jira screenshot and a
+   docx produced an architecture page, a three-step howto in marker order and a
+   conventions page, accepted with 0 lint errors for $0.39._
 4. **Lookup skill + packaging:** `wiki skill install`; build the wheel and
    install it in a clean venv, where `wiki doctor` passes; run 5 evaluation
-   questions from an unrelated repo.
-   _Done 2026-10-28: the wheel installs in a fresh venv and `wiki doctor`
-   passes there. From an unrelated repo, Claude Code with the skill answered 4
-   questions with [AS-IS] labels and raw citations, reading 1 page each, and
-   said "not in wiki" for the fifth, for about $0.35 in total. A headless run
-   needs `Skill(wiki-lookup)` allowed; an interactive one asks once._
+   questions from an unrelated repo. _Done 2026-10-28: the wheel installs in a
+   fresh venv and `wiki doctor` passes there. From an unrelated repo, Claude
+   Code with the skill answered 4 questions with [AS-IS] labels and raw
+   citations, reading 1 page each, and said "not in wiki" for the fifth, for
+   about $0.35 in total. A headless run needs `Skill(wiki-lookup)` allowed; an
+   interactive one asks once._
 5. **Maintenance:** `lint --deep/--fix`, `consolidate`, cap-reached behaviour.
-   _Done 2026-10-29: 761 offline tests, among them a cap-reached end to end
-   test (ingest refused at the cap, `consolidate` merges and archives, the
-   retried ingest fits). On a copy of the M3 demo wiki seeded with a duplicate
-   howto, an unlinked deprecated page, a built to-be requirement and a broken
-   link, a real `lint --deep` sampled 11 of 11 pages and reported the to-be
-   contradiction and the duplicate ($0.18). `consolidate` merged the duplicate
-   (a superseded stub, its overview link retargeted, the stub archived),
-   promoted the requirement (its open question removed), and archived the
-   deprecated page, with 0 lint errors ($0.35). That run had no TTY, so its
-   "interactive" gate ran through the `decide()` callback of `gate.decide`.
-   `lint --fix --yes` removed the broken link ($0.10), and `wiki lint` then
-   exited 0._
-6. **Real use:** ingest 5–10 real sources one at a time; tune the prompts.
-   _Done 2026-10-30: 823 offline tests. Edit sessions now get deny-read rules
+   _Done 2026-10-29: 761 offline tests, among them a cap-reached end to end test
+   (ingest refused at the cap, `consolidate` merges and archives, the retried
+   ingest fits). On a copy of the M3 demo wiki seeded with a duplicate howto, an
+   unlinked deprecated page, a built to-be requirement and a broken link, a real
+   `lint --deep` sampled 11 of 11 pages and reported the to-be contradiction and
+   the duplicate ($0.18). `consolidate` merged the duplicate (a superseded stub,
+   its overview link retargeted, the stub archived), promoted the requirement
+   (its open question removed), and archived the deprecated page, with 0 lint
+   errors ($0.35). That run had no TTY, so its "interactive" gate ran through
+   the `decide()` callback of `gate.decide`. `lint --fix --yes` removed the
+   broken link ($0.10), and `wiki lint` then exited 0._
+6. **Real use:** ingest 5–10 real sources one at a time; tune the prompts. _Done
+   2026-10-30: 823 offline tests. Edit sessions now get deny-read rules
    (`read-denial` probe ok on the real CLI), a timed-out `claude` loses its
-   whole process group, and lint warns on `footnote-spacing`. Ten real
-   sources went in one per run: md, csv ×2 (one 15 MB), xlsx ×2, docx,
-   pptx, png diagram, a 66-page text PDF, and a drawio file that intake
-   refused as unsupported. The baseline cost $3.90 plus $0.60 for
-   `lint --deep`: 0 lint errors, 1 plan retry, 2 repairs, 0 strays, 11
-   `uncited-paragraph` warns. Its 14 defects, and 3 more found while tuning,
-   led to code fixes (zero-width spaces and repeated-character runs no
-   longer quarantine a source;
-   `basic_auth` redacts only a value that decodes to `user:pass`; sheet
-   tables carry row numbers and keep cells up to 1,000 characters; an
-   empty plan for a new source is retried; plan errors and repair findings
-   are kept in the run dir) and to two prompt rounds re-run from snapshots
-   ($4.22): uncited open points, abbreviated identifiers, folded diagram
-   flows, merged image locators and part-named source titles are gone.
-   Total real spend $8.81 including both doctor runs. Left: images inside
-   documents are not read, docx merged cells shift columns, and a new page
-   links related existing pages in only some runs (older pages never gain
-   the back-link; `lint --deep` reports it)._
+   whole process group, and lint warns on `footnote-spacing`. Ten real sources
+   went in one per run: md, csv ×2 (one 15 MB), xlsx ×2, docx, pptx, png
+   diagram, a 66-page text PDF, and a drawio file that intake refused as
+   unsupported. The baseline cost $3.90 plus $0.60 for `lint --deep`: 0 lint
+   errors, 1 plan retry, 2 repairs, 0 strays, 11 `uncited-paragraph` warns. Its
+   14 defects, and 3 more found while tuning, led to code fixes (zero-width
+   spaces and repeated-character runs no longer quarantine a source;
+   `basic_auth` redacts only a value that decodes to `user:pass`; sheet tables
+   carry row numbers and keep cells up to 1,000 characters; an empty plan for a
+   new source is retried; plan errors and repair findings are kept in the run
+   dir) and to two prompt rounds re-run from snapshots ($4.22): uncited open
+   points, abbreviated identifiers, folded diagram flows, merged image locators
+   and part-named source titles are gone. Total real spend $8.81 including both
+   doctor runs. Left: images inside documents are not read, docx merged cells
+   shift columns, and a new page links related existing pages in only some runs
+   (older pages never gain the back-link; `lint --deep` reports it)._
 
 ## 12. Verification
 

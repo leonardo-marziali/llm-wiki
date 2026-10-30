@@ -21,8 +21,9 @@ from those pages.
   true. List every page involved (one or more ids).
 - `stale-claim`: a claim that is likely outdated, because the page itself or
   another page shows something newer. List the one page that holds the claim.
-- `missing-page`: a concept that three or more sampled pages mention and that has
-  no page of its own in the indexes. List the mentioning pages (three or more).
+- `missing-page`: a concept that three or more sampled pages mention and that
+  has no page of its own in the indexes. List the mentioning pages (three or
+  more).
 - `missing-link`: one page that should link to another, because it discusses
   that page's topic without a link. List exactly two ids: the page that should
   link, then the page it should link to.

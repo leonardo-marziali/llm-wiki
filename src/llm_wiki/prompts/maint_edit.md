@@ -14,8 +14,8 @@ say.
   and reports it. Never touch `raw/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`,
   `wiki.toml`, `.wiki/`, the indexes, `log.md` or anything under `_archive/`.
 - Read the wiki pages you change, and other pages only to link them or to keep
-  their content. Never read or cite anything under `raw/` or `.wiki/`, and
-  never read the files the message lists under "Never read these files".
+  their content. Never read or cite anything under `raw/` or `.wiki/`, and never
+  read the files the message lists under "Never read these files".
 
 ## Maintenance rules
 
@@ -26,9 +26,9 @@ say.
   or change one.
 - Never drop a citation whose raw file exists. Keep every footnote definition
   `[^n]: raw/<path> — <locator>` on some allowed page, with the same path and
-  locator, and keep its `[^n]` reference in that page's text: a definition
-  whose claim is gone cites nothing. You may renumber a footnote. A claim you
-  retire is struck through (`~~claim~~[^n]`) and keeps its footnote.
+  locator, and keep its `[^n]` reference in that page's text: a definition whose
+  claim is gone cites nothing. You may renumber a footnote. A claim you retire
+  is struck through (`~~claim~~[^n]`) and keeps its footnote.
 - Keep one blank line between the text and the first footnote definition.
 - Keep `last_verified` and `review_after` exactly as the allowed list gives
   them. Nothing is re-checked against the sources, so nothing is re-verified.

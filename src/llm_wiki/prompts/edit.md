@@ -16,8 +16,8 @@ everything this section does not say.
   other wiki pages only to link them or to keep their existing content.
 - Create the source page, or update it when it exists, from the plan's
   `source_title` and `source_summary`, with type `source-summary`. For a later
-  part of a split source, keep the page's title and add this part to its
-  summary and outline.
+  part of a split source, keep the page's title and add this part to its summary
+  and outline.
 - A page the allowed list marks `verify` is not in the plan: the changed source
   backs it. Do only what its line says, and nothing else on that page.
 

@@ -132,10 +132,17 @@ and `maint_edit.md` tells the edit to add them.
 - Produces: `validate_maint_plan(..., oq_locked: bool = False)`. When it is
   true, a non-empty `plan.open_questions` or `plan.resolved_questions` adds the
   error
-  `"open_questions/resolved_questions must be empty: wiki/open-questions.md is flagged this run"`.
+
+  ```python
+  "open_questions/resolved_questions must be empty: wiki/open-questions.md is flagged this run"
+  ```
+
 - `build_maint_plan_prompt`: when `OPEN_QUESTIONS in exclude`, the Job block
   gains the line
-  `- open questions: none this run (wiki/open-questions.md is flagged); leave open_questions and resolved_questions empty`.
+
+  ```text
+  - open questions: none this run (wiki/open-questions.md is flagged); leave open_questions and resolved_questions empty
+  ```
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_maint_prompt_flagged_oq_line`: the prompt holds the line above when

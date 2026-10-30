@@ -1,4 +1,6 @@
-# llm-wiki M5: maintenance (`lint --deep`, `lint --fix`, `consolidate`, cap-reached behaviour) Implementation Plan
+# llm-wiki M5: maintenance Implementation Plan
+
+Scope: `lint --deep`, `lint --fix`, `consolidate` and cap-reached behaviour.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
@@ -277,8 +279,14 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
 - **`session.py`:**
   - `class SessionFailed(Exception)`. Its message is the reason.
   - `class EditSession`:
-    - `__init__(self, root: Path, cfg: WikiConfig, settings: LlmSettings, today: date, run_dir: Path, name: str)`.
+    - `__init__`:
+
+      ```python
+      __init__(self, root: Path, cfg: WikiConfig, settings: LlmSettings, today: date, run_dir: Path, name: str)
+      ```
+
       `name` prefixes the run-dir files, as in `<name><suffix>.<kind>.json`.
+
     - Attributes:
       - `allowed: set[str]`, starting as `{OPEN_QUESTIONS}`;
       - `reverted: list[str]`;
@@ -289,7 +297,12 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
     - `edit(prompt: str, suffix: str, kind: str) -> None`.
     - `changed() -> list[str]`; `revert(paths: list[str]) -> None`;
       `undo() -> None`.
-    - `check(pages_to_lint: Callable[[list[str]], list[str]] | None = None, extra: Callable[[], list[Finding]] | None = None) -> list[Finding]`.
+    - `check`:
+
+      ```python
+      check(pages_to_lint: Callable[[list[str]], list[str]] | None = None, extra: Callable[[], list[Finding]] | None = None) -> list[Finding]
+      ```
+
       - It reverts strays and records them in `reverted`.
       - It reports `missing-page` for allowed pages that don't exist.
       - It runs the open-questions check, which allows removing `oq_removable`
@@ -297,7 +310,13 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
       - It lints the pages returned by `pages_to_lint(changed_allowed_pages)`;
         by default, the changed allowed pages.
       - It adds `extra()` and returns the error findings.
-    - `apply(prompt: Callable[[list[Finding] | None], str], suffix: str, *, pages_to_lint=None, extra=None) -> None`.
+
+    - `apply`:
+
+      ```python
+      apply(prompt: Callable[[list[Finding] | None], str], suffix: str, *, pages_to_lint=None, extra=None) -> None
+      ```
+
       It runs the edit, the check, and one repair, and raises `SessionFailed`
       when errors remain.
 - **`ingest._Source`** holds an `EditSession` (composition, not inheritance) for
@@ -312,7 +331,12 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
   - `fresh(path) -> Path`; `fresh_branch(root, name) -> str`;
     `plain(text) -> str`; `append_log(root, lines) -> None`;
     `show_diff(root, base, branch) -> None`.
-  - `decide(root, base, branch, summary: str, lint_errors: int, yes: bool, decide, confirm) -> Decision`.
+  - `decide`:
+
+    ```python
+    decide(root, base, branch, summary: str, lint_errors: int, yes: bool, decide, confirm) -> Decision
+    ```
+
   - `accept(root, base, branch, undo) -> None`;
     `rollback(undo, base, branch) -> None`.
 
@@ -395,7 +419,11 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
   - the kind's page-count rule fails;
   - `find_injection` hits its `message` or `evidence`.
 - **A kept finding** becomes
-  `Finding("warn", f"deep-{kind}", page_rel(pages[0]), f"{message} (pages: {', '.join(pages)}; evidence: {evidence})")`.
+
+  ```python
+  Finding("warn", f"deep-{kind}", page_rel(pages[0]), f"{message} (pages: {', '.join(pages)}; evidence: {evidence})")
+  ```
+
 - **`write_report(root, report, today, deep: DeepResult | None = None)`** adds
   this line under the header:
   `deep: sampled S of E pages, D dropped, cost $X.XX`. The deep findings sit in
@@ -501,7 +529,12 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
       plus their linkers, at most 8.
     - **`split`:** for each `page-too-long` page. The inputs are the page plus
       its linkers, at most 8.
-  - `validate_maint_plan(plan: MaintPlan, job: Job, *, root, cfg, mode: Literal["fix", "consolidate"]) -> list[str]`.
+  - `validate_maint_plan`:
+
+    ```python
+    validate_maint_plan(plan: MaintPlan, job: Job, *, root, cfg, mode: Literal["fix", "consolidate"]) -> list[str]
+    ```
+
     The rules:
     1. `len(pages) ≤ max_pages_per_ingest`, and the ids are unique.
     2. The id grammar holds, the section exists and is not of kind `sources`,
@@ -520,6 +553,7 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
        input or a create in this plan, and not itself.
     8. Every `resolved_questions` line is an exact line of `open-questions.md`,
        and appears in `job.questions` (for promote jobs) or names an input page.
+
   - `build_maint_plan_prompt(root, cfg, job, mode) -> str` contains:
     - the date;
     - the job kind and targets;
@@ -630,7 +664,12 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
     - `stopped`;
     - `summary`;
     - `exit_code`.
-  - `run_maintenance(ref, *, mode, deep: bool = False, yes: bool, interactive: bool, today=None, decide=None, confirm=None) -> MaintReport`.
+  - `run_maintenance`:
+
+    ```python
+    run_maintenance(ref, *, mode, deep: bool = False, yes: bool, interactive: bool, today=None, decide=None, confirm=None) -> MaintReport
+    ```
+
     The order:
     1. Load the config and settings, then `claude_binary()`.
     2. `interactive or yes` must hold, or it fails with "the gate needs a
@@ -643,6 +682,7 @@ tests/test_session.py test_gate.py test_deep.py test_maint.py test_maint_run.py 
        branch. The "left for you" lines are still printed.
     7. Create the branch, run the jobs, finalize, summarize, gate, then accept
        or roll back. The rollback covers any `BaseException` too.
+
   - **Finalize:**
     1. Archive (consolidate only, Task 6).
     2. `build_indexes`.

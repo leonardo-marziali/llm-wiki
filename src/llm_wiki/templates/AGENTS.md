@@ -82,9 +82,9 @@ Routing rules:
 
 - An as-is section holds only pages with `status: as-is`, `deprecated` or
   `superseded`.
-- A to-be section holds only pages with `status: to-be`, plus the history
-  they leave: `superseded` stubs and `deprecated` pages. Never create a page
-  there with any status but `to-be`.
+- A to-be section holds only pages with `status: to-be`, plus the history they
+  leave: `superseded` stubs and `deprecated` pages. Never create a page there
+  with any status but `to-be`.
 - In a decisions section, every page has `type: decision` and an `adr_status`. A
   decision whose `status` is `to-be` must have `adr_status: proposed`. An
   accepted decision is `status: as-is`.

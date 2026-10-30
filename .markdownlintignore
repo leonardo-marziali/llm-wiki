@@ -1,3 +1,7 @@
 # Written by python-semantic-release on every release, in its own style;
 # formatting it here would only make churn.
 CHANGELOG.md
+
+# A fragment that `wiki skill install --pointer` splices into a project's
+# CLAUDE.md, under that file's own heading; a disable comment would land there.
+src/llm_wiki/templates/claude-pointer.md
