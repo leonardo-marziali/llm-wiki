@@ -103,3 +103,8 @@ by hand, keeping your wiki's own name, description and sections table.
 Wikis created before `wiki lint --deep` existed lack `.wiki/reports/` in their
 `.gitignore`. Add that line so the deep reports stay out of git; the commands
 work either way.
+
+Wikis created before 0.1.1 also lack `.DS_Store`, `Thumbs.db` and `desktop.ini`
+in their `.gitignore`. Once Finder or Explorer drops one of these files outside
+`inbox/` and `raw/`, `wiki ingest` refuses to start ("the wiki has uncommitted
+changes"). Add the three lines and commit `.gitignore`.
