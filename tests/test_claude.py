@@ -98,6 +98,18 @@ def test_deny_rules_dirs_and_files():
     assert deny_rules([]) == ()
 
 
+def test_deny_rules_odd_file_names_stay_one_rule():
+    # --disallowed-tools splits on spaces and commas; a rule is Tool(spec)
+    rules = deny_rules(["wiki/My Notes (v2), old.md", "wiki/a[1]*.md", "wiki/!x?.md"])
+    assert rules == (
+        "Read(./wiki/?x?.md)",
+        "Read(./wiki/My?Notes??v2???old.md)",
+        "Read(./wiki/a?1??.md)",
+    )
+    for rule in rules:
+        assert not any(c in rule[5:-1] for c in " \t,()[]*!\\")
+
+
 def test_build_argv_deny_only_for_edit():
     rules = deny_rules([".wiki/quarantine/", "wiki/a/y.md"])
     edit = build_argv(_call("edit", deny_read=rules), "claude", Path("/s"))

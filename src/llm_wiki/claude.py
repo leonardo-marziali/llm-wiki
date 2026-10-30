@@ -122,6 +122,13 @@ def make_call(
     )
 
 
+# characters that would split a rule (the flag splits on spaces and commas), end
+# its Tool(spec), or act as gitignore pattern syntax; each becomes `?`, which
+# matches any one character, so the rule still covers the file (checked on
+# claude 2.1.314 with a name holding a space and parentheses)
+_RULE_UNSAFE = re.compile(r"[\s,()\[\]*?!\\]")
+
+
 def deny_rules(rels: Iterable[str]) -> tuple[str, ...]:
     """Deny-read permission rules for paths relative to the call's cwd; a path
     ending in ``/`` denies the whole folder.
@@ -132,7 +139,10 @@ def deny_rules(rels: Iterable[str]) -> tuple[str, ...]:
     `wiki doctor`'s read-denial probe proves it.
     """
     return tuple(
-        sorted({f"Read(./{r}**)" if r.endswith("/") else f"Read(./{r})" for r in rels})
+        sorted(
+            f"Read(./{rel}**)" if rel.endswith("/") else f"Read(./{rel})"
+            for rel in {_RULE_UNSAFE.sub("?", r) for r in rels}
+        )
     )
 
 
