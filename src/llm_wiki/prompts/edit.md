@@ -15,7 +15,9 @@ everything this section does not say.
 - Read the converted source files the message names to word the claims. Read
   other wiki pages only to link them or to keep their existing content.
 - Create the source page, or update it when it exists, from the plan's
-  `source_title` and `source_summary`, with type `source-summary`.
+  `source_title` and `source_summary`, with type `source-summary`. For a later
+  part of a split source, keep the page's title and add this part to its
+  summary and outline.
 - A page the allowed list marks `verify` is not in the plan: the changed source
   backs it. Do only what its line says, and nothing else on that page.
 
@@ -29,8 +31,16 @@ everything this section does not say.
   given in the message or the existing page; never compute or change one.
 - Cite every claim with a footnote whose definition starts with the `raw/` path,
   then the locator: `[^n]: raw/<path> — <locator>`. Never cite a wiki page or
-  `.wiki/converted/`.
+  `.wiki/converted/`. Keep each claim's own locator from the plan; never merge
+  claims with different locators under one footnote.
 - Keep one blank line between the text and the first footnote definition.
+- Cite every bullet under "Contradictions / open points" with the locator it is
+  about. A gap with nothing in the source to cite goes only in
+  `wiki/open-questions.md`, not on the page.
+- Write identifiers exactly and in full as the plan gives them, and each
+  `A -> B: label` flow claim as its own bullet.
+- Fill `related`, and the "Related" list, with the existing pages on the same
+  system, workflow or data; read the section indexes to find them.
 - On an update, keep the content the plan does not change, with its footnotes.
 
 ## Contradictions
