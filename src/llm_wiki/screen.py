@@ -222,6 +222,12 @@ def _hidden_hits(text: str, line_of: Callable[[int], int]) -> list[Hit]:
     return [Hit("hidden_chars", n, _clip(" ".join(c))) for n, c in hidden.items()]
 
 
+def _varied(blob: str) -> bool:
+    """Even encoded repetitive text uses four or more characters; a run of one
+    to three repeated ones (test data, a separator) is no payload."""
+    return len(set(blob)) >= 4
+
+
 def _line_finder(text: str) -> Callable[[int], int]:
     lines = text.split("\n")
     starts = list(itertools.accumulate((len(ln) + 1 for ln in lines[:-1]), initial=0))
@@ -244,6 +250,8 @@ def find_injection(text: str) -> list[Hit]:
     for kind, rxs in _COMPILED.items():
         for rx in rxs:
             for m in rx.finditer(text):
+                if kind == "base64_blob" and not _varied(m.group(0)):
+                    continue
                 n = line_of(m.start())
                 hits.append(Hit(kind, n, _clip(masked[n - 1])))
     hits += hidden
