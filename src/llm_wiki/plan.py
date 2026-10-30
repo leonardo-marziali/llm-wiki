@@ -549,6 +549,11 @@ def system_prompt(root: Path, prompt: str) -> str:
     return text + "\n\n" + _prompt(prompt)
 
 
+def _whole_new(prepared: Prepared) -> bool:
+    """A new source in one part: its plan must plan a page or say why not."""
+    return prepared.kind == "new" and len(prepared.parts) <= 1
+
+
 def _part_label(prepared: Prepared, part: str) -> tuple[str, str]:
     """(the prompt's part line, the run-file suffix)."""
     if len(prepared.parts) <= 1:
@@ -683,7 +688,7 @@ def plan_source(
                 manifest=manifest,
                 allowed_updates=allowed,
                 image=prepared.image is not None,
-                require_pages=prepared.kind == "new" and len(prepared.parts) <= 1,
+                require_pages=_whole_new(prepared),
             )
             if not errors:
                 return plan, [], cost
