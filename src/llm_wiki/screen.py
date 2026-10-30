@@ -21,6 +21,10 @@ from pathlib import Path
 
 MARK = "‹REDACTED:{kind}›"
 _MARK_PREFIX = "‹REDACTED:"
+# zero-width spaces and joiners: editors and wiki exports leave a few inside
+# words, so only a line holding many of them (a hidden payload) is a finding
+_ZERO_WIDTH = re.compile("[\u200b-\u200d\u2060\ufeff]")
+_ZERO_WIDTH_PER_LINE = 4
 
 _PLACEHOLDERS = tuple(
     re.compile(rf"^(?:{p})$", re.IGNORECASE)
@@ -139,7 +143,22 @@ def _is_false_positive(kind: str, m: re.Match[str], value: str) -> bool:
     )
 
 
+def _strip_sparse_zero_width(text: str) -> str:
+    """``text`` without the zero-width characters of lines holding fewer than
+    ``_ZERO_WIDTH_PER_LINE``: one must not split a secret or a phrase out of the
+    rules' reach. Denser lines keep theirs, to be reported as hidden_chars."""
+    return "\n".join(
+        ln
+        if len(_ZERO_WIDTH.findall(ln)) >= _ZERO_WIDTH_PER_LINE
+        else _ZERO_WIDTH.sub("", ln)
+        for ln in text.split("\n")
+    )
+
+
 def redact(text: str) -> tuple[str, Counter[str]]:
+    """``text`` with secret values replaced by ``MARK``, and their counts. Sparse
+    zero-width characters are dropped first (see ``_strip_sparse_zero_width``)."""
+    text = _strip_sparse_zero_width(text)
     counts: Counter[str] = Counter()
     for kind, rx, group in _RULES:
 
@@ -189,10 +208,6 @@ _B64 = re.compile(INJECTION_RULES["base64_blob"][0])
 _HIDDEN = re.compile(
     "[\u200b-\u200f\u061c\u2060\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f\ufeff]"
 )
-# zero-width spaces and joiners: editors and wiki exports leave single ones inside
-# words, so only a run of them (a hidden payload) is a finding
-_ZERO_WIDTH = re.compile("[\u200b-\u200d\u2060\ufeff]")
-_ZERO_WIDTH_RUN = re.compile("[\u200b-\u200d\u2060\ufeff]{4,}")
 # direction marks and overrides, and tag characters: a finding even alone
 _ALWAYS_HIDDEN = re.compile(
     "[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f]"
@@ -206,20 +221,19 @@ def _clip(s: str) -> str:
     return s if len(s) <= _EXCERPT_MAX else s[: _EXCERPT_MAX - 1] + "…"
 
 
-def _hidden_hits(text: str, line_of: Callable[[int], int]) -> list[Hit]:
-    """One hit per line holding direction or tag characters, or a run of zero-width
-    ones, listing their code points."""
-    hidden: dict[int, list[str]] = {}
-    found = itertools.chain(
-        _ALWAYS_HIDDEN.finditer(text), _ZERO_WIDTH_RUN.finditer(text)
-    )
-    for m in sorted(found, key=lambda m: m.start()):
-        codes = hidden.setdefault(line_of(m.start()), [])
-        for ch in m.group(0):
-            code = f"U+{ord(ch):04X}"
-            if code not in codes:
-                codes.append(code)
-    return [Hit("hidden_chars", n, _clip(" ".join(c))) for n, c in hidden.items()]
+def _hidden_hits(text: str) -> list[Hit]:
+    """One hit per line holding direction or tag characters, or at least
+    ``_ZERO_WIDTH_PER_LINE`` zero-width ones, listing their code points."""
+    hits: list[Hit] = []
+    for n, line in enumerate(text.split("\n"), 1):
+        zero_width = _ZERO_WIDTH.findall(line)
+        found = _ALWAYS_HIDDEN.findall(line)
+        if len(zero_width) >= _ZERO_WIDTH_PER_LINE:
+            found += zero_width
+        codes = list(dict.fromkeys(f"U+{ord(ch):04X}" for ch in found))
+        if codes:
+            hits.append(Hit("hidden_chars", n, _clip(" ".join(codes))))
+    return hits
 
 
 def _varied(blob: str) -> bool:
@@ -235,7 +249,7 @@ def _line_finder(text: str) -> Callable[[int], int]:
 
 
 def find_injection(text: str) -> list[Hit]:
-    hidden = _hidden_hits(text, _line_finder(text))
+    hidden = _hidden_hits(text)
     lines = text.split("\n")
     # a zero-width character must not split a phrase out of the rules' reach;
     # removing them keeps every newline, so line numbers do not move
