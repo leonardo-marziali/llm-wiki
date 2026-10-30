@@ -17,7 +17,7 @@ the read-only `wiki-lookup` skill, at no LLM cost.
 
 ```sh
 pip install llm-wiki            # or: pip install 'llm-wiki[docling]'
-wiki doctor                     # checks claude, its flags, login and image input
+wiki doctor                     # checks claude, its flags, login, isolation and image input
 ```
 
 ## Quick start
@@ -59,7 +59,7 @@ marked block into `<repo>/CLAUDE.md`.
 | `wiki lint --fix`    | Repair the findings on a branch, then one gate (`--yes`)         |
 | `wiki consolidate`   | Split, merge, promote and archive pages, then one gate (`--yes`) |
 | `wiki skill install` | Install the read-only `wiki-lookup` skill                        |
-| `wiki doctor`        | Check the `claude` CLI, its flags, login and isolation           |
+| `wiki doctor`        | Check `claude`, its flags, login, isolation and read denial      |
 
 ## Caps and consolidate
 
@@ -74,8 +74,10 @@ page becomes a `superseded` stub; a to-be twin of an as-is page or a retired
 page is left to you), splits pages over 400 lines while the cap leaves room for
 one new page, and promotes to-be pages whose fact is now built (at most 3 a
 run). Retired pages that nothing links to any more move to
-`<section>/_archive/`, and their ids are never reused; the summary names each
-retired page that still waits and the files that link it. At the source cap,
+`<section>/_archive/`, and their ids are never reused for topic pages (a
+source page's id follows its raw path, so a raw file re-added at the same path
+gets its `src-…` id back); the summary names each retired page that still waits
+and the files that link it. At the source cap,
 ingest refuses new sources instead: start a new wiki or delete obsolete raw
 sources. Maintenance never adds evidence or refreshes
 `last_verified`; stale pages and changed sources stay yours to re-check. The
@@ -84,8 +86,9 @@ next `wiki ingest` retries the failed source.
 A page with a secret or injection finding gets no maintenance job, and its text
 never enters a plan or `--deep` prompt; when `wiki/open-questions.md` has such a
 finding, no edit may change it. Edit sessions work in the wiki root with file
-tools, so they are only told never to read the flagged files or
-`.wiki/quarantine/`: that part is an instruction, not a sandbox.
+tools; `claude` denies them reading the flagged files and `.wiki/quarantine/`
+(`Read(./…)` rules passed with `--disallowed-tools`, which also keep those files
+out of Grep), and `wiki doctor` probes that the denial holds (`read-denial`).
 
 ## Upgrading existing wikis
 

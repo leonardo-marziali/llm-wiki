@@ -190,6 +190,9 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - docx, pptx, xlsx, csv: MarkItDown; for pptx, python-pptx also extracts the
      speaker notes.
    - xlsx sheets over 200×30: CSV plus a profile instead of inline tables.
+     Every inline or preview table leads with a `(row)` column (the sheet row
+     number) under a `range:` line, so a locator can name a cell range; cells
+     are clipped at 1,000 characters.
    - PDF: MarkItDown first. If the text layer is thin (< 200 chars/page),
      escalate to Docling when installed; otherwise flag it "needs-vision".
    - Images: no conversion; they are sent to the plan call as image blocks
@@ -205,7 +208,10 @@ supersedes: []  superseded_by: null  related: []  tags: []
      gate summary.
    - **Injection heuristics:** text addressing an AI, assistant or agent;
      "ignore previous"-style overrides; requests to run tools or change agent
-     config; zero-width or Unicode-tag characters; large base64 blobs. A hit
+     config; direction-mark or Unicode-tag characters, or a run of four or
+     more zero-width ones (single zero-width spaces, common in exports, are
+     stripped before the rules run instead); large base64 blobs of at least
+     four distinct characters. A hit
      moves the source to quarantine with a reason file, and the rest of the
      batch continues. `wiki ingest --trust <file>` releases it and records
      `flags: [trusted]` in the manifest.
@@ -222,8 +228,11 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - b. **Validate the plan** (Python): ≤ 15 pages; caps (no new pages at cap);
      ids follow the grammar; as-is/to-be routing matches section and status;
      every locator cites this source or an existing raw path; no edits planned
-     to `AGENTS.md`, `CLAUDE.md`, `.claude/` or `raw/`. One retry with the
-     errors appended, then the source fails open (reported, skipped).
+     to `AGENTS.md`, `CLAUDE.md`, `.claude/` or `raw/`; a whole new source
+     plans at least one page, or says why not in its open questions. One retry
+     with the errors appended, then the source fails open (reported,
+     skipped). A rejected plan's errors are kept in the run dir
+     (`<n>-<slug>.plan.errors.json`).
    - c. **Edit session** (`claude -p`, `--tools Read,Edit,Write,Glob,Grep`, cwd
      = wiki, no Bash, no Web, `--permission-mode acceptEdits` or the equivalent
      verified by `doctor`). It receives the validated plan plus the rules, and
@@ -231,7 +240,8 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - d. **Post-check:** changed files must be a subset of the planned files plus
      `src-` and `open-questions.md`; anything else is reverted and reported.
      Then frontmatter and citations are validated; any failure gets one repair
-     retry.
+     retry, and the lint errors it was given are kept in the run dir
+     (`<slug>.repair.findings.json`).
 7. **Finalize (deterministic):** `index.py` rebuilds every `_index.md` and
    `index.md`; `lint.py --changed` must pass; the manifest is recorded
    (pages_touched, sha); one parseable entry `## [YYYY-MM-DD] ingest | <title>`
@@ -330,7 +340,8 @@ Deterministic checks:
 - broken relative links; orphans (excluding indexes); pages missing from
   `_index`;
 - footnotes pointing outside `raw/`, or to missing raw files; sha mismatch with
-  the manifest;
+  the manifest; a footnote definition glued to the text above it
+  (`footnote-spacing`, warning);
 - uncited paragraphs (heuristic warning);
 - pages over 400 lines; caps (sources, pages, section size);
 - `review_after` in the past (stale);
@@ -356,9 +367,12 @@ cross-links.
 - **Flagged pages in maintenance:** a page with a secret or injection finding
   (error or warn) gets no `--fix` or `consolidate` job, and its text never
   enters a plan or deep prompt. A flagged `open-questions.md` is no allowed
-  file of an edit. Edit sessions run in the wiki root with file tools, so they
-  are only told never to read the flagged files or `.wiki/quarantine/`; a
-  deny-read permission rule for them is left to M6.
+  file of an edit. Edit sessions run in the wiki root with file tools; each
+  edit call passes `--disallowed-tools` with a `Read(./<path>)` rule per
+  flagged file and `Read(./.wiki/quarantine/**)`. The rules are relative to
+  the wiki root, so its absolute path never enters one, and a `Read` deny also
+  keeps the file out of Grep. `wiki doctor` probes the denial
+  (`read-denial`) with a canary file.
 
 Exit codes: 0 ok, 1 findings, 2 error.
 
@@ -442,6 +456,26 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    `lint --fix --yes` removed the broken link ($0.10), and `wiki lint` then
    exited 0._
 6. **Real use:** ingest 5–10 real sources one at a time; tune the prompts.
+   _Done 2026-10-30: 823 offline tests. Edit sessions now get deny-read rules
+   (`read-denial` probe ok on the real CLI), a timed-out `claude` loses its
+   whole process group, and lint warns on `footnote-spacing`. Ten real
+   sources went in one per run: md, csv ×2 (one 15 MB), xlsx ×2, docx,
+   pptx, png diagram, a 66-page text PDF, and a drawio file that intake
+   refused as unsupported. The baseline cost $3.90 plus $0.60 for
+   `lint --deep`: 0 lint errors, 1 plan retry, 2 repairs, 0 strays, 11
+   `uncited-paragraph` warns. Its 14 defects, and 3 more found while tuning,
+   led to code fixes (zero-width spaces and repeated-character runs no
+   longer quarantine a source;
+   `basic_auth` redacts only a value that decodes to `user:pass`; sheet
+   tables carry row numbers and keep cells up to 1,000 characters; an
+   empty plan for a new source is retried; plan errors and repair findings
+   are kept in the run dir) and to two prompt rounds re-run from snapshots
+   ($4.22): uncited open points, abbreviated identifiers, folded diagram
+   flows, merged image locators and part-named source titles are gone.
+   Total real spend $8.81 including both doctor runs. Left: images inside
+   documents are not read, docx merged cells shift columns, and a new page
+   links related existing pages in only some runs (older pages never gain
+   the back-link; `lint --deep` reports it)._
 
 ## 12. Verification
 
