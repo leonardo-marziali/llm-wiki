@@ -1,5 +1,8 @@
 # llm-wiki
 
+[![PyPI](https://img.shields.io/pypi/v/llm-wiki-tool)](https://pypi.org/p/llm-wiki-tool)
+[![Python](https://img.shields.io/pypi/pyversions/llm-wiki-tool)](https://pypi.org/p/llm-wiki-tool)
+
 `wiki` keeps small, capped, LLM-maintained wikis that coding agents read. You
 drop source files (documents, slides, sheets, PDFs, images, notes) into a wiki;
 `wiki ingest` has headless Claude Code plan and write cited pages on a branch,
