@@ -4,6 +4,8 @@ Secrets are redacted first, then injection detection runs on the redacted text s
 excerpts never contain a secret.
 """
 
+import base64
+import binascii
 import bisect
 import contextlib
 import itertools
@@ -112,9 +114,21 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
 ]
 
 
+def _is_basic_credential(value: str) -> bool:
+    """A Basic auth value is base64 of `user:password`; prose glued after the word
+    "Basic" (PDF text that lost its spaces) does not decode to one."""
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return ":" in decoded and decoded.isprintable()
+
+
 def _is_false_positive(kind: str, m: re.Match[str], value: str) -> bool:
     if _MARK_PREFIX in value:
         return True  # already redacted
+    if kind == "basic_auth":
+        return not _is_basic_credential(value)
     if kind in ("password", "token") and not _looks_secret(value):
         return True
     if kind == "conn_string_password" and value.startswith(_SHELL_SUBST):
@@ -175,6 +189,14 @@ _B64 = re.compile(INJECTION_RULES["base64_blob"][0])
 _HIDDEN = re.compile(
     "[\u200b-\u200f\u061c\u2060\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f\ufeff]"
 )
+# zero-width spaces and joiners: editors and wiki exports leave single ones inside
+# words, so only a run of them (a hidden payload) is a finding
+_ZERO_WIDTH = re.compile("[\u200b-\u200d\u2060\ufeff]")
+_ZERO_WIDTH_RUN = re.compile("[\u200b-\u200d\u2060\ufeff]{4,}")
+# direction marks and overrides, and tag characters: a finding even alone
+_ALWAYS_HIDDEN = re.compile(
+    "[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f]"
+)
 _EXCERPT_MAX = 80
 
 
@@ -185,25 +207,35 @@ def _clip(s: str) -> str:
 
 
 def _hidden_hits(text: str, line_of: Callable[[int], int]) -> list[Hit]:
-    """One hit per line holding invisible characters, listing their code points."""
+    """One hit per line holding direction or tag characters, or a run of zero-width
+    ones, listing their code points."""
     hidden: dict[int, list[str]] = {}
-    for m in _HIDDEN.finditer(text):
-        if m.start() == 0 and m.group(0) == "\ufeff":
-            continue
+    found = itertools.chain(
+        _ALWAYS_HIDDEN.finditer(text), _ZERO_WIDTH_RUN.finditer(text)
+    )
+    for m in sorted(found, key=lambda m: m.start()):
         codes = hidden.setdefault(line_of(m.start()), [])
-        code = f"U+{ord(m.group(0)):04X}"
-        if code not in codes:
-            codes.append(code)
+        for ch in m.group(0):
+            code = f"U+{ord(ch):04X}"
+            if code not in codes:
+                codes.append(code)
     return [Hit("hidden_chars", n, _clip(" ".join(c))) for n, c in hidden.items()]
 
 
-def find_injection(text: str) -> list[Hit]:
-    hits: list[Hit] = []
+def _line_finder(text: str) -> Callable[[int], int]:
     lines = text.split("\n")
     starts = list(itertools.accumulate((len(ln) + 1 for ln in lines[:-1]), initial=0))
+    return lambda offset: bisect.bisect_right(starts, offset)
 
-    def line_of(offset: int) -> int:
-        return bisect.bisect_right(starts, offset)
+
+def find_injection(text: str) -> list[Hit]:
+    hidden = _hidden_hits(text, _line_finder(text))
+    lines = text.split("\n")
+    # a zero-width character must not split a phrase out of the rules' reach;
+    # removing them keeps every newline, so line numbers do not move
+    text = _ZERO_WIDTH.sub("", text)
+    hits: list[Hit] = []
+    line_of = _line_finder(text)
 
     # every excerpt is built from lines with all base64 blobs masked
     masked = [
@@ -214,7 +246,7 @@ def find_injection(text: str) -> list[Hit]:
             for m in rx.finditer(text):
                 n = line_of(m.start())
                 hits.append(Hit(kind, n, _clip(masked[n - 1])))
-    hits += _hidden_hits(text, line_of)
+    hits += hidden
     hits.sort(key=lambda h: (h.line, h.kind))
     return hits
 
