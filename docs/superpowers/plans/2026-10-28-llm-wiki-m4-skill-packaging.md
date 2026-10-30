@@ -152,7 +152,12 @@ item 4, §12 (real checks).
 left out), create `README.md`, the spec's §11 note
 
 - [ ] **Step 1: Update the package.**
-  - `description = "CLI that keeps small, capped, LLM-maintained wikis for coding agents"`.
+  - `description`:
+
+    ```toml
+    description = "CLI that keeps small, capped, LLM-maintained wikis for coding agents"
+    ```
+
   - `readme = "README.md"`.
   - The README covers install, quick start (`init`, `ingest`, `search`,
     `skill install`), and a migration note: wikis created before 0.1.0 keep

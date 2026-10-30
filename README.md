@@ -16,9 +16,12 @@ the read-only `wiki-lookup` skill, at no LLM cost.
 ## Install
 
 ```sh
-pip install llm-wiki            # or: pip install 'llm-wiki[docling]'
+pipx install llm-wiki-tool      # or: pipx install 'llm-wiki-tool[docling]'
 wiki doctor                     # checks claude, its flags, login, isolation and image input
 ```
+
+The package is `llm-wiki-tool` on PyPI; the command it installs is `wiki`.
+Releases and their notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 
@@ -74,14 +77,13 @@ page becomes a `superseded` stub; a to-be twin of an as-is page or a retired
 page is left to you), splits pages over 400 lines while the cap leaves room for
 one new page, and promotes to-be pages whose fact is now built (at most 3 a
 run). Retired pages that nothing links to any more move to
-`<section>/_archive/`, and their ids are never reused for topic pages (a
-source page's id follows its raw path, so a raw file re-added at the same path
-gets its `src-…` id back); the summary names each retired page that still waits
-and the files that link it. At the source cap,
-ingest refuses new sources instead: start a new wiki or delete obsolete raw
-sources. Maintenance never adds evidence or refreshes
-`last_verified`; stale pages and changed sources stay yours to re-check. The
-next `wiki ingest` retries the failed source.
+`<section>/_archive/`, and their ids are never reused for topic pages (a source
+page's id follows its raw path, so a raw file re-added at the same path gets its
+`src-…` id back); the summary names each retired page that still waits and the
+files that link it. At the source cap, ingest refuses new sources instead: start
+a new wiki or delete obsolete raw sources. Maintenance never adds evidence or
+refreshes `last_verified`; stale pages and changed sources stay yours to
+re-check. The next `wiki ingest` retries the failed source.
 
 A page with a secret or injection finding gets no maintenance job, and its text
 never enters a plan or `--deep` prompt; when `wiki/open-questions.md` has such a

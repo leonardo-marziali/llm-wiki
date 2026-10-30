@@ -1,0 +1,23 @@
+# Normalize line endings to LF for everyone, regardless of OS/editor.
+* text=auto eol=lf
+
+*.py text diff=python
+*.md text diff=markdown
+*.toml text
+*.json text
+*.jsonc text
+*.yml text
+*.yaml text
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
+
+# Written by python-semantic-release on every release
+CHANGELOG.md linguist-generated
