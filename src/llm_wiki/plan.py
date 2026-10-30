@@ -218,16 +218,24 @@ def validate_plan(
     manifest: Manifest,
     allowed_updates: set[str] | None,
     image: bool = False,
+    require_pages: bool = False,
 ) -> list[str]:
     """Human-readable problems with ``plan``; an empty list means it may proceed.
 
     ``allowed_updates`` is None for a new source; for a changed source it holds
     the ids of the pages the source already backs. When ``image`` is set (the
     source is an image), every fact cited to it must be ``confidence: low``.
+    With ``require_pages`` (a whole new source) a plan with no pages must say
+    why in its open questions.
     """
     kinds = {s.name: s.kind for s in cfg.sections}
     max_pages = cfg.effective_caps().max_pages_per_ingest
     errors: list[str] = []
+    if require_pages and not plan.pages and not plan.open_questions:
+        errors.append(
+            "the plan has no pages: plan the pages this source's facts belong "
+            "on, or say in open_questions why it adds nothing"
+        )
     if len(plan.pages) > max_pages:
         errors.append(
             f"plan has {len(plan.pages)} pages, more than the cap of {max_pages}"
@@ -675,6 +683,7 @@ def plan_source(
                 manifest=manifest,
                 allowed_updates=allowed,
                 image=prepared.image is not None,
+                require_pages=prepared.kind == "new" and len(prepared.parts) <= 1,
             )
             if not errors:
                 return plan, [], cost

@@ -741,3 +741,32 @@ def test_run_dir_result_is_redacted(agents, fake_claude, tmp_path):
     run_plan(agents, prepared, tmp_path)
     for f in (tmp_path / "run").iterdir():
         assert "S3cr3t!x" not in f.read_text(encoding="utf-8"), f.name
+
+
+def test_empty_plan_rejected_only_when_pages_required(root):
+    kw = {
+        "root": root,
+        "cfg": load_config(root),
+        "source": RAW_REL,
+        "manifest": Manifest.load(root),
+        "allowed_updates": None,
+    }
+    empty = plan()
+    errors = validate_plan(empty, require_pages=True, **kw)
+    assert len(errors) == 1
+    assert "no pages" in errors[0]
+    assert validate_plan(empty, **kw) == []
+    explained = empty.model_copy(update={"open_questions": ["Is it all known?"]})
+    assert validate_plan(explained, require_pages=True, **kw) == []
+
+
+def test_empty_plan_for_new_source_retried(agents, fake_claude, tmp_path):
+    prepared = prepared_for(agents, NEW_REL, "# New\n\nFacts.\n")
+    fake_claude.queue(
+        {"stdout": ok(structured=plan_dict())}, {"stdout": ok(structured=GOOD)}
+    )
+    p, errors, _ = run_plan(agents, prepared, tmp_path)
+    assert p == Plan.model_validate(GOOD)
+    assert errors == []
+    _first, second = fake_claude.calls()
+    assert "no pages" in second["stdin"]
