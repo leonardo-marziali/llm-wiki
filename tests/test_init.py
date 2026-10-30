@@ -559,3 +559,15 @@ def test_gitignore_template_ignores_reports():
         encoding="utf-8"
     )
     assert ".wiki/reports/" in text.split()
+
+
+def test_new_wiki_ignores_os_metadata_files(tmp_path):
+    # Finder and Explorer drop these into any folder they open; a new wiki must
+    # still pass the ingest preflight
+    from llm_wiki.gate import preflight_git
+
+    root = tmp_path / "w"
+    init_wiki(root, today=TODAY)
+    for rel in (".DS_Store", "wiki/.DS_Store", "raw/Thumbs.db", "wiki/desktop.ini"):
+        (root / rel).write_bytes(b"\0")
+    assert preflight_git(root) == "main"

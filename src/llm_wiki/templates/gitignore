@@ -3,3 +3,6 @@
 .wiki/runs/
 .wiki/tmp/
 .env*
+.DS_Store
+Thumbs.db
+desktop.ini
