@@ -774,7 +774,7 @@ def test_image_edit_prompt_reads_no_raw_file(wiki, make_png):
     (wiki / "raw/arch").mkdir(parents=True)
     make_png(wiki / rel)
     prepared = prepare_source(wiki, ctx.cfg, ctx.manifest, rel, TODAY)
-    assert prepared.image is not None
+    assert prepared.is_image
     low = {**claim(rel), "confidence": "low"}
     p = Plan.model_validate(plan(plan_page(claims=[low])))
     prompt = build_edit_prompt(ctx, prepared, p, prepared.parts[0])

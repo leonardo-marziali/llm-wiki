@@ -184,7 +184,7 @@ def test_refused_entry_not_counted_live(tmp_path):
     assert not m.is_live("raw/key.pem")
 
 
-def _bundle(root, make_png, *, status="ingested"):
+def _bundle(root, make_png):
     """raw/page.md with two members, recorded as a bundle."""
     (root / "raw/page").mkdir(parents=True)
     page = root / "raw/page.md"
@@ -200,7 +200,7 @@ def _bundle(root, make_png, *, status="ingested"):
             mime="text/markdown",
             category="misc",
             first_seen=date(2026, 1, 1),
-            status=status,
+            status="ingested",
             members=[
                 BundleMember(path=p, sha256=sha256_file(root / p))
                 for p in ("raw/page/a.png", "raw/page/b.png")

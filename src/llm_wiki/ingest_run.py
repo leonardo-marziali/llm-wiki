@@ -6,6 +6,7 @@ every moved file back (reject, Ctrl-C or a crash): the wiki is as before the run
 """
 
 import re
+import shutil
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from typing import Literal
 import typer
 
 from llm_wiki import gate, gitops
+from llm_wiki.bundle import inbox_members, member_owners, member_rel, page_members
 from llm_wiki.claude import claude_binary
 from llm_wiki.config import WikiConfig, load_config, load_llm_settings, slug
 from llm_wiki.errors import WikiError
@@ -35,6 +37,7 @@ from llm_wiki.intake import (
     check_paths,
     copy_paths,
     free_path,
+    held_members,
     inbox_home,
     intake_inbox,
     move_into_raw,
@@ -82,6 +85,8 @@ class _Item:
     rel: str
     origin: Path | None = None  # an inbox file, moved into raw/ when its turn comes
     made: bool = False  # the run wrote it into raw/ (--note, copied paths)
+    # its linked images still in inbox/, copied in when its turn comes: (file, raw path)
+    members: list[tuple[Path, str]] = field(default_factory=list)
 
 
 # --- the work list ---
@@ -103,7 +108,7 @@ def needs_work(manifest: Manifest, root: Path, rel: str) -> bool:
         )
     if entry is None or entry.status == "deleted":
         return True
-    if entry.sha256 != sha256_file(path):
+    if entry.sha256 != sha256_file(path) or manifest.members_changed(root, rel):
         return True
     if entry.status == "ingested":
         return False
@@ -127,6 +132,9 @@ def _work_list(
         if Path(name).name == name:  # trust() itself refuses anything else
             for held in (name, f"{name}.reason.json"):
                 undo.keep((QUARANTINE_DIR / held).as_posix())
+            for kept, member in held_members(root, name).items():
+                undo.keep(kept)
+                undo.own(member)
         rel = trust(root, trust_name)
         undo.own(rel)  # a raw path the run made: a rollback takes it back
         # the scan sees a released source with an unchanged sha as done
@@ -144,32 +152,69 @@ def _work_list(
             made.add(rel)
 
         copied = copy_paths(root, paths, on_copy=on_copy)
-        items += [
-            _Item(rel, made=rel in made)
-            for rel in copied
-            if needs_work(manifest, root, rel)
-        ]
-    for src, rel in intake_inbox(root):
-        skip = _inbox_skip(root, manifest, src, rel)
-        if skip:
-            typer.echo(skip)
-        else:
-            items.append(_Item(rel, origin=src))
+        owners = member_owners(root)
+        for rel in copied:
+            pages = _owner_pages(manifest, owners, rel) or [rel]
+            items += [
+                _Item(page, made=page in made)
+                for page in pages
+                if needs_work(manifest, root, page)
+            ]
+    items += _inbox_items(root, manifest)
     scan = manifest.scan(root)
     items += [_Item(rel) for rel in [*scan.new, *scan.changed]]
     items += [_Item(rel) for rel in scan.deleted if needs_work(manifest, root, rel)]
     items += [_Item(rel) for rel in scan.unchanged if needs_work(manifest, root, rel)]
-    seen: set[str] = set()
-    out = []
+    seen: dict[str, _Item] = {}
     for item in items:
-        if item.rel not in seen:
-            seen.add(item.rel)
-            undo.own(item.rel)
-            out.append(item)
-    return out
+        first = seen.setdefault(item.rel, item)
+        if first is not item:
+            first.origin = first.origin or item.origin
+            first.members += item.members
+        undo.own(item.rel)
+        for _, rel in item.members:
+            undo.own(rel)
+    return list(seen.values())
 
 
-def _inbox_skip(root: Path, manifest: Manifest, src: Path, rel: str) -> str | None:
+def _owner_pages(
+    manifest: Manifest, owners: dict[str, list[str]], rel: str
+) -> list[str]:
+    """The pages ``rel`` is a member of; none when it is a source itself."""
+    return [] if manifest.is_live(rel) else owners.get(rel, [])
+
+
+def _inbox_items(root: Path, manifest: Manifest) -> list[_Item]:
+    """An item per page or other file in inbox/. A linked image goes with its page;
+    an image dropped alone at a member's raw path goes with that member's pages.
+    """
+    pairs = intake_inbox(root)
+    linked = inbox_members(root / "inbox", pairs)
+    members = {file for found in linked.values() for file, _ in found}
+    owners = member_owners(root)
+    items: list[_Item] = []
+    for src, rel in pairs:
+        if src.resolve() in members:
+            continue
+        found = linked.get(src, [])
+        pages = _owner_pages(manifest, owners, rel)
+        skip = _inbox_skip(root, manifest, src, rel, found)
+        if skip:
+            typer.echo(skip)
+        elif pages:
+            items += [_Item(page, members=[(src, rel)]) for page in pages]
+        else:
+            items.append(_Item(rel, origin=src, members=found))
+    return items
+
+
+def _inbox_skip(
+    root: Path,
+    manifest: Manifest,
+    src: Path,
+    rel: str,
+    members: list[tuple[Path, str]],
+) -> str | None:
     """Why the inbox file src, bound for rel, stays in inbox/; None to take it."""
     target = root / rel
     entry = manifest.entries.get(rel)
@@ -186,9 +231,14 @@ def _inbox_skip(root: Path, manifest: Manifest, src: Path, rel: str) -> str | No
         target.is_file()
         and not needs_work(manifest, root, rel)
         and sha256_file(src) == sha256_file(target)
+        and all(_same_file(file, root / member) for file, member in members)
     ):
         return f"unchanged: {name} matches {rel}; left in inbox/"
     return None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    return b.is_file() and sha256_file(a) == sha256_file(b)
 
 
 def _within_source_cap(
@@ -218,6 +268,7 @@ def _within_source_cap(
         if item.origin is not None:
             where = item.origin.relative_to(root).as_posix()
         elif item.made:
+            _members_to_inbox(root, item.rel, undo)
             dest = inbox_home(root, item.rel)
             undo.own(dest.relative_to(root).as_posix())
             move_into_raw(root, root / item.rel, dest.relative_to(root).as_posix())
@@ -229,6 +280,15 @@ def _within_source_cap(
             f"sources; {SOURCES_HINT}. It stays in {where}"
         )
     return out
+
+
+def _members_to_inbox(root: Path, rel: str, undo: Undo) -> None:
+    """Take the images this run copied next to page ``rel`` to the inbox with it."""
+    for member in page_members(root, rel)[0]:
+        if member.path == member_rel(rel, member.name):
+            dest = inbox_home(root, member.path).relative_to(root).as_posix()
+            undo.own(dest)
+            move_into_raw(root, root / member.path, dest)
 
 
 def _branch_name(root: Path, today: date, first: str) -> str:
@@ -249,6 +309,8 @@ def _prepare(ctx: RunContext, item: _Item, undo: Undo) -> Prepared:
         origin = item.origin
         prepared.origin = free_path(origin) if origin else inbox_home(root, item.rel)
         undo.own(prepared.origin.relative_to(root).as_posix())
+        for member in prepared.members:  # where a failure sends the new images
+            undo.own(inbox_home(root, member.path).relative_to(root).as_posix())
     return prepared
 
 
@@ -257,10 +319,15 @@ def _process(
 ) -> None:
     root = Path(ctx.root)
     redactions: Counter[str] = Counter()
+    placed: set[Path] = set()
     for n, item in enumerate(items, 1):
         ctx.n = n
         if item.origin is not None:
             move_into_raw(root, item.origin, item.rel)
+        for file, rel in item.members:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file, root / rel)
+            placed.add(file)
         if not needs_work(ctx.manifest, root, item.rel):
             continue  # an inbox copy of a source the wiki already holds
         try:
@@ -282,11 +349,25 @@ def _process(
                 )
             )
             report.stopped = str(exc)
+            _drop_placed(root, placed, items[n:])
             break
         redactions.update(out.redactions)
         report.outcomes.append(out)
+    else:
+        _drop_placed(root, placed, [])
     report.redactions = dict(redactions)
     report.cost_usd = sum(o.cost_usd for o in report.outcomes)
+
+
+def _drop_placed(root: Path, placed: set[Path], pending: list[_Item]) -> None:
+    """Remove the inbox images now in raw/, except those a pending page or a page
+    still in inbox/ needs.
+    """
+    needed = {file for item in pending for file, _ in item.members}
+    left = inbox_members(root / "inbox", intake_inbox(root))
+    needed |= {file for found in left.values() for file, _ in found}
+    for file in placed - needed:
+        file.unlink(missing_ok=True)
 
 
 def _log_lines(outcomes: list[SourceOutcome], today: date) -> list[str]:
@@ -368,6 +449,10 @@ def summarize(report: IngestReport) -> str:
     reverted = sorted({p for o in outs for p in o.reverted})
     if reverted:
         lines.append(f"reverted: {', '.join(reverted)}")
+    for o in outs:
+        if o.ignored_images:
+            lines.append(f"images not read in {o.rel}:")
+            lines += [f"  {item}" for item in o.ignored_images]
     n = len(report.lint_errors)
     lines.append(f"lint: {n} error{'' if n == 1 else 's'}")
     lines += [

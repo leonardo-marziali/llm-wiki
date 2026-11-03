@@ -14,11 +14,23 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from llm_wiki.bundle import file_name
+from llm_wiki.bundle import (
+    PAGE_SUFFIX,
+    Member,
+    file_name,
+    find_members,
+    local_links,
+    member_owners,
+    member_rel,
+    page_members,
+    split_parts,
+)
 from llm_wiki.config import WikiConfig, slug
-from llm_wiki.convert import IMAGE_SUFFIXES, Conversion, convert
+from llm_wiki.convert import IMAGE_SUFFIXES, Conversion, Splitter, convert
 from llm_wiki.errors import RefusedSource, UnsupportedFormat, WikiError
+from llm_wiki.images import near_duplicate, triage
 from llm_wiki.manifest import (
+    BundleMember,
     Manifest,
     SourceEntry,
     category_for,
@@ -30,6 +42,7 @@ from llm_wiki.screen import Hit, quarantine, redact, screen_text
 QUARANTINE_DIR = Path(".wiki") / "quarantine"
 TMP_DIR = Path(".wiki") / "tmp"
 _REASON = ".reason.json"
+_MEMBERS = ".members"  # a quarantined bundle's images: a folder next to the page
 _NOTE_WORDS = 6
 _KEPT_FLAGS = ("trusted",)  # conversion flags are recomputed on every conversion
 
@@ -45,11 +58,29 @@ class Prepared:
     origin: Path | None = None
     conversion: Conversion | None = None
     parts: list[str] = field(default_factory=list)  # converted paths to plan in turn
-    image: Path | None = None  # the raw image, sent to the plan call
+    # per part: the raw images its plan call gets, in link order
+    images: dict[str, list[Member]] = field(default_factory=dict)
+    # per part: (name, the attached image it is a near-duplicate of)
+    same_images: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    members: list[Member] = field(default_factory=list)
+    pruned: list[str] = field(default_factory=list)  # members no link names any more
+    changed_images: list[str] = field(default_factory=list)  # names, since last time
+    ignored_images: list[str] = field(default_factory=list)  # why, for the report
     redactions: dict[str, int] = field(default_factory=dict)
     status: Literal["ready", "quarantined", "refused"] = "ready"
     reason: str = ""
     held: Path | None = None  # where quarantine put the raw file
+
+    @property
+    def is_image(self) -> bool:
+        """The source itself is an image (not a page with images)."""
+        return Path(self.rel).suffix.lower() in IMAGE_SUFFIXES
+
+    def image_names(self, part: str) -> set[str]:
+        """What a locator of ``part``'s plan may call an image."""
+        names = {m.name for m in self.images.get(part, [])}
+        same = self.same_images.get(part, [])
+        return names | {name for name, first in same if first in names}
 
 
 def source_slug(rel: str) -> str:
@@ -180,35 +211,60 @@ def copy_paths(
 ) -> list[str]:
     """Copy files, or folders recursively, into raw/; a folder keeps its name.
 
-    ``on_copy`` gets each raw path before its copy is made, so a caller can
+    The images a Markdown file links go next to it as members and are not
+    returned. ``on_copy`` gets each raw path before its copy is made, so a caller can
     take a half-made copy back after a Ctrl-C.
     """
     check_paths(paths)
     root = Path(root)
     raw = (root / "raw").resolve()
+    batches = {
+        path: _copy_batch(path)
+        for path in map(Path, paths)
+        if not path.resolve().is_relative_to(raw)
+    }
+    tops = [(src, top) for pairs, top in batches.values() for src, _ in pairs]
+    linked = {src: find_members(src, top)[0] for src, top in tops if _is_page(src)}
+    members = {target for found in linked.values() for _, target in found}
     out: list[str] = []
     claimed: set[str] = set()
+
+    def copy(src: Path, rel: str) -> None:
+        if on_copy is not None:
+            on_copy(rel)
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, root / rel)
+
     for path in map(Path, paths):
-        if path.resolve().is_relative_to(raw):  # already raw sources
+        if path not in batches:  # already raw sources
             files = _visible_files(path) if path.is_dir() else [path]
             out += [f.resolve().relative_to(raw.parent).as_posix() for f in files]
             continue
-        if path.is_dir():
-            pairs = [
-                (f, (path.name, *f.relative_to(path).parts))
-                for f in _visible_files(path)
-            ]
-        else:
-            pairs = [(path, (path.name,))]
-        for src, parts in pairs:
+        for src, parts in batches[path][0]:
+            if src.resolve() in members:
+                continue  # a member only, even when it was dropped alone too
             rel = _unclaimed(root, _raw_rel(parts), claimed)
-            dest = root / rel
-            if on_copy is not None:
-                on_copy(rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+            copy(src, rel)
             out.append(rel)
+            for link, target in linked.get(src, []):
+                member = member_rel(rel, link.name)
+                claimed.add(member)
+                copy(target, member)
     return out
+
+
+def _is_page(path: Path) -> bool:
+    return path.suffix.lower() == PAGE_SUFFIX
+
+
+def _copy_batch(path: Path) -> tuple[list[tuple[Path, tuple[str, ...]]], Path]:
+    """(each file with its parts under raw/, the tree its links may reach): a folder
+    keeps its name, and a single file reaches its own folder.
+    """
+    if path.is_dir():
+        files = _visible_files(path)
+        return [(f, (path.name, *f.relative_to(path).parts)) for f in files], path
+    return [(path, (path.name,))], path.parent
 
 
 def write_note(root: Path, text: str, today: date) -> str:
@@ -259,6 +315,7 @@ def trust(root: Path, name: str) -> str:
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(held), dest)
     reason_file.unlink()
+    _release_members(root, held)
     entry = manifest.entries.get(rel)
     if entry is None:  # e.g. the run that quarantined it was rejected
         entry = _entry(root, rel, sha256_file(dest), None, date.today())
@@ -275,6 +332,56 @@ def trust(root: Path, name: str) -> str:
     )
     manifest.save(root)
     return rel
+
+
+def _members_folder(held: Path) -> Path:
+    return held.with_name(held.name + _MEMBERS)
+
+
+def held_members(root: Path, name: str) -> dict[str, str]:
+    """The images held with quarantined page ``name``: their quarantine path ->
+    the raw path ``trust`` puts them back at.
+    """
+    root = Path(root)
+    folder = _members_folder(root / QUARANTINE_DIR / name)
+    if not folder.is_dir():
+        return {}
+    return {
+        f.relative_to(root).as_posix(): f"raw/{f.relative_to(folder).as_posix()}"
+        for f in folder.rglob("*")
+        if f.is_file()
+    }
+
+
+def _release_members(root: Path, held: Path) -> None:
+    for kept, rel in held_members(root, held.name).items():
+        move_into_raw(root, root / kept, rel)
+    shutil.rmtree(_members_folder(held), ignore_errors=True)
+
+
+def hold_members(
+    root: Path, manifest: Manifest, held: Path, members: list[str]
+) -> None:
+    """Take a quarantined page's images out of raw/ with it. An image another page
+    still links, or that is a source itself, stays there, and quarantine gets a copy.
+    """
+    owners = member_owners(root)  # the page has already left raw/
+    for rel in members:
+        src = root / rel
+        if not src.is_file():
+            continue
+        dest = _members_folder(held) / Path(rel).relative_to("raw")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if owners.get(rel) or manifest.is_live(rel):
+            shutil.copy2(src, dest)
+        else:
+            shutil.move(str(src), dest)
+
+
+def removable_members(root: Path, manifest: Manifest, paths: list[str]) -> list[str]:
+    """Those of ``paths`` no raw page links and that are no source themselves."""
+    owners = member_owners(root)
+    return [p for p in paths if not owners.get(p) and not manifest.is_live(p)]
 
 
 def _merged_flags(*groups: list[str]) -> list[str]:
@@ -380,6 +487,76 @@ def _quarantine_reason(
     return "", ""
 
 
+@dataclass
+class _Triaged:
+    sent: list[Member] = field(default_factory=list)
+    same: dict[str, Member] = field(default_factory=dict)  # link -> the one sent
+    dropped: list[str] = field(default_factory=list)
+
+
+def _triage_members(root: Path, members: list[Member]) -> _Triaged:
+    """Which members go to the model: not tiny or unreadable ones, and each
+    near-duplicate once.
+    """
+    out = _Triaged()
+    hashes: dict[str, str] = {}
+    by_link = {m.link: m for m in members}
+    for member in members:
+        try:
+            info = triage(root / member.path)
+        except RefusedSource:
+            out.dropped.append(f"unreadable: {member.name}")
+            continue
+        if info.reason:
+            out.dropped.append(f"{info.reason}: {member.name}")
+        elif first := near_duplicate(info.phash, hashes):
+            out.same[member.link] = by_link[first]
+        else:
+            hashes[member.link] = info.phash
+            out.sent.append(member)
+    return out
+
+
+def _splitter(triaged: _Triaged, max_images: int) -> Splitter | None:
+    """How to cut a page with more images to send than one plan call takes."""
+    if len(triaged.sent) <= max_images:
+        return None
+    sent = {m.link for m in triaged.sent}
+    return lambda body, limit: split_parts(body, sent, max_images, limit)
+
+
+def _attach_images(root: Path, prepared: Prepared, triaged: _Triaged) -> None:
+    """Give each part the images it links first, in link order."""
+    to_send = {m.link: m for m in triaged.sent}
+    attached: set[str] = set()
+    for part in prepared.parts:
+        links, _ = local_links((root / part).read_text(encoding="utf-8"))
+        images = [to_send[ln.path] for ln in links if ln.path in to_send]
+        images = [m for m in images if m.link not in attached]
+        attached |= {m.link for m in images}
+        same = [
+            (next(m.name for m in prepared.members if m.link == ln.path), first.name)
+            for ln in links
+            if (first := triaged.same.get(ln.path))
+        ]
+        if images:
+            prepared.images[part] = images
+        if same:
+            prepared.same_images[part] = same
+    # a link a part cut made unreadable (say, inside a split code fence)
+    rest = [m for m in triaged.sent if m.link not in attached]
+    if rest:
+        prepared.images.setdefault(prepared.parts[-1], []).extend(rest)
+
+
+def _changed_images(old: SourceEntry | None, current: list[BundleMember]) -> list[str]:
+    """The names of the members new or different since the last ingest."""
+    if old is None or old.members is None:
+        return []
+    known = {m.path: m.sha256 for m in old.members}
+    return [Path(m.path).name for m in current if known.get(m.path) != m.sha256]
+
+
 def prepare_source(
     root: Path, cfg: WikiConfig, manifest: Manifest, rel: str, today: date
 ) -> Prepared:
@@ -401,8 +578,13 @@ def prepare_source(
         }
     )
     prepared = Prepared(rel=rel, sha=sha, kind=kind)
+    caps = cfg.effective_caps()
+    prepared.members, ignored = page_members(root, rel)
+    triaged = _triage_members(root, prepared.members)
+    prepared.ignored_images = [redact(i)[0] for i in [*ignored, *triaged.dropped]]
     try:
-        conv = convert(root, raw_path, sha, cfg.effective_caps())
+        split = _splitter(triaged, caps.max_images_per_part)
+        conv = convert(root, raw_path, sha, caps, split)
     except (RefusedSource, UnsupportedFormat) as exc:
         manifest.record(entry.model_copy(update={"status": "failed"}))
         prepared.status, prepared.reason = "refused", str(exc)
@@ -412,11 +594,20 @@ def prepare_source(
     why, reason = _quarantine_reason(trusted, cfg.strict_secrets, counts, hits, leaks)
     prepared.redactions = dict(counts)
     if reason:
+        paths = [m.path for m in prepared.members]
         prepared.held = quarantine(
             root,
             raw_path,
-            {"source": rel, "sha256": sha, "kind": why, "reason": reason, "hits": hits},
+            {
+                "source": rel,
+                "sha256": sha,
+                "kind": why,
+                "reason": reason,
+                "hits": hits,
+                "members": paths,
+            },
         )
+        hold_members(root, manifest, prepared.held, paths)
         for out in conv.outputs:
             (root / out).unlink(missing_ok=True)
         manifest.record(
@@ -426,9 +617,23 @@ def prepare_source(
         )
         prepared.status, prepared.reason = "quarantined", reason
         return prepared
+    members = None
+    if raw_path.suffix.lower() == PAGE_SUFFIX:
+        members = [
+            BundleMember(path=m.path, sha256=sha256_file(root / m.path))
+            for m in prepared.members
+        ]
+        current = {m.path for m in members}
+        stale = [m.path for m in (old.members if old else None) or []]
+        stale = [p for p in stale if p not in current]
+        prepared.pruned = removable_members(root, manifest, stale)
+        for path in prepared.pruned:
+            (root / path).unlink(missing_ok=True)
+        prepared.changed_images = _changed_images(old, members)
     manifest.record(
         entry.model_copy(
             update={
+                "members": members,
                 "converter": conv.converter,
                 "converted": conv.outputs,
                 "flags": _merged_flags(entry.flags, conv.flags),
@@ -438,6 +643,8 @@ def prepare_source(
     )
     prepared.conversion = conv
     prepared.parts = _parts(conv)
-    if raw_path.suffix.lower() in IMAGE_SUFFIXES:
-        prepared.image = raw_path
+    _attach_images(root, prepared, triaged)
+    if prepared.is_image:
+        name = Path(rel).name
+        prepared.images[prepared.parts[0]] = [Member("", rel, name)]
     return prepared

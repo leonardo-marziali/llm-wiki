@@ -91,7 +91,7 @@ def test_new_source_recorded(root):
     write(root, "raw/docs/new.md", "# New\n\nFresh facts.\n")
     m = Manifest.load(root)
     p = prep(root, "raw/docs/new.md", manifest=m)
-    assert (p.kind, p.status, p.image, p.origin) == ("new", "ready", None, None)
+    assert (p.kind, p.status, p.images, p.origin) == ("new", "ready", {}, None)
     assert p.parts == [f".wiki/converted/{p.sha}.md"]
     entry = m.entries["raw/docs/new.md"]
     assert (entry.status, entry.first_seen, entry.converter) == ("new", TODAY, "text")
@@ -232,7 +232,7 @@ def test_image_source_points_at_raw_file(root, make_png):
     make_png(root / "raw/arch/diagram.png")
     p = prep(root, "raw/arch/diagram.png")
     assert p.status == "ready"
-    assert p.image == root / "raw/arch/diagram.png"
+    assert p.images[p.parts[0]][0].path == "raw/arch/diagram.png"
     assert p.conversion is not None
     assert "needs-vision" in p.conversion.flags
 

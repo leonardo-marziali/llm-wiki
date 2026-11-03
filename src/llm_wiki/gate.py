@@ -125,7 +125,11 @@ class Undo:
         qdir = root / QUARANTINE_DIR
         if qdir.is_dir():
             for p in qdir.iterdir():
-                if p.name not in self.quarantined and p.is_file():
+                if p.name in self.quarantined:
+                    continue
+                if p.is_dir():  # a bundle's images
+                    shutil.rmtree(p)
+                else:
                     p.unlink()  # its source goes back to where it came from
         for copy, rel in self.entries:
             dest = root / rel
