@@ -17,7 +17,7 @@ import typer
 
 from llm_wiki import gate, gitops
 from llm_wiki.claude import claude_binary
-from llm_wiki.config import WikiConfig, load_config, load_llm_settings
+from llm_wiki.config import WikiConfig, load_config, load_llm_settings, slug
 from llm_wiki.errors import WikiError
 from llm_wiki.gate import LOG, Decision, Undo, plain
 from llm_wiki.index import build_indexes
@@ -28,7 +28,6 @@ from llm_wiki.ingest import (
     process_deleted,
     process_source,
 )
-from llm_wiki.init import slug
 from llm_wiki.intake import (
     QUARANTINE_DIR,
     TMP_DIR,

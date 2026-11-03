@@ -6,7 +6,6 @@ Nothing here calls an LLM. A source whose text holds injection hits (or, with
 
 import json
 import os
-import re
 import shutil
 from collections import Counter
 from collections.abc import Callable
@@ -15,15 +14,10 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from llm_wiki.config import WikiConfig
-from llm_wiki.convert import (
-    IMAGE_SUFFIXES,
-    NEVER_INGEST_SUFFIXES,
-    Conversion,
-    convert,
-)
+from llm_wiki.bundle import file_name
+from llm_wiki.config import WikiConfig, slug
+from llm_wiki.convert import IMAGE_SUFFIXES, Conversion, convert
 from llm_wiki.errors import RefusedSource, UnsupportedFormat, WikiError
-from llm_wiki.init import slug
 from llm_wiki.manifest import (
     Manifest,
     SourceEntry,
@@ -100,21 +94,10 @@ def _assign_src_page(cfg: WikiConfig, manifest: Manifest, rel: str) -> str:
     return out
 
 
-def _file_name(name: str) -> str:
-    """``My Diagram.PNG`` -> ``my-diagram.png``; a credential suffix stays whole."""
-    lower = name.lower()
-    suffix = Path(lower).suffix
-    if not re.fullmatch(r"\.[a-z0-9]+", suffix):
-        suffix = ""  # "notes.final draft" has no extension
-    suffix = next((s for s in NEVER_INGEST_SUFFIXES if lower.endswith(s)), suffix)
-    stem = name[: len(name) - len(suffix)] if suffix else name
-    return (slug(stem) or "file") + suffix.lower()
-
-
 def _raw_rel(parts: tuple[str, ...]) -> str:
     """The raw path for a file at ``parts`` (folders, then the file name)."""
     dirs = [slug(d) or "misc" for d in parts[:-1]]
-    return "/".join(["raw", *dirs, _file_name(parts[-1])])
+    return "/".join(["raw", *dirs, file_name(parts[-1])])
 
 
 def _unclaimed(root: Path, rel: str, claimed: set[str]) -> str:

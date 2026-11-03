@@ -65,7 +65,7 @@ def _header(source: str, sha: str, converter: str, part: str | None = None) -> s
     )
 
 
-def _read_text(path: Path) -> str:
+def read_text(path: Path) -> str:
     data = path.read_bytes()
     try:
         return data.decode("utf-8-sig")
@@ -127,7 +127,7 @@ def _xlsx_rows(path: Path) -> dict[str, list[list[str]]]:
 
 
 def _csv_rows(path: Path) -> dict[str, list[list[str]]]:
-    text = _read_text(path)
+    text = read_text(path)
     return {path.stem: [list(r) for r in csv.reader(io.StringIO(text, newline=""))]}
 
 
@@ -275,7 +275,7 @@ def _convert_body(
 ) -> tuple[str, str, list[str], list[Path]]:
     """(converter, body, flags, extra output files) for one supported source."""
     if suffix in (".md", ".txt"):
-        return "text", _read_text(raw_path), [], []
+        return "text", read_text(raw_path), [], []
     if suffix == ".docx":
         return "markitdown", _markitdown(raw_path), [], []
     if suffix == ".pptx":
