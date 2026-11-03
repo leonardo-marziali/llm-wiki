@@ -16,7 +16,7 @@ from urllib.parse import unquote
 from llm_wiki.config import slug
 from llm_wiki.convert import IMAGE_SUFFIXES, NEVER_INGEST_SUFFIXES, read_text
 
-PAGE_SUFFIX = ".md"
+PAGE_SUFFIX = ".md"  # lowercase; compare through is_page
 # ![alt](target), the target with one level of parentheses or in <angle brackets>
 _IMAGE_LINK = re.compile(
     r"!\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
@@ -41,6 +41,10 @@ class Member:
     link: str  # Link.path
     path: str  # the raw path
     name: str  # what a locator calls it
+
+
+def is_page(name: str | Path) -> bool:
+    return Path(name).suffix.lower() == PAGE_SUFFIX
 
 
 def file_name(name: str) -> str:
@@ -140,7 +144,7 @@ def page_members(root: Path, rel: str) -> tuple[list[Member], list[str]]:
     """The members of raw source ``rel`` as they are in raw/, and the ignored links."""
     root = Path(root)
     page = root / rel
-    if Path(rel).suffix != PAGE_SUFFIX or not page.is_file():
+    if not is_page(rel) or not page.is_file():
         return [], []
     found, ignored = find_members(page, root / "raw")
     base = root.resolve()
@@ -154,8 +158,10 @@ def _raw_pages(root: Path) -> Iterator[str]:
     raw = root / "raw"
     if not raw.is_dir():
         return
-    for p in sorted(raw.rglob(f"*{PAGE_SUFFIX}")):
-        if p.is_file() and not any(s.startswith(".") for s in p.relative_to(raw).parts):
+    for p in sorted(raw.rglob("*")):
+        rel = p.relative_to(raw)
+        visible = not any(part.startswith(".") for part in rel.parts)
+        if visible and is_page(p.name) and p.is_file():
             yield p.relative_to(root).as_posix()
 
 
@@ -182,7 +188,7 @@ def inbox_members(
     """
     out: dict[Path, list[tuple[Path, str]]] = {}
     for src, rel in pairs:
-        if Path(rel).suffix != PAGE_SUFFIX:
+        if not is_page(rel):
             continue
         found, _ = find_members(src, inbox)
         if found:

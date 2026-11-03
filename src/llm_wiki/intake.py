@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Literal
 
 from llm_wiki.bundle import (
-    PAGE_SUFFIX,
     Member,
     file_name,
     find_members,
+    is_page,
     local_links,
     member_owners,
     member_rel,
@@ -224,7 +224,7 @@ def copy_paths(
         if not path.resolve().is_relative_to(raw)
     }
     tops = [(src, top) for pairs, top in batches.values() for src, _ in pairs]
-    linked = {src: find_members(src, top)[0] for src, top in tops if _is_page(src)}
+    linked = {src: find_members(src, top)[0] for src, top in tops if is_page(src)}
     members = {target for found in linked.values() for _, target in found}
     out: list[str] = []
     claimed: set[str] = set()
@@ -251,10 +251,6 @@ def copy_paths(
                 claimed.add(member)
                 copy(target, member)
     return out
-
-
-def _is_page(path: Path) -> bool:
-    return path.suffix.lower() == PAGE_SUFFIX
 
 
 def _copy_batch(path: Path) -> tuple[list[tuple[Path, tuple[str, ...]]], Path]:
@@ -549,12 +545,15 @@ def _attach_images(root: Path, prepared: Prepared, triaged: _Triaged) -> None:
         prepared.images.setdefault(prepared.parts[-1], []).extend(rest)
 
 
-def _changed_images(old: SourceEntry | None, current: list[BundleMember]) -> list[str]:
+def _changed_images(
+    old: SourceEntry | None, members: list[Member], current: list[BundleMember]
+) -> list[str]:
     """The names of the members new or different since the last ingest."""
     if old is None or old.members is None:
         return []
     known = {m.path: m.sha256 for m in old.members}
-    return [Path(m.path).name for m in current if known.get(m.path) != m.sha256]
+    now = {m.path: m.sha256 for m in current}
+    return [m.name for m in members if known.get(m.path) != now[m.path]]
 
 
 def prepare_source(
@@ -618,7 +617,7 @@ def prepare_source(
         prepared.status, prepared.reason = "quarantined", reason
         return prepared
     members = None
-    if raw_path.suffix.lower() == PAGE_SUFFIX:
+    if is_page(raw_path):
         members = [
             BundleMember(path=m.path, sha256=sha256_file(root / m.path))
             for m in prepared.members
@@ -629,7 +628,7 @@ def prepare_source(
         prepared.pruned = removable_members(root, manifest, stale)
         for path in prepared.pruned:
             (root / path).unlink(missing_ok=True)
-        prepared.changed_images = _changed_images(old, members)
+        prepared.changed_images = _changed_images(old, prepared.members, members)
     manifest.record(
         entry.model_copy(
             update={

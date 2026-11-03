@@ -770,3 +770,56 @@ def test_empty_plan_for_new_source_retried(agents, fake_claude, tmp_path):
     assert errors == []
     _first, second = fake_claude.calls()
     assert "no pages" in second["stdin"]
+
+
+def _image_plan(locator, confidence="low"):
+    return plan(
+        page(claims=[{**claim(RAW_REL), "locator": locator, "confidence": confidence}])
+    )
+
+
+def test_page_image_locator_must_name_an_attached_image(root):
+    kw = {
+        "root": root,
+        "cfg": load_config(root),
+        "source": RAW_REL,
+        "manifest": Manifest.load(root),
+        "allowed_updates": None,
+        "image_names": {"login.png"},
+    }
+    assert validate_plan(_image_plan("§Login, image login.png"), **kw) == []
+    errors = validate_plan(_image_plan("§Login, image other.png"), **kw)
+    assert any("other.png" in e and "not attached" in e for e in errors), errors
+    # a plain text fact on the page keeps its own confidence
+    assert validate_plan(_image_plan("§Login", confidence="high"), **kw) == []
+
+
+def test_page_image_fact_must_be_low_confidence(root):
+    errors = validate_plan(
+        _image_plan("§Login, image login.png", confidence="high"),
+        root=root,
+        cfg=load_config(root),
+        source=RAW_REL,
+        manifest=Manifest.load(root),
+        allowed_updates=None,
+        image_names={"login.png"},
+    )
+    assert any("confidence" in e and "low" in e for e in errors), errors
+
+
+def test_source_without_images_may_say_image_in_a_locator(root):
+    errors = validate_plan(
+        _image_plan("§Image formats, image x.png", confidence="high"),
+        root=root,
+        cfg=load_config(root),
+        source=RAW_REL,
+        manifest=Manifest.load(root),
+        allowed_updates=None,
+    )
+    assert errors == []
+
+
+def test_plan_prompt_tells_how_to_cite_a_page_image():
+    text = resources.files("llm_wiki").joinpath("prompts/plan.md").read_text("utf-8")
+    assert "§Login, image login-screen.png" in text
+    assert "confidence" in text

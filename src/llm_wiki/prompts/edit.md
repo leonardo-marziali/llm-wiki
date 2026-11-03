@@ -32,7 +32,10 @@ everything this section does not say.
 - Cite every claim with a footnote whose definition starts with the `raw/` path,
   then the locator: `[^n]: raw/<path> — <locator>`. Never cite a wiki page or
   `.wiki/converted/`. Keep each claim's own locator from the plan; never merge
-  claims with different locators under one footnote.
+  claims with different locators under one footnote. A fact read from an image
+  in a page keeps the page as its source and names the image in the locator:
+  `[^n]: raw/user-manual.md — §Login, image login-screen.png`. Never cite an
+  image's own path.
 - Keep one blank line between the text and the first footnote definition.
 - Cite every bullet under "Contradictions / open points" with the locator it is
   about. A gap with nothing in the source to cite goes only in
