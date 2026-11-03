@@ -77,6 +77,7 @@ code alone. Writing stays cheap to operate: one command, one review gate.
 | Limit                         | Value                                                                         | Research basis                                                                                                |
 | ----------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Sources per wiki              | **100** hard (warn at 80)                                                     | Karpathy: index-first "works … at ~100 sources"                                                               |
+| Images per plan call          | **20** (`max_images_per_part`); over that, a bundle splits into parts         | Cost: one plan call stays inside its $1 budget. The API allows 600 images and 128 MB per request              |
 | Pages per wiki                | **500** hard (warn at 400)                                                    | Top of the "100–500 pages" heuristic, which requires sharded indexes plus search (both built in from day one) |
 | Pages per section `_index.md` | 100 (warn at 80); over that, split the section                                | v2: flat index holds up to about 100–200                                                                      |
 | Top-level `index.md`          | < 100 lines; links to section indexes and hubs only                           | Research §Navigation                                                                                          |
@@ -93,6 +94,9 @@ code alone. Writing stays cheap to operate: one command, one review gate.
 - **Large single sources:** a converted text over about 80k chars is split into
   heading-based parts (`#p1`, `#p2`, …), each planned in turn. _(My call; the
   threshold is tunable.)_
+- **Page bundles:** the source cap counts bundles. A Markdown page and the local
+  images it links are one source (§5), so the screenshots of a manual do not
+  count.
 
 ### Area wikis
 
@@ -100,6 +104,7 @@ A project with more sources than one wiki holds splits into flat area wikis, not
 nested ones. Each area wiki is a normal wiki in the registry. Several hundred
 sources make 3–8 of them, and agents read that list in one call.
 
+- Make one wiki per platform, per large component and per project.
 - Each description says what belongs in the wiki and what does not. The
   descriptions are the general index.
 - Cross-cutting sources, such as a glossary, go into a shared "core" area wiki.
@@ -147,12 +152,17 @@ The daily loop is `wiki ingest`; everything else is occasional.
 │   ├── <section>/_index.md + pages
 │   └── sources/src-<slug>.md      one summary page per raw source
 └── .wiki/
-    ├── manifest.json            committed; one entry per raw source (path, sha256, size, mime, converter, converted[], pages_touched[], status, flags, first_seen, last_ingested)
+    ├── manifest.json            committed; one entry per raw source (path, sha256, size, mime, converter, converted[], pages_touched[], status, flags, first_seen, last_ingested, members[]: the page's linked images, each with path and sha256)
     ├── converted/<sha>.md (+ .csv/.profile.md/.notes.md)   committed cache
     ├── quarantine/              flagged sources (gitignored), with a reason file
     ├── reports/                 lint reports
     └── runs/<run-id>/           plan.json, transcripts, validation results (gitignored)
 ```
+
+A page's linked images live next to it, as `raw/<page path>/<image>`. They are
+evidence, not sources: they have no manifest entry of their own. `members` is
+absent on entries older than bundles; such a page is not reported as changed
+until its own file changes.
 
 **Profiles** set the default sections. _(My call: two profiles.)_
 
@@ -212,6 +222,8 @@ supersedes: []  superseded_by: null  related: []  tags: []
    - Images: no conversion; they are sent to the plan call as image blocks
      (stream-json stdin; the plan call stays tool-less), and the resulting facts
      are `confidence: low`.
+   - **Page bundles:** a Markdown source and the local images it links
+     (`![…](rel/path.png)`) are one source. See "Page bundles" below.
    - Unknown types fail loudly.
 4. **Screen** (`screen.py`), on the converted text:
    - **Secrets:** the regex set (from kbpipe `secrets.py`, extended) plus
@@ -275,6 +287,45 @@ supersedes: []  superseded_by: null  related: []  tags: []
    conversion diff, and the plan may only modify claims that cite that source.
    For a deleted source, its claims become `[!unverified]` and an open-questions
    entry is added; nothing is deleted silently.
+
+### Page bundles
+
+- **Finding members:** a link counts when it is relative, names an image type
+  and resolves to a file inside the ingested tree: the folder given, the file's
+  own folder for a single file, `inbox/`, or `raw/`. URL-encoded names and
+  `?query` or `#fragment` suffixes are decoded. Links in code are ignored.
+  Remote URLs, missing files and other types are ignored and listed in the run
+  report.
+- **Placing members:** each goes to `raw/<page path>/<slugged file name>`, with
+  `-2` and so on for a clash within the page. The path depends only on the
+  page's path and text, so a raw page finds its members again in any later run.
+  A page dropped directly in `raw/` keeps its images where its links point, as
+  long as they stay inside `raw/`.
+- **No double count:** a file both linked and dropped alone is a member only. An
+  image linked by two pages is a member of both, with one copy each. An image
+  already ingested as its own source stays one until the user deletes it, and is
+  also a member.
+- **Changed bundles:** a bundle is changed when the page or any member changes,
+  appears or goes away. A member can be replaced in `raw/`, by dropping the file
+  into `inbox/` at its raw path, or by ingesting the page's folder again. An
+  image no page links any more is removed from `raw/`; git keeps it.
+- **Plan call:** the part's text plus its images as image blocks, in link order,
+  with the images' names listed in the prompt. `images.triage` drops tiny or
+  unreadable images (listed in the report; they stay members), and each
+  near-duplicate within the bundle is sent once. Every image is sent with the
+  first part that links it.
+- **Parts:** a bundle with more than `max_images_per_part` images to send splits
+  into parts, like the 80k split: each holds a run of headings and the images
+  linked in it, and falls back to paragraphs and lines when one heading holds
+  too many.
+- **Citations:** the page is the source and the image is in the locator:
+  `[^n]: raw/user-manual.md — §Login, image login-screen.png`. The name in the
+  locator must be one attached to that plan call, and such a fact is
+  `confidence: low`.
+- **Failures:** a quarantined bundle leaves `raw/` whole, with its images in
+  `.wiki/quarantine/<page>.members/`, and `--trust` brings them back. A changed
+  bundle that fails gets its last ingested page and images back, and its new
+  files go to `inbox/`. A deleted page takes the images only it links with it.
 
 ## 6. Claude runner (`claude.py`, the only place CLI flags exist)
 
