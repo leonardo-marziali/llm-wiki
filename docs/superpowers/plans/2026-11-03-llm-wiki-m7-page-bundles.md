@@ -84,5 +84,5 @@ sources. Agents look up 1–3 wikis and merge the results.
 ### Task 8: README and the "Done" note
 
 - [x] README and the offline checks.
-- [ ] `wiki doctor`, one paid run after asking (budget about $5), and the spec
+- [x] `wiki doctor`, one paid run after asking (budget about $5), and the spec
       §11 "Done" note with its result.

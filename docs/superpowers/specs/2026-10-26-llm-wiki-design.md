@@ -545,8 +545,19 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    (older pages never gain the back-link; `lint --deep` reports it)._
 
 7. **Page bundles:** a Markdown page and the local images it links are one
-   source; a lookup covers up to 3 wikis (that part landed in #6). The offline
-   suite is green. The "Done" note waits for the paid run.
+   source; a lookup covers up to 3 wikis (that part landed in #6). _Done
+   2026-11-03: 919 offline tests. A real run ingested 3 real pages one per run,
+   in a scratch wiki: an API page with no images ($0.34), an architecture page
+   with 14 images ($0.45) and a manual page with 33 ($1.23, split into 2 parts).
+   `wiki status` counted 3 sources for 50 raw files. Triage sent 42 images and
+   held back 5 near-duplicates. Plans cited 18 images by name, and a checked
+   screenshot matched its claims. 0 lint errors. One plan retry came from a
+   high-confidence image fact. Total real spend $2.07 including `wiki doctor`,
+   which passed. The run found the model mangling two image names (`-jpg` for
+   `.jpg`), which the locator check then missed; both are fixed. Left: a page's
+   `confidence` is one value, so image facts on a mixed page show its level, not
+   `low`. Plans cite an image only when it adds a fact, so many screenshots
+   leave no citation._
 
 ## 12. Verification
 
