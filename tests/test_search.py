@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from llm_wiki.cli import app
 from llm_wiki.config import Section, WikiConfig, dump_config
-from llm_wiki.registry import WikiRef
+from llm_wiki.registry import WikiRef, register
 from llm_wiki.search import SearchHit, search, tokenize
 
 CFG = WikiConfig(
@@ -145,3 +145,62 @@ def test_cli_top_must_be_positive(tmp_path):
         r = CliRunner().invoke(app, ["search", "kafka", "--wiki", str(w), "--top", bad])
         assert r.exit_code == 2, r.output
         assert "error: --top must be >= 1" in r.stderr
+
+
+def three_wikis(tmp_path: Path) -> tuple[Path, Path, Path]:
+    w1 = make_wiki(tmp_path / "w1", "one")
+    w2 = make_wiki(tmp_path / "w2", "two")
+    w3 = make_wiki(tmp_path / "w3", "three")
+    put(w1, "sys/a.md", "a", "Kafka one", body="kafka kafka kafka")
+    put(w2, "sys/b.md", "b", "Kafka two", body="kafka")
+    put(w2, "sys/c.md", "c", "Other", body="unrelated")
+    put(w3, "sys/d.md", "d", "Kafka three", body="kafka")
+    return w1, w2, w3
+
+
+def search_json(*args: str) -> list[dict]:
+    r = CliRunner().invoke(app, ["search", "kafka", "--format", "json", *args])
+    assert r.exit_code == 0, r.output
+    return json.loads(r.output)
+
+
+def test_cli_search_repeated_wiki_covers_only_the_chosen_wikis(tmp_path):
+    w1, w2, _ = three_wikis(tmp_path)
+    hits = search_json("--wiki", str(w1), "--wiki", str(w2))
+    assert sorted((h["wiki"], h["id"]) for h in hits) == [("one", "a"), ("two", "b")]
+
+
+def test_cli_search_repeated_wiki_shares_one_ranking(tmp_path):
+    w1, w2, _ = three_wikis(tmp_path)
+    expected = search([ref(w1, "one"), ref(w2, "two")], "kafka")
+    hits = search_json("--wiki", str(w1), "--wiki", str(w2))
+    assert [(h["id"], h["score"]) for h in hits] == [(h.id, h.score) for h in expected]
+    assert hits[0]["score"] > hits[1]["score"]
+
+
+def test_cli_search_repeated_wiki_path_is_searched_once(tmp_path):
+    w1, _, _ = three_wikis(tmp_path)
+    hits = search_json("--wiki", str(w1), "--wiki", str(w1))
+    assert [h["id"] for h in hits] == ["a"]
+
+
+def test_cli_search_name_and_path_of_one_wiki_is_searched_once(tmp_path):
+    w1, _, _ = three_wikis(tmp_path)
+    register("one", w1)
+    hits = search_json("--wiki", "one", "--wiki", str(w1))
+    assert [h["id"] for h in hits] == ["a"]
+
+
+def test_cli_search_repeated_wiki_unknown_name_exits_2(tmp_path):
+    w1, _, _ = three_wikis(tmp_path)
+    r = CliRunner().invoke(app, ["search", "kafka", "--wiki", str(w1), "--wiki", "no"])
+    assert r.exit_code == 2
+
+
+def test_cli_search_all_with_repeated_wiki_exits_2(tmp_path):
+    w1, w2, _ = three_wikis(tmp_path)
+    r = CliRunner().invoke(
+        app, ["search", "kafka", "--all", "--wiki", str(w1), "--wiki", str(w2)]
+    )
+    assert r.exit_code == 2
+    assert "use either --wiki or --all" in r.stderr

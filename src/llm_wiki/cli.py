@@ -94,7 +94,9 @@ def init(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Search terms."),
-    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+    wiki: list[str] | None = typer.Option(
+        None, "--wiki", help="Wiki name or path; repeat it to search several."
+    ),
     all_wikis: bool = typer.Option(False, "--all", help="Search every known wiki."),
     status: str | None = typer.Option(
         None, "--status", help="Only pages with this status."
@@ -109,12 +111,16 @@ def search(
     from llm_wiki import registry
     from llm_wiki.search import search as run_search
 
-    if all_wikis and wiki is not None:
+    if all_wikis and wiki:
         raise WikiError("use either --wiki or --all")
     _check_format(fmt)
     if top < 1:
         raise WikiError("--top must be >= 1")
-    refs = registry.known_wikis() if all_wikis else [registry.resolve(wiki, Path.cwd())]
+    if all_wikis:
+        refs = registry.known_wikis()
+    else:
+        chosen = [registry.resolve(w, Path.cwd()) for w in wiki or [None]]
+        refs = list({r.path: r for r in chosen}.values())
     hits = run_search(refs, query, top=top, status=status, section=section)
     if fmt == "json":
         typer.echo(
