@@ -823,3 +823,29 @@ def test_plan_prompt_tells_how_to_cite_a_page_image():
     text = resources.files("llm_wiki").joinpath("prompts/plan.md").read_text("utf-8")
     assert "§Login, image login-screen.png" in text
     assert "confidence" in text
+
+
+def _bundle_errors(root, locator, confidence="low"):
+    return validate_plan(
+        _image_plan(locator, confidence=confidence),
+        root=root,
+        cfg=load_config(root),
+        source=RAW_REL,
+        manifest=Manifest.load(root),
+        allowed_updates=None,
+        image_names={"diagram.jpg", "login.png"},
+    )
+
+
+def test_page_image_locator_with_a_mangled_name_is_rejected_with_the_real_names(root):
+    errors = _bundle_errors(root, "§Diagram, image diagram-jpg")
+    assert any("diagram-jpg" in e and "diagram.jpg" in e for e in errors), errors
+
+
+def test_a_heading_about_images_is_no_image_locator(root):
+    assert _bundle_errors(root, "§Image formats", confidence="high") == []
+    assert _bundle_errors(root, "§Image upload, table 2", confidence="high") == []
+
+
+def test_image_locator_may_go_on_after_the_name(root):
+    assert _bundle_errors(root, "§Login, image login.png, marker 3") == []

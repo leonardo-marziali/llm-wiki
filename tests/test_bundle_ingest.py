@@ -15,6 +15,7 @@ from llm_wiki.config import dump_config, load_config
 from llm_wiki.ingest_run import run_ingest
 from llm_wiki.intake import copy_paths, prepare_source, trust
 from llm_wiki.manifest import Manifest
+from llm_wiki.plan import build_plan_prompt
 from llm_wiki.registry import WikiRef
 
 TODAY = date(2026, 10, 28)
@@ -828,3 +829,14 @@ def test_removed_image_is_named_as_changed(wiki, fake_claude, shots):
 def test_plan_prompt_says_what_to_do_about_changed_images():
     text = resources.files("llm_wiki").joinpath("prompts/plan.md").read_text("utf-8")
     assert "changed images" in text
+
+
+def test_prompt_says_a_name_keeps_its_extension(wiki, shots):
+    (wiki / "raw/page.md").write_text("![](a.png)\n", encoding="utf-8")
+    shots(wiki / "raw/page", "a")
+    p, _ = prep(wiki, "raw/page.md")
+    prompt = build_plan_prompt(
+        wiki, load_config(wiki), p, "text", "the whole source", TODAY, part=p.parts[0]
+    )
+    assert "exactly as listed" in prompt
+    assert "other characters replaced" not in prompt

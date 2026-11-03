@@ -32,7 +32,8 @@ from llm_wiki.search import search, tokenize
 _ID = re.compile(ID_RE)
 _TOP_LEVEL = {"overview", "glossary"}  # pages outside any section; update only
 _SYSTEM_IDS = {name.removesuffix(".md") for name in SYSTEM_FILES}
-_IMAGE_LOCATOR = re.compile(r"\bimage\s+(\S+\.(?:png|jpe?g|gif|webp))\b", re.IGNORECASE)
+# ", image <name>" as the locator rule writes it; "§Image formats" is a heading
+_IMAGE_LOCATOR = re.compile(r"(?:^|[,;]\s*)image\s+([^\s,;]+)")
 
 
 class PlannedPage(Protocol):
@@ -282,12 +283,13 @@ def _image_locator_errors(
     plan: Plan, source: str, image_names: Collection[str]
 ) -> list[str]:
     errors = []
+    attached = ", ".join(sorted(image_names)) or "none"
     for p in plan.pages:
         for c in p.claims:
             names = _IMAGE_LOCATOR.findall(c.locator) if c.source == source else []
             errors += [
                 f"{p.id}: locator {c.locator!r} names an image not attached to "
-                f"this message: {name}"
+                f"this message: {name}. Attached: {attached}"
                 for name in names
                 if name not in image_names
             ]
@@ -405,9 +407,9 @@ def _bundle_lines(prepared: Prepared, part: str | None) -> list[str]:
     attached = prepared.images.get(part, []) if part else []
     if attached:
         lines.append(
-            "- attached images, in this order (a file name in the source text, "
-            "lowercased with other characters replaced by `-`, is its name here; "
-            "cite one as `<heading>, image <name>`):"
+            "- attached images, in this order (each is the file a link in the source "
+            "text names, under a tidied name; cite one as `<heading>, image <name>`, "
+            "with the name exactly as listed):"
         )
         lines += [f"  {n}. {m.name}" for n, m in enumerate(attached, 1)]
     same = prepared.same_images.get(part, []) if part else []
