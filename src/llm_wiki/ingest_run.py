@@ -310,7 +310,8 @@ def _prepare(ctx: RunContext, item: _Item, undo: Undo) -> Prepared:
         prepared.origin = free_path(origin) if origin else inbox_home(root, item.rel)
         undo.own(prepared.origin.relative_to(root).as_posix())
         for member in prepared.members:  # where a failure sends the new images
-            undo.own(inbox_home(root, member.path).relative_to(root).as_posix())
+            home = inbox_home(root, member_rel(item.rel, member.name))
+            undo.own(home.relative_to(root).as_posix())
     return prepared
 
 
@@ -319,7 +320,6 @@ def _process(
 ) -> None:
     root = Path(ctx.root)
     redactions: Counter[str] = Counter()
-    placed: set[Path] = set()
     for n, item in enumerate(items, 1):
         ctx.n = n
         if item.origin is not None:
@@ -327,7 +327,7 @@ def _process(
         for file, rel in item.members:
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file, root / rel)
-            placed.add(file)
+        _drop_placed(root, item, items[n:])
         if not needs_work(ctx.manifest, root, item.rel):
             continue  # an inbox copy of a source the wiki already holds
         try:
@@ -349,25 +349,24 @@ def _process(
                 )
             )
             report.stopped = str(exc)
-            _drop_placed(root, placed, items[n:])
             break
         redactions.update(out.redactions)
         report.outcomes.append(out)
-    else:
-        _drop_placed(root, placed, [])
     report.redactions = dict(redactions)
     report.cost_usd = sum(o.cost_usd for o in report.outcomes)
 
 
-def _drop_placed(root: Path, placed: set[Path], pending: list[_Item]) -> None:
-    """Remove the inbox images now in raw/, except those a pending page or a page
-    still in inbox/ needs.
+def _drop_placed(root: Path, item: _Item, pending: list[_Item]) -> None:
+    """Remove the inbox images ``item`` just copied into raw/, except those a pending
+    page or a page still in inbox/ needs. It happens now, so a failure of this source
+    finds their inbox paths free for the new versions it sends back.
     """
-    needed = {file for item in pending for file, _ in item.members}
+    needed = {file for later in pending for file, _ in later.members}
     left = inbox_members(root / "inbox", intake_inbox(root))
     needed |= {file for found in left.values() for file, _ in found}
-    for file in placed - needed:
-        file.unlink(missing_ok=True)
+    for file, _ in item.members:
+        if file not in needed:
+            file.unlink(missing_ok=True)
 
 
 def _log_lines(outcomes: list[SourceOutcome], today: date) -> list[str]:

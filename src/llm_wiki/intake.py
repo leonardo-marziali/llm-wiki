@@ -16,10 +16,11 @@ from typing import Literal
 
 from llm_wiki.bundle import (
     Member,
+    definitions,
     file_name,
     find_members,
     is_page,
-    local_links,
+    link_paths,
     member_owners,
     member_rel,
     page_members,
@@ -70,6 +71,8 @@ class Prepared:
     status: Literal["ready", "quarantined", "refused"] = "ready"
     reason: str = ""
     held: Path | None = None  # where quarantine put the raw file
+    # the conversion a quarantine deleted: the old version's too if only images changed
+    scrapped: list[str] = field(default_factory=list)
 
     @property
     def is_image(self) -> bool:
@@ -521,39 +524,49 @@ def _splitter(triaged: _Triaged, max_images: int) -> Splitter | None:
     return lambda body, limit: split_parts(body, sent, max_images, limit)
 
 
-def _attach_images(root: Path, prepared: Prepared, triaged: _Triaged) -> None:
+def _attach_images(
+    root: Path, prepared: Prepared, triaged: _Triaged, max_images: int
+) -> None:
     """Give each part the images it links first, in link order."""
+    assert prepared.conversion is not None
+    full = (root / prepared.conversion.outputs[0]).read_text(encoding="utf-8")
+    defs = definitions(full)
     to_send = {m.link: m for m in triaged.sent}
+    names = {m.link: m.name for m in prepared.members}
     attached: set[str] = set()
     for part in prepared.parts:
-        links, _ = local_links((root / part).read_text(encoding="utf-8"))
-        images = [to_send[ln.path] for ln in links if ln.path in to_send]
+        paths = link_paths((root / part).read_text(encoding="utf-8"), defs)
+        images = [to_send[p] for p in dict.fromkeys(paths) if p in to_send]
         images = [m for m in images if m.link not in attached]
         attached |= {m.link for m in images}
         same = [
-            (next(m.name for m in prepared.members if m.link == ln.path), first.name)
-            for ln in links
-            if (first := triaged.same.get(ln.path))
+            (names[p], first.name)
+            for p in dict.fromkeys(paths)
+            if (first := triaged.same.get(p))
         ]
         if images:
             prepared.images[part] = images
         if same:
             prepared.same_images[part] = same
-    # a link a part cut made unreadable (say, inside a split code fence)
-    rest = [m for m in triaged.sent if m.link not in attached]
-    if rest:
-        prepared.images.setdefault(prepared.parts[-1], []).extend(rest)
+    # a link screening changed, so no part names it any more: the first part with room
+    for member in (m for m in triaged.sent if m.link not in attached):
+        room = (
+            p for p in prepared.parts if len(prepared.images.get(p, [])) < max_images
+        )
+        part = next(room, prepared.parts[-1])
+        prepared.images.setdefault(part, []).append(member)
 
 
 def _changed_images(
     old: SourceEntry | None, members: list[Member], current: list[BundleMember]
 ) -> list[str]:
-    """The names of the members new or different since the last ingest."""
+    """The names of the members new, different or gone since the last ingest."""
     if old is None or old.members is None:
         return []
     known = {m.path: m.sha256 for m in old.members}
     now = {m.path: m.sha256 for m in current}
-    return [m.name for m in members if known.get(m.path) != now[m.path]]
+    removed = [file_name(Path(p).name) for p in known if p not in now]
+    return [m.name for m in members if known.get(m.path) != now[m.path]] + removed
 
 
 def prepare_source(
@@ -609,6 +622,7 @@ def prepare_source(
         hold_members(root, manifest, prepared.held, paths)
         for out in conv.outputs:
             (root / out).unlink(missing_ok=True)
+        prepared.scrapped = conv.outputs
         manifest.record(
             entry.model_copy(
                 update={"status": "quarantined", "redactions": dict(counts)}
@@ -642,7 +656,7 @@ def prepare_source(
     )
     prepared.conversion = conv
     prepared.parts = _parts(conv)
-    _attach_images(root, prepared, triaged)
+    _attach_images(root, prepared, triaged, caps.max_images_per_part)
     if prepared.is_image:
         name = Path(rel).name
         prepared.images[prepared.parts[0]] = [Member("", rel, name)]

@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
+from llm_wiki.bundle import member_rel
 from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.convert import never_ingest
 from llm_wiki.errors import STOP, WikiError
@@ -535,13 +536,19 @@ def _entry_at(root: Path, rev: str, rel: str) -> SourceEntry | None:
         return None
 
 
-def _member_paths(entry: SourceEntry | None) -> list[str]:
-    return [m.path for m in (entry.members or [])] if entry else []
+def _member_paths(ctx: RunContext, entry: SourceEntry | None) -> list[str]:
+    """The files of ``entry``'s members a page's failure may put back. A member that
+    is a source itself is left alone: its own turn commits or restores it, and may
+    hold the only copy of a new version.
+    """
+    members = (entry.members or []) if entry else []
+    return [m.path for m in members if not ctx.manifest.is_live(m.path)]
 
 
-def _touched_members(prepared: Prepared) -> list[str]:
+def _touched_members(ctx: RunContext, prepared: Prepared) -> list[str]:
     """The member files a prepared source's prep commit holds or removes."""
-    return [*(m.path for m in prepared.members), *prepared.pruned]
+    paths = [m.path for m in prepared.members if not ctx.manifest.is_live(m.path)]
+    return [*paths, *prepared.pruned]
 
 
 def _quarantine_plan(
@@ -567,7 +574,7 @@ def _quarantine_plan(
             for h in hits
         ],
     }
-    members = _touched_members(prepared)
+    members = _touched_members(ctx, prepared)
     record["members"] = [m.path for m in prepared.members]
     if old is not None:
         record["restored_sha256"] = old.sha256
@@ -581,7 +588,7 @@ def _quarantine_plan(
         same = old.sha256 == prepared.sha
         restore(
             root,
-            [rel, *_member_paths(old), *(outputs if same else [])],
+            [rel, *_member_paths(ctx, old), *(outputs if same else [])],
             rev=f"{prep}^",
         )
         ctx.manifest.record(old)
@@ -589,7 +596,7 @@ def _quarantine_plan(
         reason += "; kept the last ingested version"
     else:
         _set_status(ctx, rel, status="quarantined", converted=[], members=None)
-    forced = [*outputs, *members, *_member_paths(old), MANIFEST]
+    forced = [*outputs, *members, *_member_paths(ctx, old), MANIFEST]
     stage_commit(root, [rel, *forced], f"ingest(prep): {rel}", amend=prep, force=forced)
     return reason
 
@@ -600,7 +607,8 @@ def _move_new_version(
     """Move a failed changed source's new files from raw/ to the inbox, from where
     the next run takes them back: the page to its origin (default:
     ``inbox/<path under raw/>``) unless only its images changed, and each new or
-    changed member to ``inbox/<path under raw/>``. Returns the reason's suffix.
+    changed member to the page's folder there, where the next run's links find it.
+    Returns the reason's suffix.
     """
     root = Path(ctx.root)
     known = {m.path: m.sha256 for m in (old.members or [])} if old else {}
@@ -612,7 +620,7 @@ def _move_new_version(
             and not ctx.manifest.is_live(member.path)
             and known.get(member.path) != sha256_file(path)
         ):
-            dest = inbox_home(root, member.path)
+            dest = inbox_home(root, member_rel(prepared.rel, member.name))
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), dest)
             moved.append(dest.relative_to(root).as_posix())
@@ -621,8 +629,8 @@ def _move_new_version(
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(root / prepared.rel), dest)
         moved.insert(0, dest.relative_to(root).as_posix())
-    where = ", ".join(moved)
-    return f"; kept the last ingested version; the new version is back at {where}"
+    kept = "; kept the last ingested version"
+    return f"{kept}; the new version is back at {', '.join(moved)}" if moved else kept
 
 
 def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
@@ -643,7 +651,9 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(root / rel), dest)
             moved = f"; the new version is back at {dest.relative_to(root).as_posix()}"
-        restore(root, [rel, *_member_paths(old)])
+        # only images changed: the conversion a quarantine deleted is the old one
+        same = prepared.scrapped if old.sha256 == prepared.sha else []
+        restore(root, [rel, *_member_paths(ctx, old), *same])
         ctx.manifest.record(old)
         if prepared.held is not None:  # the reason file records the restore
             reason_file = prepared.held.with_name(prepared.held.name + ".reason.json")
@@ -684,7 +694,7 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
         out.status, out.reason = "failed", str(exc)
         return out
     entry = ctx.manifest.entries.get(rel)
-    gone = removable_members(root, ctx.manifest, _member_paths(entry))
+    gone = removable_members(root, ctx.manifest, _member_paths(ctx, entry))
     if plan is None:  # it backs no page: only the manifest and the log change
         try:
             ctx.manifest.mark_deleted(rel)
@@ -742,7 +752,7 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
     outputs = prepared.conversion.outputs if prepared.conversion else []
-    members = _touched_members(prepared) if prepared.status == "ready" else []
+    members = _touched_members(ctx, prepared) if prepared.status == "ready" else []
     settled = ""  # what _record_unready already did to the tree
     try:
         if prepared.status != "ready":  # screened out or refused: record it, no LLM
@@ -782,7 +792,7 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
             old = _entry_at(root, "HEAD", rel)
             out.reason += _move_new_version(ctx, prepared, old)
             # the last ingested version, as committed
-            restore(root, [rel, *_member_paths(old)])
+            restore(root, [rel, *_member_paths(ctx, old)])
         return out
     source = _Source(ctx, prepared, out, prep)
     try:
@@ -830,11 +840,11 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
         )
     else:
         reason += _move_new_version(ctx, prepared, old)
-        kept = _member_paths(old)
+        kept = _member_paths(ctx, old)
         restore(root, [rel, *outputs, *kept], rev=f"{prep}^")
         ctx.manifest.record(old)
         ctx.manifest.save(root)
-        forced = [*outputs, *_touched_members(prepared), *kept, MANIFEST]
+        forced = [*outputs, *_touched_members(ctx, prepared), *kept, MANIFEST]
         stage_commit(
             root, [rel, *forced], f"ingest(prep): {rel}", amend=prep, force=forced
         )

@@ -11,8 +11,8 @@ manual is [README.md](README.md).
 - `src/llm_wiki/`: the package, one small module per concern. `cli.py` is a thin
   Typer layer over them.
   - `claude.py`: the runner for headless `claude -p`.
-  - `ingest.py`, `ingest_run.py`, `intake.py`, `plan.py`, `session.py`,
-    `gate.py`: the ingest flow.
+  - `ingest.py`, `ingest_run.py`, `intake.py`, `bundle.py`, `plan.py`,
+    `session.py`, `gate.py`: the ingest flow.
   - `maint.py`, `maint_job.py`, `maint_run.py`, `deep.py`, `archive.py`:
     `lint --fix`, `lint --deep` and `consolidate`.
   - `prompts/*.md`: the system prompts of the LLM calls.

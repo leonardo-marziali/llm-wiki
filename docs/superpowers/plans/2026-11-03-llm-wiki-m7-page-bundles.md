@@ -46,41 +46,43 @@ sources. Agents look up 1–3 wikis and merge the results.
 
 ### Task 2: Link parsing and bundle discovery
 
-- [ ] `bundle.py`: `image_links`, `local_links`, `find_members`, `member_rel`,
+- [x] `bundle.py`: `image_links`, `local_links`, `find_members`, `member_rel`,
       `page_members`, `member_owners`, `inbox_members`.
-- [ ] Tests: relative and nested paths, URL-encoded names, missing files, remote
+- [x] Tests: relative and nested paths, URL-encoded names, missing files, remote
       URLs, code blocks, tree escapes, an image linked by two pages, a member
       also dropped alone.
 
 ### Task 3: Manifest and caps
 
-- [ ] `BundleMember`, `SourceEntry.members`, `Manifest.members_changed`, scan
+- [x] `BundleMember`, `SourceEntry.members`, `Manifest.members_changed`, scan
       skips members, `max_images_per_part`.
-- [ ] Tests: change detection on a member, bundles counted once, pre-M7 entries
+- [x] Tests: change detection on a member, bundles counted once, pre-M7 entries
       not reported as changed, status counts.
 
 ### Task 4: Plan call with images
 
-- [ ] Intake places members; `Prepared.images` replaces `Prepared.image`;
+- [x] Intake places members; `Prepared.images` replaces `Prepared.image`;
       triage, de-duplication and part splitting; `plan_source` sends the part's
       images.
-- [ ] Failure paths keep members consistent: quarantine, trust, a failed changed
+- [x] Failure paths keep members consistent: quarantine, trust, a failed changed
       source, deletion, the cap, reject.
 
 ### Task 5: Prompt and lint
 
-- [ ] Locator rule in `prompts/plan.md` and `prompts/edit.md`; `validate_plan`
+- [x] Locator rule in `prompts/plan.md` and `prompts/edit.md`; `validate_plan`
       checks image locators; lint accepts them.
 
 ### Task 6: Multi-wiki lookup
 
-- [ ] Check that repeated `--wiki` and the skill text cover the ruling.
+- [x] Check that repeated `--wiki` and the skill text cover the ruling.
 
 ### Task 7: End-to-end
 
-- [ ] Extend `tests/test_e2e_m3.py`: a page with 3 images makes one plan call
+- [x] Extend `tests/test_e2e_m3.py`: a page with 3 images makes one plan call
       with 3 image blocks; a re-ingest after one image changes.
 
 ### Task 8: README and the "Done" note
 
-- [ ] README, spec §11, the checks, `wiki doctor`, one paid run after asking.
+- [x] README and the offline checks.
+- [ ] `wiki doctor`, one paid run after asking (budget about $5), and the spec
+      §11 "Done" note with its result.

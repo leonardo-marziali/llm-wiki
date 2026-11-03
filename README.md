@@ -106,8 +106,8 @@ wiki ingest --wiki payments ./payments-docs # a folder of pages and attachments
 
 - Links count when they are relative, like `![login](attachments/login.png)`,
   and stay inside what you ingest: the folder, or a single file's own folder.
-  Remote URLs and missing files are listed in the run report and otherwise
-  ignored.
+  Reference links, `<img src="…">` and `![[…]]` count too. Remote URLs and
+  missing files are listed in the run report and otherwise ignored.
 - Images go next to their page: `raw/user-manual.md` keeps its images in
   `raw/user-manual/`. An image two pages link is copied to both.
 - One plan call gets the page text and its images in link order. Tiny images are

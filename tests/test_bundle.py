@@ -57,9 +57,9 @@ def test_local_links_confluence_name_and_dedupe():
     assert [ln.name for ln in links] == ["image2020-1-30-12-5-7.png"]
 
 
-def test_local_links_clash_gets_a_number():
+def test_local_links_clash_is_named_by_folder_not_by_order():
     links, _ = local_links("![](a/x.png)\n![](b/x.png)\n![](c/X.png)\n")
-    assert [ln.name for ln in links] == ["x.png", "x-2.png", "x-3.png"]
+    assert [ln.name for ln in links] == ["a-x.png", "b-x.png", "c-x.png"]
 
 
 def test_member_rel_is_next_to_the_page():
@@ -98,8 +98,84 @@ def test_find_members_prefers_the_page_folder(tmp_path):
     page = write(tree / "page.md", "![](x.png)\n")
     touch(tree / "x.png")
     member = touch(tree / "page/x.png")
-    found, _ = find_members(page, tree)
+    found, _ = find_members(page, tree, in_raw=True)
     assert [p for _, p in found] == [member.resolve()]
+
+
+def test_find_members_in_a_source_tree_prefers_the_real_target(tmp_path):
+    tree = tmp_path / "tree"
+    page = write(tree / "guide.md", "![](shots/login.png)\n")
+    real = touch(tree / "shots/login.png")
+    touch(tree / "guide/login.png")  # an unrelated file in a same-named folder
+    found, _ = find_members(page, tree)
+    assert [p for _, p in found] == [real.resolve()]
+
+
+def test_removing_a_clashing_link_keeps_the_other_image(tmp_path):
+    root = tmp_path
+    page = write(root / "raw/page.md", "![](a/login.png)\n![](b/login.png)\n")
+    touch(root / "raw/page/a-login.png")
+    b = touch(root / "raw/page/b-login.png")
+    page.write_text("![](b/login.png)\n", encoding="utf-8")
+    members, ignored = page_members(root, "raw/page.md")
+    assert [m.path for m in members] == ["raw/page/b-login.png"]
+    assert ignored == []
+    assert b.is_file()
+
+
+def test_odd_links_are_reported_and_never_raise(tmp_path):
+    tree = tmp_path / "raw"
+    long_name = "x" * 300 + ".png"
+    page = write(tree / "page.md", f"![](a%00.png)\n![]({long_name})\n")
+    found, ignored = find_members(page, tree)
+    assert found == []
+    assert ignored == ["missing: a%00.png", f"missing: {long_name}"]
+    assert member_owners(tmp_path)  # what scan calls
+
+
+def test_image_links_other_common_forms():
+    text = (
+        "![a [b] c](nested.png)\n"
+        "![over\ntwo lines](two.png)\n"
+        "![r][ref]\n![Short]\n![none]\n"
+        "<img src=\"html.png\" alt=\"x\"> <IMG alt='y' src='html2.png'/>\n"
+        "![[wiki.png]] ![[other.png|300]]\n\n"
+        "[ref]: y.png\n[short]: <z w.png> 'title'\n"
+    )
+    assert image_links(text) == [
+        "nested.png",
+        "two.png",
+        "y.png",
+        "z w.png",
+        "html.png",
+        "html2.png",
+        "wiki.png",
+        "other.png",
+    ]
+
+
+def test_image_links_html_escapes_are_decoded():
+    assert image_links('<img src="a.png?x=1&amp;y=2">') == ["a.png?x=1&y=2"]
+
+
+def test_split_parts_counts_links_after_a_fence_with_a_hash_line():
+    sections = [
+        f"## S{i}\n\n```sh\n# run this\n```\n\n![](a{i}.png)\n\n![](b{i}.png)\n\n"
+        for i in range(4)
+    ]
+    body = "".join(sections)
+    sent = {f"{x}{i}.png" for x in "ab" for i in range(4)}
+    parts = split_parts(body, sent, 2, 10_000)
+    assert "".join(parts) == body
+    assert [p.count("![") for p in parts] == [2, 2, 2, 2]
+    assert all(p.startswith("## S") for p in parts)  # never inside the fence
+
+
+def test_split_parts_counts_reference_links_defined_elsewhere():
+    links = "## A\n\n![][x]\n\n![][y]\n\n## B\n\n![][z]\n\n"
+    body = links + "[x]: x.png\n[y]: y.png\n[z]: z.png\n"
+    parts = split_parts(body, {"x.png", "y.png", "z.png"}, 1, 10_000)
+    assert [p.count("![") for p in parts] == [1, 1, 1]
 
 
 def test_page_members_from_raw(tmp_path):

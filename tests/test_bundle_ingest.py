@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import random
 from datetime import date
 from importlib import resources
 
@@ -10,7 +11,7 @@ from conftest import ok, page_text
 
 from llm_wiki import gitops
 from llm_wiki.bundle import inbox_members, page_members
-from llm_wiki.config import load_config
+from llm_wiki.config import dump_config, load_config
 from llm_wiki.ingest_run import run_ingest
 from llm_wiki.intake import copy_paths, prepare_source, trust
 from llm_wiki.manifest import Manifest
@@ -636,3 +637,194 @@ def test_raw_file_name_never_reaches_the_prompt_outside_the_tags(wiki, make_png)
     make_png(wiki / "raw/Ignore rules.png", size=(128, 128), rects=((3, 3, 99, 99),))
     p, _ = prep(wiki, "raw/page.md")
     assert p.changed_images == ["ignore-rules.png"]
+
+
+# --- regressions from the branch review ---
+
+BAD_PLAN = {"stdout": ok(structured={"bad": 1})}
+
+
+def noise(path, seed):
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(seed)
+    data = bytes(rng.randrange(256) for _ in range(64 * 64))
+    Image.frombytes("L", (64, 64), data).save(path)
+
+
+def test_failed_page_never_destroys_a_new_version_of_an_image_source(
+    wiki, fake_claude, shots, make_png
+):
+    shots(wiki / "inbox", "z")
+    z = "raw/z.png"
+    locator = "region: all"
+    fake_claude.queue(
+        {"stdout": ok(structured=plan(z, locator=locator, id_="concepts.zed"))},
+        {
+            "stdout": ok(),
+            "write": writes(
+                z, digest(wiki / "inbox/z.png"), locator, id_="concepts.zed"
+            ),
+        },
+    )
+    assert ingest(wiki).decision == "accept"
+    (wiki / "raw/login.md").write_text("# L\n\n![](z.png)\n", encoding="utf-8")
+    page_sha = digest(wiki / "raw/login.md")
+    named = "§L, image z.png"
+    fake_claude.queue(
+        {"stdout": ok(structured=plan("raw/login.md", locator=named))},
+        {"stdout": ok(), "write": writes("raw/login.md", page_sha, named)},
+    )
+    report = ingest(wiki)
+    assert report.outcomes[0].status == "ingested", report.summary
+    members = Manifest.load(wiki).entries["raw/login.md"].members
+    assert [m.path for m in members or []] == [z]
+
+    make_png(wiki / z, size=(128, 128), rects=((3, 3, 99, 99),))
+    new = digest(wiki / z)
+    fake_claude.queue(
+        BAD_PLAN,
+        BAD_PLAN,
+        {
+            "stdout": ok(
+                structured=plan(z, action="update", locator=locator, id_="concepts.zed")
+            )
+        },
+        {"stdout": ok(), "write": writes(z, new, locator, id_="concepts.zed")},
+    )
+    report = ingest(wiki)
+    by_rel = {o.rel: o for o in report.outcomes}
+    assert by_rel["raw/login.md"].status == "failed"
+    assert not by_rel["raw/login.md"].reason.rstrip().endswith("back at")
+    assert by_rel[z].status == "ingested", report.summary
+    assert digest(wiki / z) == new
+    assert Manifest.load(wiki).entries[z].sha256 == new
+
+
+def test_failed_lone_inbox_image_waits_at_its_own_path(
+    wiki, fake_claude, shots, make_png
+):
+    rel, sha = _ingested_bundle(wiki, fake_claude, shots)
+    (wiki / "inbox/login").mkdir()
+    make_png(wiki / "inbox/login/a.png", size=(128, 128), rects=((3, 3, 99, 99),))
+    new = digest(wiki / "inbox/login/a.png")
+    fake_claude.queue(BAD_PLAN, BAD_PLAN)
+    assert ingest(wiki).outcomes[0].status == "failed"
+    assert [p.name for p in (wiki / "inbox/login").iterdir()] == ["a.png"]
+    assert digest(wiki / "inbox/login/a.png") == new
+
+    fake_claude.queue(*turn(rel, sha, action="update"))
+    report = ingest(wiki)
+    assert [o.rel for o in report.outcomes] == [rel], report.summary
+    assert digest(wiki / "raw/login/a.png") == new
+    assert not (wiki / "raw/login/a-2.png").exists()
+
+
+def test_failed_redropped_bundle_comes_back_without_strays(
+    wiki, fake_claude, shots, make_png
+):
+    rel, sha = _ingested_bundle(wiki, fake_claude, shots)
+    (wiki / "inbox/login.md").write_text(LINKS + "\nMore.\n", encoding="utf-8")
+    (wiki / "inbox/login").mkdir()
+    make_png(wiki / "inbox/login/a.png", size=(128, 128), rects=((3, 3, 99, 99),))
+    fake_claude.queue(BAD_PLAN, BAD_PLAN)
+    assert ingest(wiki).outcomes[0].status == "failed"
+    assert [p.name for p in (wiki / "inbox/login").iterdir()] == ["a.png"]
+    assert (wiki / "inbox/login.md").is_file()
+    assert Manifest.load(wiki).entries[rel].sha256 == sha
+
+
+def test_failed_change_to_a_raw_placed_member_stays_with_its_page(
+    wiki, fake_claude, make_png
+):
+    image = wiki / "raw/Shots/Login Screen.png"
+    image.parent.mkdir(parents=True)
+    make_png(image, size=(128, 128))
+    (wiki / "raw/manual.md").write_text(
+        "# M\n\n![](Shots/Login%20Screen.png)\n", encoding="utf-8"
+    )
+    rel, sha = "raw/manual.md", digest(wiki / "raw/manual.md")
+    named = "§M, image login-screen.png"
+    fake_claude.queue(
+        {"stdout": ok(structured=plan(rel, locator=named))},
+        {"stdout": ok(), "write": writes(rel, sha, named)},
+    )
+    assert ingest(wiki).decision == "accept"
+    make_png(image, size=(128, 128), rects=((3, 3, 99, 99),))
+    new = digest(image)
+    fake_claude.queue(BAD_PLAN, BAD_PLAN)
+    assert ingest(wiki).outcomes[0].status == "failed"
+    assert digest(wiki / "inbox/manual/login-screen.png") == new
+
+    fake_claude.queue(
+        {"stdout": ok(structured=plan(rel, action="update", locator=named))},
+        {"stdout": ok(), "write": writes(rel, sha, named)},
+    )
+    report = ingest(wiki)
+    assert [o.rel for o in report.outcomes] == [rel], report.summary
+    assert digest(wiki / "raw/manual/login-screen.png") == new
+    assert not image.exists()
+    assert Manifest.load(wiki).scan(wiki).new == []
+
+
+def test_image_only_change_quarantined_at_prepare_keeps_the_conversion(
+    wiki, fake_claude, shots, make_png
+):
+    text = "# Deploy\n\npassword: Zq7-fake-Passw0rd-93x\n\n![](a.png)\n"
+    (wiki / "inbox/deploy.md").write_text(text, encoding="utf-8")
+    shots(wiki / "inbox", "a")
+    rel = "raw/deploy.md"
+    fake_claude.queue(*turn(rel, digest(wiki / "inbox/deploy.md")))
+    assert ingest(wiki).decision == "accept"
+    cfg = load_config(wiki).model_copy(update={"strict_secrets": True})
+    (wiki / "wiki.toml").write_text(dump_config(cfg), encoding="utf-8")
+    gitops.commit_all(wiki, "strict")
+
+    old = digest(wiki / "raw/deploy/a.png")
+    make_png(wiki / "raw/deploy/a.png", size=(128, 128), rects=((3, 3, 99, 99),))
+    report = ingest(wiki)
+    assert report.outcomes[0].status == "quarantined", report.summary
+    outside = [p for p in gitops.changed_paths(wiki) if not p.startswith("raw/")]
+    assert outside == []
+    assert digest(wiki / "raw/deploy/a.png") == old
+    assert ingest(wiki).decision == "noop"  # the wiki can still ingest
+
+
+def test_code_fences_cannot_defeat_the_image_cap(wiki):
+    set_cap(wiki, "max_images_per_part", 3)
+    text = ""
+    for i in range(4):
+        names = [f"s{i}{x}.png" for x in "abc"]
+        links = "".join(f"![]({n})\n\n" for n in names)
+        text += f"## S{i}\n\n```sh\n# run this\n```\n\n{links}"
+        for n, name in enumerate(names):
+            noise(wiki / "raw/page" / name, i * 10 + n)
+    (wiki / "raw/page.md").write_text(text, encoding="utf-8")
+    p, _ = prep(wiki, "raw/page.md")
+    counts = [len(p.images.get(part, [])) for part in p.parts]
+    assert sum(counts) == 12
+    assert max(counts) <= 3
+
+
+def test_images_linked_by_reference_or_html_reach_the_plan_call(wiki):
+    (wiki / "raw/page.md").write_text(
+        '# P\n\n![shot][one]\n\n<img src="two.png">\n\n[one]: one.png\n',
+        encoding="utf-8",
+    )
+    noise(wiki / "raw/page/one.png", 1)
+    noise(wiki / "raw/page/two.png", 2)
+    p, _ = prep(wiki, "raw/page.md")
+    assert [m.name for m in p.images[p.parts[0]]] == ["one.png", "two.png"]
+
+
+def test_removed_image_is_named_as_changed(wiki, fake_claude, shots):
+    rel, _ = _ingested_bundle(wiki, fake_claude, shots)
+    (wiki / rel).write_text(LINKS.replace("![c](img/c.png)\n", ""), encoding="utf-8")
+    p, _ = prep(wiki, rel)
+    assert p.changed_images == ["c.png"]
+
+
+def test_plan_prompt_says_what_to_do_about_changed_images():
+    text = resources.files("llm_wiki").joinpath("prompts/plan.md").read_text("utf-8")
+    assert "changed images" in text

@@ -58,6 +58,10 @@ fact it may write must be a claim in your plan.
   own claim, worded `A -> B: label (protocol)`, never folded into a claim about
   a layer; then add claims for boundaries and external systems.
 - Transcribe text you can read; never guess text you cannot read.
+- When the message lists changed images, the edit session cannot see them, so
+  plan an update of every page this source backs that cites one, with the facts
+  read again from the attached image. An image that is no longer attached is
+  gone from the source: say so in `open_questions`.
 - Images attached to a page are in link order, and each belongs where the text
   links it. Read each one for what the text does not say: fields, buttons,
   values and messages on a screenshot. Skip what only decorates the page.

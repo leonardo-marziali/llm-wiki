@@ -292,15 +292,17 @@ supersedes: []  superseded_by: null  related: []  tags: []
 
 - **Finding members:** a link counts when it is relative, names an image type
   and resolves to a file inside the ingested tree: the folder given, the file's
-  own folder for a single file, `inbox/`, or `raw/`. URL-encoded names and
-  `?query` or `#fragment` suffixes are decoded. Links in code are ignored.
-  Remote URLs, missing files and other types are ignored and listed in the run
-  report.
-- **Placing members:** each goes to `raw/<page path>/<slugged file name>`, with
-  `-2` and so on for a clash within the page. The path depends only on the
-  page's path and text, so a raw page finds its members again in any later run.
-  A page dropped directly in `raw/` keeps its images where its links point, as
-  long as they stay inside `raw/`.
+  own folder for a single file, `inbox/`, or `raw/`. The forms are
+  `![alt](path)`, `![alt][label]` with its definition, `![label]`,
+  `<img src="path">` and `![[path]]`. URL-encoded names and `?query` or
+  `#fragment` suffixes are decoded. Links in code are ignored. Remote URLs,
+  missing files and other types are ignored and listed in the run report.
+- **Placing members:** each goes to `raw/<page path>/<slugged file name>`. Links
+  of one page that share a file name each get their folder's name in front. The
+  path depends only on the page's path and text, never on link order, so a raw
+  page finds its members again in any later run. A page dropped directly in
+  `raw/` keeps its images where its links point, as long as they stay inside
+  `raw/`.
 - **No double count:** a file both linked and dropped alone is a member only. An
   image linked by two pages is a member of both, with one copy each. An image
   already ingested as its own source stays one until the user deletes it, and is
@@ -325,7 +327,8 @@ supersedes: []  superseded_by: null  related: []  tags: []
 - **Failures:** a quarantined bundle leaves `raw/` whole, with its images in
   `.wiki/quarantine/<page>.members/`, and `--trust` brings them back. A changed
   bundle that fails gets its last ingested page and images back, and its new
-  files go to `inbox/`. A deleted page takes the images only it links with it.
+  files go to `inbox/`, in the page's folder. A member that is also a source is
+  left to its own turn. A deleted page takes the images only it links with it.
 
 ## 6. Claude runner (`claude.py`, the only place CLI flags exist)
 
@@ -540,6 +543,10 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    doctor runs. Left: images inside documents are not read, docx merged cells
    shift columns, and a new page links related existing pages in only some runs
    (older pages never gain the back-link; `lint --deep` reports it)._
+
+7. **Page bundles:** a Markdown page and the local images it links are one
+   source; a lookup covers up to 3 wikis (that part landed in #6). The offline
+   suite is green. The "Done" note waits for the paid run.
 
 ## 12. Verification
 
