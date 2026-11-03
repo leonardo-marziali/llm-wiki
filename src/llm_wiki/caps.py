@@ -16,6 +16,7 @@ class Caps:
     max_pages_per_ingest: int = 15
     lookup_pages: int = 5
     split_chars: int = 80_000
+    max_images_per_part: int = 20
 
 
 HARD_CAPS = Caps()

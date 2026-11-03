@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
+from llm_wiki.bundle import member_owners, page_members
 from llm_wiki.errors import ConfigError
 
 MANIFEST = ".wiki/manifest.json"
@@ -36,6 +37,13 @@ def category_for(rel: str) -> str:
     return parts[1] if len(parts) > 2 else "misc"
 
 
+class BundleMember(BaseModel):
+    """An image a Markdown source links: evidence, with no entry of its own."""
+
+    path: str
+    sha256: str
+
+
 class SourceEntry(BaseModel):
     path: str
     sha256: str
@@ -52,6 +60,8 @@ class SourceEntry(BaseModel):
     flags: list[str] = []
     redactions: dict[str, int] = {}
     src_page: str | None = None  # the id of its src- page, fixed once assigned
+    # a Markdown source's linked images; None on an entry from before bundles
+    members: list[BundleMember] | None = None
 
 
 @dataclass
@@ -95,6 +105,7 @@ class Manifest:
         res = ScanResult()
         seen: set[str] = set()
         raw = root / "raw"
+        members = self.member_paths() | set(member_owners(root))
         files = sorted(p for p in raw.rglob("*") if p.is_file()) if raw.is_dir() else []
         for p in files:
             rel_parts = p.relative_to(raw).parts
@@ -104,8 +115,9 @@ class Manifest:
             seen.add(rel)
             entry = self.entries.get(rel)
             if entry is None or entry.status == "deleted":
-                res.new.append(rel)
-            elif entry.sha256 != sha256_file(p):
+                if rel not in members:  # a member is part of its page's source
+                    res.new.append(rel)
+            elif entry.sha256 != sha256_file(p) or self.members_changed(root, rel):
                 res.changed.append(rel)
             else:
                 res.unchanged.append(rel)
@@ -118,6 +130,28 @@ class Manifest:
         res.unchanged.sort()
         res.deleted.sort()
         return res
+
+    def member_paths(self) -> set[str]:
+        """The recorded member files of every source not deleted."""
+        return {
+            m.path
+            for e in self.entries.values()
+            if e.status != "deleted"
+            for m in e.members or []
+        }
+
+    def members_changed(self, root: Path, path: str) -> bool:
+        """True when a member of source ``path`` changed, appeared or went away.
+
+        An entry from before bundles records no members, so it never reports it.
+        """
+        root = Path(root)
+        entry = self.entries.get(path)
+        if entry is None or entry.members is None or not (root / path).is_file():
+            return False
+        current, _ = page_members(root, path)
+        recorded = {m.path: m.sha256 for m in entry.members}
+        return recorded != {m.path: sha256_file(root / m.path) for m in current}
 
     def record(self, entry: SourceEntry) -> None:
         self.entries[entry.path] = entry
