@@ -58,7 +58,7 @@ marked block into `<repo>/CLAUDE.md`.
 | -------------------- | ---------------------------------------------------------------- |
 | `wiki init`          | Create or register a wiki                                        |
 | `wiki ingest`        | Ingest the inbox, paths or `--note` text, then one gate          |
-| `wiki search`        | Ranked page search for agents (`--format json`)                  |
+| `wiki search`        | Ranked page search for agents (`--format json`, repeat `--wiki`) |
 | `wiki status`        | Usage against caps, stale pages, pending and quarantined         |
 | `wiki lint`          | Deterministic checks of pages, links, citations and caps         |
 | `wiki lint --deep`   | Also a sampled LLM pass; writes `.wiki/reports/lint-<date>.md`   |
@@ -94,6 +94,28 @@ finding, no edit may change it. Edit sessions work in the wiki root with file
 tools; `claude` denies them reading the flagged files and `.wiki/quarantine/`
 (`Read(./…)` rules passed with `--disallowed-tools`, which also keep those files
 out of Grep), and `wiki doctor` probes that the denial holds (`read-denial`).
+
+## Splitting a large project
+
+One wiki holds 100 sources. For a larger project, make one wiki per area, side
+by side under one parent folder. Do not nest them.
+
+```sh
+wiki init ~/wikis/core --description "Glossary and cross-team rules. Not team designs."
+wiki init ~/wikis/billing --description "Billing and refunds. Not card processing."
+wiki init ~/wikis/cards --description "Card processing. Not billing or refunds."
+wiki ingest --wiki billing invoices.docx
+wiki search "refund flow" --wiki billing --wiki cards
+```
+
+- Say what belongs and what does not in each description. The `wiki-lookup`
+  skill reads the descriptions, picks up to 3 wikis and searches them together.
+- `wiki search` ranks the chosen wikis in one list, and each hit names its wiki.
+- A source lands in one wiki. Put cross-cutting sources in a "core" wiki, or
+  ingest them into two wikis on purpose.
+- You choose the wiki for each ingest.
+- When two wikis share a host git repo, ingest into one at a time: each ingest
+  switches the host repo's branch.
 
 ## Upgrading existing wikis
 

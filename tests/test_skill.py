@@ -180,3 +180,15 @@ def test_package_data_complete():
     assert "templates/claude-pointer.md" in files
     for rel in files:
         assert (pkg / rel).is_file(), rel
+
+
+def test_skill_body_covers_lookups_across_several_wikis():
+    body = " ".join(render_skill().split())
+    for needle in (
+        "Pick every wiki whose description fits the question, at most 3",
+        "--wiki <name> --wiki <other> --format json",
+        "for the whole lookup",
+        "Name the wiki on each fact",
+        "say they conflict",
+    ):
+        assert needle in body, needle
