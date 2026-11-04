@@ -12,7 +12,8 @@ the read-only `wiki-lookup` skill, at no LLM cost.
 ## Requirements
 
 - Python 3.12 or later
-- git, with `user.name` and `user.email` configured
+- git. If `user.name` and `user.email` are not set, `wiki init` asks for them on
+  a terminal and saves them in the new repo only
 - [Claude Code](https://code.claude.com) logged in with a subscription
   (`claude /login`); `wiki` never uses an API key
 

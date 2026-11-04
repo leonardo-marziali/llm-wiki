@@ -60,6 +60,19 @@ def _root(
     """Small, capped, LLM-maintained wikis for coding agents."""
 
 
+def _is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
+def _ask_git_identity() -> tuple[str, str]:
+    typer.echo("git has no user.name and user.email; saving them in the new repo only.")
+    name = typer.prompt("git user.name").strip()
+    email = typer.prompt("git user.email").strip()
+    if not name or not email:
+        raise WikiError("git user.name and user.email must not be empty")
+    return name, email
+
+
 @app.command()
 def init(
     path: Path = typer.Argument(
@@ -80,7 +93,13 @@ def init(
 
     if profile not in ("software", "general"):
         raise WikiError("--profile must be software or general")
-    res = init_wiki(path, name=name, profile=profile, description=description)
+    res = init_wiki(
+        path,
+        name=name,
+        profile=profile,
+        description=description,
+        ask_identity=_ask_git_identity if _is_tty() else None,
+    )
     verb = "created wiki" if res.created else "registered existing wiki"
     msg = f"{verb} {res.ref.name} at {res.ref.path}"
     if res.host_repo is not None:

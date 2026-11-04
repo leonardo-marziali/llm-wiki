@@ -4,6 +4,7 @@ repo) and register it.
 
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from importlib import resources
@@ -235,13 +236,47 @@ def _require_clean_lint(root: Path, cfg: WikiConfig, today: date) -> None:
         raise WikiError(f"new wiki fails lint: {details}")
 
 
+def _git_identity(
+    root: Path,
+    host_repo: Path | None,
+    ask_identity: Callable[[], tuple[str, str]] | None,
+) -> tuple[str, str] | None:
+    """The identity to save in a new repo, or None when git already has one."""
+    if host_repo is not None or gitops.has_identity(root):
+        return None
+    if ask_identity is None:
+        raise GitError("configure git user.name and user.email")
+    return ask_identity()
+
+
+def _commit_new_wiki(
+    root: Path, name: str, empty_clone: bool, identity: tuple[str, str] | None
+) -> None:
+    if not empty_clone:
+        gitops.init_repo(root)
+    if identity is not None:
+        gitops.set_local_identity(root, *identity)
+    if empty_clone and not gitops.has_commits(root):
+        # an empty clone keeps the remote's unborn branch name (e.g. master);
+        # ingest runs on main
+        gitops.git(root, "symbolic-ref", "HEAD", "refs/heads/main")
+    gitops.commit_all(root, f"chore: init wiki {name}")
+
+
 def init_wiki(
     path: Path,
     name: str | None = None,
     profile: Profile = "software",
     description: str = "",
     today: date | None = None,
+    ask_identity: Callable[[], tuple[str, str]] | None = None,
 ) -> InitResult:
+    """Create or register a wiki.
+
+    ``ask_identity`` supplies a git ``(name, email)`` when git has none; init
+    saves it in the new repo's own config. Without it, a missing identity is an
+    error.
+    """
     root = Path(path).resolve()
     if (root / WIKI_FILE).is_file():
         return _reregister(root, name)
@@ -260,8 +295,7 @@ def init_wiki(
         raise WikiError(f"{root} is inside a .git directory")
     # an empty clone is its own repo, not a host: init commits into it
     host_repo = None if empty_clone else gitops.enclosing_repo(root)
-    if host_repo is None and not gitops.has_identity(root):
-        raise GitError("configure git user.name and user.email")
+    identity = _git_identity(root, host_repo, ask_identity)
     today = today or date.today()
 
     created_top = _first_missing(root)
@@ -270,13 +304,7 @@ def init_wiki(
         _create(root, cfg, today)
         _require_clean_lint(root, cfg, today)
         if host_repo is None:
-            if not empty_clone:
-                gitops.init_repo(root)
-            elif not gitops.has_commits(root):
-                # an empty clone keeps the remote's unborn branch name (e.g.
-                # master); ingest runs on main
-                gitops.git(root, "symbolic-ref", "HEAD", "refs/heads/main")
-            gitops.commit_all(root, f"chore: init wiki {name}")
+            _commit_new_wiki(root, name, empty_clone, identity)
     except BaseException:
         _clean(root, created_top, empty_clone)
         raise

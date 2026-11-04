@@ -210,6 +210,58 @@ def test_init_without_git_identity_fails_before_writing(tmp_path, monkeypatch):
     assert not registry.registry_file().exists()
 
 
+def test_init_asks_for_a_missing_git_identity(tmp_path, monkeypatch):
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "none"))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(tmp_path / "none"))
+    monkeypatch.delenv("GIT_COMMITTER_NAME", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_EMAIL", raising=False)
+    root = tmp_path / "w"
+    init_wiki(root, today=TODAY, ask_identity=lambda: ("Ada Lovelace", "ada@x.org"))
+    assert gitops.git(root, "config", "--local", "user.name").strip() == "Ada Lovelace"
+    assert gitops.git(root, "log", "-1", "--format=%an <%ae>").strip() == (
+        "Ada Lovelace <ada@x.org>"
+    )
+
+
+def test_init_does_not_ask_when_an_identity_exists(tmp_path):
+    def fail():
+        raise AssertionError("asked")
+
+    init_wiki(tmp_path / "w", today=TODAY, ask_identity=fail)
+
+
+def test_init_cli_prompts_on_a_terminal(tmp_path, monkeypatch):
+    monkeypatch.setattr(gitops, "has_identity", lambda root: False)
+    monkeypatch.setattr("llm_wiki.cli._is_tty", lambda: True)
+    seen = {}
+
+    def fake_init(path, **kw):
+        seen["identity"] = kw["ask_identity"]()
+        raise WikiError("stop")
+
+    monkeypatch.setattr("llm_wiki.init.init_wiki", fake_init)
+    res = CliRunner().invoke(
+        app, ["init", str(tmp_path / "w")], input="Ada\nada@x.org\n"
+    )
+    assert seen["identity"] == ("Ada", "ada@x.org")
+    assert res.exit_code == 2
+
+
+def test_init_cli_does_not_prompt_without_a_terminal(tmp_path, monkeypatch):
+    monkeypatch.setattr("llm_wiki.cli._is_tty", lambda: False)
+    seen = {}
+
+    def fake_init(path, **kw):
+        seen.update(kw)
+        raise WikiError("stop")
+
+    monkeypatch.setattr("llm_wiki.init.init_wiki", fake_init)
+    CliRunner().invoke(app, ["init", str(tmp_path / "w")])
+    assert seen["ask_identity"] is None
+
+
 def test_gitops_helpers(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
