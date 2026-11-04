@@ -8,7 +8,7 @@ import json
 import re
 import secrets
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -32,6 +32,8 @@ from llm_wiki.search import search, tokenize
 _ID = re.compile(ID_RE)
 _TOP_LEVEL = {"overview", "glossary"}  # pages outside any section; update only
 _SYSTEM_IDS = {name.removesuffix(".md") for name in SYSTEM_FILES}
+# ", image <name>" as the locator rule writes it; "§Image formats" is a heading
+_IMAGE_LOCATOR = re.compile(r"(?:^|[,;]\s*)image\s+([^\s,;]+)")
 
 
 class PlannedPage(Protocol):
@@ -218,6 +220,7 @@ def validate_plan(
     manifest: Manifest,
     allowed_updates: set[str] | None,
     image: bool = False,
+    image_names: Collection[str] | None = None,
     require_pages: bool = False,
 ) -> list[str]:
     """Human-readable problems with ``plan``; an empty list means it may proceed.
@@ -225,6 +228,8 @@ def validate_plan(
     ``allowed_updates`` is None for a new source; for a changed source it holds
     the ids of the pages the source already backs. When ``image`` is set (the
     source is an image), every fact cited to it must be ``confidence: low``.
+    ``image_names`` holds the images attached to this call of a page with images:
+    a locator may only name those, and such a fact must be low too.
     With ``require_pages`` (a whole new source) a plan with no pages must say
     why in its open questions.
     """
@@ -262,6 +267,8 @@ def validate_plan(
             for c in p.claims
             if c.source == source and c.confidence != "low"
         ]
+    if image_names is not None:
+        errors += _image_locator_errors(plan, source, image_names)
     planned = {p.id for p in plan.pages}
     errors += [
         err
@@ -270,6 +277,28 @@ def validate_plan(
     ]
     src_id = src_id_for(cfg, manifest, source)
     return errors + _cap_errors(plan.pages, Path(root), cfg, kinds, src_id)
+
+
+def _image_locator_errors(
+    plan: Plan, source: str, image_names: Collection[str]
+) -> list[str]:
+    errors = []
+    attached = ", ".join(sorted(image_names)) or "none"
+    for p in plan.pages:
+        for c in p.claims:
+            names = _IMAGE_LOCATOR.findall(c.locator) if c.source == source else []
+            errors += [
+                f"{p.id}: locator {c.locator!r} names an image not attached to "
+                f"this message: {name}. Attached: {attached}"
+                for name in names
+                if name not in image_names
+            ]
+            if names and c.confidence != "low":
+                errors.append(
+                    f"{p.id}: claim {c.text[:40]!r} is read from an image, so its "
+                    f"confidence must be 'low', not '{c.confidence}'"
+                )
+    return errors
 
 
 def _contradiction_error(id_: str, root: Path, planned: set[str]) -> str | None:
@@ -342,6 +371,7 @@ def _source_block(
     part_label: str,
     flags: list[str],
     src_id: str | None,
+    part: str | None = None,
 ) -> str:
     src_id = src_id or src_page_id(cfg, prepared.rel)
     lines = [
@@ -362,9 +392,32 @@ def _source_block(
     ]
     if flags:
         lines.append(f"- flags: {', '.join(flags)}")
-    if prepared.image is not None:
+    if prepared.is_image:
         lines.append("- the image itself is attached to this message")
+    else:
+        lines += _bundle_lines(prepared, part)
     return "\n".join(lines)
+
+
+def _bundle_lines(prepared: Prepared, part: str | None) -> list[str]:
+    """What a prompt says about the images of a page. Names are slugged file names:
+    the page's own text stays inside the untrusted tags.
+    """
+    lines: list[str] = []
+    attached = prepared.images.get(part, []) if part else []
+    if attached:
+        lines.append(
+            "- attached images, in this order (each is the file a link in the source "
+            "text names, under a tidied name; cite one as `<heading>, image <name>`, "
+            "with the name exactly as listed):"
+        )
+        lines += [f"  {n}. {m.name}" for n, m in enumerate(attached, 1)]
+    same = prepared.same_images.get(part, []) if part else []
+    lines += [f"- {name} shows the same picture as {first}" for name, first in same]
+    if prepared.changed_images:
+        names = ", ".join(prepared.changed_images)
+        lines.append(f"- changed images since the last ingest: {names}")
+    return lines
 
 
 def _indexes_block(root: Path, cfg: WikiConfig) -> str:
@@ -496,17 +549,21 @@ def build_plan_prompt(
     pages_for: list[str] | None = None,
     errors: list[str] | None = None,
     src_id: str | None = None,
+    part: str | None = None,
 ) -> str:
     """The plan call's stdin prompt: everything that varies per source and run.
 
-    ``src_id`` is the source's src page id (default: its base id).
+    ``src_id`` is the source's src page id (default: its base id); ``part`` is the
+    converted file this prompt covers, which picks the images it lists.
     """
     root = Path(root)
     nonce = new_nonce()
     conv = prepared.conversion
     blocks = [
         f"Today is {today.isoformat()}.",
-        _source_block(cfg, prepared, part_label, conv.flags if conv else [], src_id),
+        _source_block(
+            cfg, prepared, part_label, conv.flags if conv else [], src_id, part
+        ),
         "## Allowed sections\n\n" + sections_table(cfg.sections),
         _indexes_block(root, cfg),
         _candidates_block(root, cfg, part_text),
@@ -645,7 +702,7 @@ def plan_source(
         pages_for += sorted((also_allowed or set()) - set(pages_for))
         allowed = set(pages_for)
         old_text = _old_text(root, manifest, prepared.rel)
-    images = (prepared.image,) if prepared.image is not None else ()
+    images = tuple(root / m.path for m in prepared.images.get(part, []))
     errors: list[str] = []
     cost = 0.0
     for _ in range(2):  # the call, then one retry with the errors appended
@@ -660,6 +717,7 @@ def plan_source(
             pages_for=pages_for,
             errors=errors or None,
             src_id=src_id_for(cfg, manifest, prepared.rel),
+            part=part,
         )
         call = claude.make_call(
             "plan",
@@ -687,7 +745,8 @@ def plan_source(
                 source=prepared.rel,
                 manifest=manifest,
                 allowed_updates=allowed,
-                image=prepared.image is not None,
+                image=prepared.is_image,
+                image_names=prepared.image_names(part) if prepared.members else None,
                 require_pages=_whole_new(prepared),
             )
             if not errors:

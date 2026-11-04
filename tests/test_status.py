@@ -184,3 +184,14 @@ def test_status_near_cap(tmp_path):
     (root / "wiki" / "b.md").unlink()
     res = runner.invoke(app, ["status", "--wiki", str(root)])
     assert "near cap" not in res.output
+
+
+def test_status_counts_a_page_and_its_images_as_one_source(tmp_path, make_png):
+    root = tmp_path / "w"
+    init(root, "w")
+    (root / "raw/guide").mkdir(parents=True)
+    (root / "raw/guide.md").write_text("![](a.png)\n![](b.png)\n", encoding="utf-8")
+    make_png(root / "raw/guide/a.png")
+    make_png(root / "raw/guide/b.png", rects=((0, 0, 9, 9),))
+    res = wiki_status(WikiRef(name="w", path=root, origin="path"))
+    assert res.pending == {"new": 1, "changed": 0, "deleted": 0}

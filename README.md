@@ -95,10 +95,41 @@ tools; `claude` denies them reading the flagged files and `.wiki/quarantine/`
 (`Read(./…)` rules passed with `--disallowed-tools`, which also keep those files
 out of Grep), and `wiki doctor` probes that the denial holds (`read-denial`).
 
+## Pages with images
+
+A Markdown file and the local images it links are one source, so the screenshots
+of a manual do not count against the source cap.
+
+```sh
+wiki ingest --wiki payments ./payments-docs # a folder of pages and attachments
+```
+
+- Links count when they are relative, like `![login](attachments/login.png)`,
+  and stay inside what you ingest: the folder, or a single file's own folder.
+  Reference links, `<img src="…">` and `![[…]]` count too. Remote URLs and
+  missing files are listed in the run report and otherwise ignored.
+- Images go next to their page: `raw/user-manual.md` keeps its images in
+  `raw/user-manual/`. An image two pages link is copied to both.
+- One plan call gets the page text and its images in link order. Tiny images are
+  dropped, and near-duplicates are sent once. Above 20 images to send
+  (`max_images_per_part`, which `wiki.toml` may lower), the page is planned in
+  parts, each with a run of headings and the images linked in it.
+- Citations name the page and then the image:
+  `raw/user-manual.md — §Login, image login-screen.png`. Facts read from an
+  image are `confidence: low`.
+- A page changes when any of its images changes. Replace the file in
+  `raw/user-manual/`, drop it at `inbox/user-manual/login-screen.png`, or ingest
+  the folder again. An image no page links any more leaves `raw/`.
+- A quarantined page takes its images to `.wiki/quarantine/<page>.members/`, and
+  `--trust` brings them back. A deleted page takes the images only it links.
+- Wikis made before this keep their images as separate sources until you delete
+  them, and nothing is ingested again until a page really changes.
+
 ## Splitting a large project
 
-One wiki holds 100 sources. For a larger project, make one wiki per area, side
-by side under one parent folder. Do not nest them.
+One wiki holds 100 sources. For a larger project, make one wiki per platform,
+large component or project, side by side under one parent folder. Do not nest
+them.
 
 ```sh
 wiki init ~/wikis/core --description "Glossary and cross-team rules. Not team designs."

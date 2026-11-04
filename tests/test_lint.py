@@ -825,3 +825,14 @@ def test_footnote_spacing_ignores_code_and_runs():
 
 def test_footnote_spacing_ignores_heading():
     assert glued_footnotes(note_page("Fact.[^1]\n\n## Sources\n[^1]: raw/a.md\n")) == []
+
+
+def test_footnote_naming_a_member_image_in_its_locator_passes(tmp_path, make_wiki):
+    root = make_wiki(tmp_path)
+    page = root / "wiki" / PAGE_REL
+    text = page.read_text(encoding="utf-8").replace(
+        f"[^1]: {RAW_REL}\n", f"[^1]: {RAW_REL} — §Login, image login-screen.png\n"
+    )
+    page.write_text(text, encoding="utf-8")
+    report = lint(root, load_config(root))
+    assert not [f for f in report.findings if f.severity == "error"]

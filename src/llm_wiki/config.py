@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import re
 import tomllib
 from dataclasses import fields, replace
 from importlib import resources
@@ -23,6 +24,10 @@ Profile = Literal["software", "general"]
 Role = Literal["plan", "edit", "deep"]
 USER_CONFIG_FILE = "config.toml"
 _BUDGETS = ("plan_budget_usd", "edit_budget_usd", "deep_budget_usd")
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 def _positive(v: float | None) -> float | None:

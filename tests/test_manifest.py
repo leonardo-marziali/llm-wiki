@@ -7,6 +7,7 @@ import pytest
 from llm_wiki.errors import ConfigError
 from llm_wiki.manifest import (
     MANIFEST,
+    BundleMember,
     Manifest,
     SourceEntry,
     SourceStatus,
@@ -181,3 +182,108 @@ def test_refused_entry_not_counted_live(tmp_path):
     )
     assert m.live() == 0
     assert not m.is_live("raw/key.pem")
+
+
+def _bundle(root, make_png):
+    """raw/page.md with two members, recorded as a bundle."""
+    (root / "raw/page").mkdir(parents=True)
+    page = root / "raw/page.md"
+    page.write_text("![](a.png)\n![](b.png)\n", encoding="utf-8")
+    make_png(root / "raw/page/a.png")
+    make_png(root / "raw/page/b.png", rects=((0, 0, 9, 9),))
+    m = Manifest()
+    m.record(
+        SourceEntry(
+            path="raw/page.md",
+            sha256=sha256_file(page),
+            size=page.stat().st_size,
+            mime="text/markdown",
+            category="misc",
+            first_seen=date(2026, 1, 1),
+            status="ingested",
+            members=[
+                BundleMember(path=p, sha256=sha256_file(root / p))
+                for p in ("raw/page/a.png", "raw/page/b.png")
+            ],
+        )
+    )
+    return m
+
+
+def test_scan_skips_members_and_counts_a_bundle_once(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    res = m.scan(tmp_path)
+    assert res.unchanged == ["raw/page.md"]
+    assert res.new == []
+    assert m.live() == 1
+    m.save(tmp_path)
+    assert Manifest.load(tmp_path).entries["raw/page.md"].members == (
+        m.entries["raw/page.md"].members
+    )
+
+
+def test_scan_new_page_claims_its_new_images(tmp_path, make_png):
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw/page.md").write_text("![](a.png)\n", encoding="utf-8")
+    make_png(tmp_path / "raw/a.png")
+    make_png(tmp_path / "raw/alone.png")
+    assert Manifest().scan(tmp_path).new == ["raw/alone.png", "raw/page.md"]
+
+
+def test_scan_changed_member_changes_the_bundle(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    make_png(tmp_path / "raw/page/a.png", rects=((1, 1, 60, 60),))
+    res = m.scan(tmp_path)
+    assert res.changed == ["raw/page.md"]
+    assert m.members_changed(tmp_path, "raw/page.md")
+
+
+def test_scan_missing_or_added_member_changes_the_bundle(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    (tmp_path / "raw/page/a.png").unlink()
+    assert m.scan(tmp_path).changed == ["raw/page.md"]
+    make_png(tmp_path / "raw/page/a.png")
+    assert m.scan(tmp_path).changed == []
+    with (tmp_path / "raw/page.md").open("a", encoding="utf-8") as fh:
+        fh.write("![](c.png)\n")
+    m.record(
+        m.entries["raw/page.md"].model_copy(
+            update={"sha256": sha256_file(tmp_path / "raw/page.md")}
+        )
+    )
+    assert m.scan(tmp_path).changed == []  # c.png is not there yet
+    make_png(tmp_path / "raw/page/c.png")
+    assert m.scan(tmp_path).changed == ["raw/page.md"]
+
+
+def test_scan_entry_from_before_bundles_is_not_changed(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    old = m.entries["raw/page.md"].model_copy(update={"members": None})
+    m.record(old)
+    assert m.scan(tmp_path).unchanged == ["raw/page.md"]
+    assert not m.members_changed(tmp_path, "raw/page.md")
+
+
+def test_scan_image_with_its_own_entry_stays_a_source(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    png = tmp_path / "raw/page/a.png"
+    m.record(
+        SourceEntry(
+            path="raw/page/a.png",
+            sha256=sha256_file(png),
+            size=png.stat().st_size,
+            mime="image/png",
+            category="page",
+            first_seen=date(2026, 1, 1),
+            status="ingested",
+        )
+    )
+    assert m.scan(tmp_path).unchanged == ["raw/page.md", "raw/page/a.png"]
+    assert m.live() == 2
+
+
+def test_scan_recorded_member_of_a_gone_page_is_no_source(tmp_path, make_png):
+    m = _bundle(tmp_path, make_png)
+    (tmp_path / "raw/page.md").unlink()
+    m.record(m.entries["raw/page.md"].model_copy(update={"status": "quarantined"}))
+    assert m.scan(tmp_path).new == []

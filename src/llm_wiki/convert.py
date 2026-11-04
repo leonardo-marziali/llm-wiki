@@ -3,6 +3,7 @@
 import csv
 import importlib.util
 import io
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,6 +43,7 @@ NEVER_INGEST_SUFFIXES = (
 )
 MIN_PDF_CHARS_PER_PAGE = 200
 CONVERTED_DIR = Path(".wiki") / "converted"
+Splitter = Callable[[str, int], list[str]]  # (body, char limit) -> parts
 
 
 def never_ingest(filename: str) -> bool:
@@ -65,7 +67,7 @@ def _header(source: str, sha: str, converter: str, part: str | None = None) -> s
     )
 
 
-def _read_text(path: Path) -> str:
+def read_text(path: Path) -> str:
     data = path.read_bytes()
     try:
         return data.decode("utf-8-sig")
@@ -127,7 +129,7 @@ def _xlsx_rows(path: Path) -> dict[str, list[list[str]]]:
 
 
 def _csv_rows(path: Path) -> dict[str, list[list[str]]]:
-    text = _read_text(path)
+    text = read_text(path)
     return {path.stem: [list(r) for r in csv.reader(io.StringIO(text, newline=""))]}
 
 
@@ -275,7 +277,7 @@ def _convert_body(
 ) -> tuple[str, str, list[str], list[Path]]:
     """(converter, body, flags, extra output files) for one supported source."""
     if suffix in (".md", ".txt"):
-        return "text", _read_text(raw_path), [], []
+        return "text", read_text(raw_path), [], []
     if suffix == ".docx":
         return "markitdown", _markitdown(raw_path), [], []
     if suffix == ".pptx":
@@ -292,9 +294,16 @@ def _convert_body(
 
 
 def _write_outputs(
-    out_dir: Path, source: str, sha: str, converter: str, body: str, caps: Caps
+    out_dir: Path,
+    source: str,
+    sha: str,
+    converter: str,
+    body: str,
+    caps: Caps,
+    split: Splitter | None = None,
 ) -> tuple[list[Path], str, int]:
-    """Write the primary file, plus parts when it exceeds split_chars.
+    """Write the primary file, plus parts when it exceeds split_chars or ``split``
+    cuts it (a page with too many images to send at once).
 
     Returns the written paths, the primary text and the number of parts.
     """
@@ -303,9 +312,11 @@ def _write_outputs(
     primary = out_dir / f"{sha}.md"
     primary.write_text(text, encoding="utf-8")
     outputs = [primary]
-    if len(text) <= caps.split_chars:
+    limit = max(caps.split_chars - len(head) - 32, 1)
+    chunks = split(body, limit) if split else []
+    if len(chunks) <= 1 and len(text) <= caps.split_chars:
         return outputs, text, 1
-    chunks = _split(body, max(caps.split_chars - len(head) - 32, 1))
+    chunks = chunks or _split(body, limit)
     for n, chunk in enumerate(chunks, 1):
         p = out_dir / f"{sha}.p{n}.md"
         p.write_text(
@@ -316,7 +327,9 @@ def _write_outputs(
     return outputs, text, len(chunks)
 
 
-def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
+def convert(
+    root: Path, raw_path: Path, sha: str, caps: Caps, split: Splitter | None = None
+) -> Conversion:
     suffix = raw_path.suffix.lower()
     _check_ingestable(raw_path, suffix)
     out_dir = root / CONVERTED_DIR
@@ -332,7 +345,9 @@ def convert(root: Path, raw_path: Path, sha: str, caps: Caps) -> Conversion:
         raise RefusedSource(
             f"{raw_path.name}: could not be read ({type(exc).__name__})"
         ) from exc
-    outputs, text, parts = _write_outputs(out_dir, source, sha, converter, body, caps)
+    outputs, text, parts = _write_outputs(
+        out_dir, source, sha, converter, body, caps, split
+    )
     return Conversion(
         converter=converter,
         outputs=[p.relative_to(root).as_posix() for p in [*outputs, *extra]],

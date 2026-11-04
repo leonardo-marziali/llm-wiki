@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
+from llm_wiki.bundle import member_rel
 from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.convert import never_ingest
 from llm_wiki.errors import STOP, WikiError
@@ -26,7 +27,14 @@ from llm_wiki.gitops import (
     unstage,
 )
 from llm_wiki.init import REVIEW_DAYS
-from llm_wiki.intake import Prepared, inbox_home, source_slug, src_id_for
+from llm_wiki.intake import (
+    Prepared,
+    hold_members,
+    inbox_home,
+    removable_members,
+    source_slug,
+    src_id_for,
+)
 from llm_wiki.lint import Finding, cited_paths
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, sha256_file
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, read_page
@@ -77,6 +85,7 @@ class SourceOutcome:
     reason: str = ""
     cost_usd: float = 0.0
     redactions: dict[str, int] = field(default_factory=dict)  # in the plans
+    ignored_images: list[str] = field(default_factory=list)  # links not read
 
 
 class _Failed(Exception):
@@ -484,15 +493,19 @@ class _Source:
         )
         self.out.status = "ingested"
 
-    def commit_deleted(self) -> None:
-        """One commit: the edited pages, the raw file's deletion, the manifest."""
+    def commit_deleted(self, gone: list[str]) -> None:
+        """One commit: the edited pages, the raw file's deletion with the images
+        only it linked (``gone``), the manifest.
+        """
         ctx, rel = self.ctx, self.prepared.rel
         staged = [p for p in self.session.changed() if p in self.allowed]
         ctx.manifest.mark_deleted(rel)
         ctx.manifest.save(self.root)
+        for path in gone:
+            (self.root / path).unlink(missing_ok=True)
         stage_commit(
             self.root,
-            [*staged, rel, MANIFEST],
+            [*staged, rel, *gone, MANIFEST],
             f"ingest(delete): {rel}",
             force=[*staged, MANIFEST],
         )
@@ -523,6 +536,21 @@ def _entry_at(root: Path, rev: str, rel: str) -> SourceEntry | None:
         return None
 
 
+def _member_paths(ctx: RunContext, entry: SourceEntry | None) -> list[str]:
+    """The files of ``entry``'s members a page's failure may put back. A member that
+    is a source itself is left alone: its own turn commits or restores it, and may
+    hold the only copy of a new version.
+    """
+    members = (entry.members or []) if entry else []
+    return [m.path for m in members if not ctx.manifest.is_live(m.path)]
+
+
+def _touched_members(ctx: RunContext, prepared: Prepared) -> list[str]:
+    """The member files a prepared source's prep commit holds or removes."""
+    paths = [m.path for m in prepared.members if not ctx.manifest.is_live(m.path)]
+    return [*paths, *prepared.pruned]
+
+
 def _quarantine_plan(
     ctx: RunContext, prepared: Prepared, hits: list[Hit], prep: str
 ) -> str:
@@ -546,39 +574,63 @@ def _quarantine_plan(
             for h in hits
         ],
     }
+    members = _touched_members(ctx, prepared)
+    record["members"] = [m.path for m in prepared.members]
     if old is not None:
         record["restored_sha256"] = old.sha256
-    quarantine(root, root / rel, record)
+    held = quarantine(root, root / rel, record)
+    hold_members(root, ctx.manifest, held, record["members"])
     outputs = prepared.conversion.outputs
     for out in outputs:
         (root / out).unlink(missing_ok=True)
     if old is not None:
-        restore(root, [rel], rev=f"{prep}^")
+        # only images changed: the conversion is the old version's too
+        same = old.sha256 == prepared.sha
+        restore(
+            root,
+            [rel, *_member_paths(ctx, old), *(outputs if same else [])],
+            rev=f"{prep}^",
+        )
         ctx.manifest.record(old)
         ctx.manifest.save(root)
         reason += "; kept the last ingested version"
     else:
-        _set_status(ctx, rel, status="quarantined", converted=[])
-    stage_commit(
-        root,
-        [rel, *outputs, MANIFEST],
-        f"ingest(prep): {rel}",
-        amend=prep,
-        force=[*outputs, MANIFEST],
-    )
+        _set_status(ctx, rel, status="quarantined", converted=[], members=None)
+    forced = [*outputs, *members, *_member_paths(ctx, old), MANIFEST]
+    stage_commit(root, [rel, *forced], f"ingest(prep): {rel}", amend=prep, force=forced)
     return reason
 
 
-def _move_new_version(ctx: RunContext, prepared: Prepared) -> str:
-    """Move a failed changed source's new version from raw/ to its inbox origin
-    (default: ``inbox/<path under raw/>``); returns the reason's suffix.
+def _move_new_version(
+    ctx: RunContext, prepared: Prepared, old: SourceEntry | None
+) -> str:
+    """Move a failed changed source's new files from raw/ to the inbox, from where
+    the next run takes them back: the page to its origin (default:
+    ``inbox/<path under raw/>``) unless only its images changed, and each new or
+    changed member to the page's folder there, where the next run's links find it.
+    Returns the reason's suffix.
     """
     root = Path(ctx.root)
-    dest = prepared.origin or inbox_home(root, prepared.rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(root / prepared.rel), dest)
-    where = dest.relative_to(root).as_posix()
-    return f"; kept the last ingested version; the new version is back at {where}"
+    known = {m.path: m.sha256 for m in (old.members or [])} if old else {}
+    moved: list[str] = []
+    for member in prepared.members:
+        path = root / member.path
+        if (
+            path.is_file()
+            and not ctx.manifest.is_live(member.path)
+            and known.get(member.path) != sha256_file(path)
+        ):
+            dest = inbox_home(root, member_rel(prepared.rel, member.name))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), dest)
+            moved.append(dest.relative_to(root).as_posix())
+    if old is None or old.sha256 != prepared.sha:
+        dest = prepared.origin or inbox_home(root, prepared.rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(root / prepared.rel), dest)
+        moved.insert(0, dest.relative_to(root).as_posix())
+    kept = "; kept the last ingested version"
+    return f"{kept}; the new version is back at {', '.join(moved)}" if moved else kept
 
 
 def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
@@ -599,7 +651,9 @@ def _record_unready(ctx: RunContext, prepared: Prepared) -> str:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(root / rel), dest)
             moved = f"; the new version is back at {dest.relative_to(root).as_posix()}"
-        restore(root, [rel])
+        # only images changed: the conversion a quarantine deleted is the old one
+        same = prepared.scrapped if old.sha256 == prepared.sha else []
+        restore(root, [rel, *_member_paths(ctx, old), *same])
         ctx.manifest.record(old)
         if prepared.held is not None:  # the reason file records the restore
             reason_file = prepared.held.with_name(prepared.held.name + ".reason.json")
@@ -639,22 +693,29 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
     except _Failed as exc:  # nothing changed yet: the deletion stays pending
         out.status, out.reason = "failed", str(exc)
         return out
+    entry = ctx.manifest.entries.get(rel)
+    gone = removable_members(root, ctx.manifest, _member_paths(ctx, entry))
     if plan is None:  # it backs no page: only the manifest and the log change
         try:
             ctx.manifest.mark_deleted(rel)
             ctx.manifest.save(root)
+            for path in gone:
+                (root / path).unlink(missing_ok=True)
             stage_commit(
-                root, [rel, MANIFEST], f"ingest(delete): {rel}", force=[MANIFEST]
+                root,
+                [rel, *gone, MANIFEST],
+                f"ingest(delete): {rel}",
+                force=[MANIFEST],
             )
         except WikiError as exc:  # e.g. a GitError: the deletion stays pending
-            _drop_uncommitted(ctx, [rel, MANIFEST], [MANIFEST])
+            _drop_uncommitted(ctx, [rel, *gone, MANIFEST], [*gone, MANIFEST])
             out.status, out.reason = "failed", str(exc)
         return out
     prepared = Prepared(rel=rel, sha=ctx.manifest.entries[rel].sha256, kind="deleted")
     source = _Source(ctx, prepared, out, None)
     try:
         source.apply(plan, lambda found: build_delete_prompt(ctx, rel, plan, found), "")
-        source.commit_deleted()
+        source.commit_deleted(gone)
     except STOP as exc:
         exc.cost_usd += out.cost_usd
         source.undo()
@@ -662,7 +723,7 @@ def process_deleted(ctx: RunContext, rel: str) -> SourceOutcome:
     except (_Failed, WikiError) as exc:  # a ClaudeError, a GitError, …
         out.cost_usd += getattr(exc, "cost_usd", 0.0)
         source.undo()
-        _drop_uncommitted(ctx, [rel, MANIFEST], [])
+        _drop_uncommitted(ctx, [rel, *gone, MANIFEST], gone)
         out.status, out.reason = "failed", str(exc)
         out.pages_updated, out.reviewed_touched = [], []
     return out
@@ -685,10 +746,13 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
     """
     root = Path(ctx.root)
     rel = prepared.rel
-    out = SourceOutcome(rel=rel, title=rel, status="failed")
+    out = SourceOutcome(
+        rel=rel, title=rel, status="failed", ignored_images=prepared.ignored_images
+    )
     prep_message = f"ingest(prep): {rel}"
     ctx.manifest.save(root)
     outputs = prepared.conversion.outputs if prepared.conversion else []
+    members = _touched_members(ctx, prepared) if prepared.status == "ready" else []
     settled = ""  # what _record_unready already did to the tree
     try:
         if prepared.status != "ready":  # screened out or refused: record it, no LLM
@@ -707,13 +771,15 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
         # always a commit of its own: a later amend can never rewrite another one
         prep = stage_commit(
             root,
-            [rel, *outputs, MANIFEST],
+            [rel, *outputs, *members, MANIFEST],
             prep_message,
             allow_empty=True,
-            force=[rel, *outputs, MANIFEST],  # an accepted raw source
+            force=[rel, *outputs, *members, MANIFEST],  # accepted raw sources
         )
     except WikiError as exc:  # no prep commit: a new source stays pending in raw/
-        _drop_uncommitted(ctx, [rel, *outputs, MANIFEST], [*outputs, MANIFEST])
+        _drop_uncommitted(
+            ctx, [rel, *outputs, *members, MANIFEST], [*outputs, MANIFEST]
+        )
         out.status = "failed"
         out.reason = "; ".join(r for r in (str(exc), settled) if r)
         path = root / rel
@@ -723,8 +789,10 @@ def process_source(ctx: RunContext, prepared: Prepared) -> SourceOutcome:
             and path.is_file()
             and sha256_file(path) == prepared.sha  # not settled already (N1)
         ):
-            out.reason += _move_new_version(ctx, prepared)
-            restore(root, [rel])  # the last ingested version, as committed
+            old = _entry_at(root, "HEAD", rel)
+            out.reason += _move_new_version(ctx, prepared, old)
+            # the last ingested version, as committed
+            restore(root, [rel, *_member_paths(ctx, old)])
         return out
     source = _Source(ctx, prepared, out, prep)
     try:
@@ -771,16 +839,14 @@ def _fail(ctx: RunContext, source: _Source, reason: str) -> None:
             root, [MANIFEST], f"ingest(prep): {rel}", amend=prep, force=[MANIFEST]
         )
     else:
-        reason += _move_new_version(ctx, prepared)
-        restore(root, [rel, *outputs], rev=f"{prep}^")
+        reason += _move_new_version(ctx, prepared, old)
+        kept = _member_paths(ctx, old)
+        restore(root, [rel, *outputs, *kept], rev=f"{prep}^")
         ctx.manifest.record(old)
         ctx.manifest.save(root)
+        forced = [*outputs, *_touched_members(ctx, prepared), *kept, MANIFEST]
         stage_commit(
-            root,
-            [rel, *outputs, MANIFEST],
-            f"ingest(prep): {rel}",
-            amend=prep,
-            force=[*outputs, MANIFEST],
+            root, [rel, *forced], f"ingest(prep): {rel}", amend=prep, force=forced
         )
     out = source.out
     out.status, out.reason = "failed", reason

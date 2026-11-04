@@ -223,3 +223,80 @@ def test_e2e_m3_fixture_batch(
     again = runner.invoke(app, ["ingest", "--yes"])
     assert again.exit_code == 0, again.output
     assert "nothing to do" in again.output
+
+
+def test_e2e_m7_page_with_images_then_one_image_changes(
+    tmp_path, monkeypatch, fake_claude, make_png
+):
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["init", "demo", "--profile", "software"]).exit_code == 0
+    root = tmp_path / "demo"
+    monkeypatch.chdir(root)
+    inbox = root / "inbox"
+    (inbox / "shots").mkdir()
+    shots = {"a": (8, 8, 40, 40), "b": (0, 30, 60, 60), "c": (30, 0, 60, 20)}
+    for name, rect in shots.items():
+        make_png(inbox / "shots" / f"{name}.png", size=(128, 128), rects=(rect,))
+    text = (
+        "# Manual\n\n## Login\n\n![a](shots/a.png)\n\n"
+        "![b](shots/b.png)\n\n## Logout\n\n![c](shots/c.png)\n"
+    )
+    (inbox / "manual.md").write_text(text, encoding="utf-8")
+    rel, digest = "raw/manual.md", _sha(inbox / "manual.md")
+    id_, claim = "concepts.manual", "The form has a user field."
+
+    def image_plan(action="create"):
+        page = _page_plan(rel, id_, claim, action=action)
+        page["claims"][0].update(locator="§Login, image a.png", confidence="low")
+        return _plan(page)
+
+    def edit():
+        files = _pages(rel, digest, "manual-md", id_, [claim])
+        return {
+            key: value.replace("— §1", "— §Login, image a.png")
+            for key, value in files.items()
+        }
+
+    def images_in(call):
+        blocks = call["stdin_message"]["message"]["content"]
+        return [b for b in blocks if b["type"] == "image"]
+
+    fake_claude.queue(
+        {"stdout": ok(structured=image_plan(), cost=0.05)},
+        {"stdout": ok(cost=0.1), "write": edit()},
+    )
+    res = runner.invoke(app, ["ingest", "--yes"])
+    assert res.exit_code == 0, res.output
+    plan_call, _ = fake_claude.calls()
+    assert len(images_in(plan_call)) == 3  # the whole bundle in one plan call
+    m = Manifest.load(root)
+    assert list(m.entries) == [rel]
+    status = runner.invoke(app, ["status"])
+    assert "sources 1/" in status.output
+    assert runner.invoke(app, ["lint"]).exit_code == 0
+    page = (root / "wiki/concepts/manual.md").read_text(encoding="utf-8")
+    assert "raw/manual.md — §Login, image a.png" in page
+
+    # one screenshot changes: the bundle runs again, as one changed source
+    make_png(root / "raw/manual/b.png", size=(128, 128), rects=((3, 3, 99, 99),))
+    fake_claude.queue(
+        {"stdout": ok(structured=image_plan("update"), cost=0.05)},
+        {"stdout": ok(cost=0.1), "write": edit()},
+    )
+    res = runner.invoke(app, ["ingest", "--yes"])
+    assert res.exit_code == 0, res.output
+    calls = fake_claude.calls()
+    assert len(calls) == 4
+    assert len(images_in(calls[2])) == 3
+    assert (
+        "changed images since the last ingest: b.png"
+        in calls[2]["stdin_message"]["message"]["content"][0]["text"]
+    )
+    entry = Manifest.load(root).entries[rel]
+    assert entry.members is not None
+    assert {x.path: x.sha256 for x in entry.members}["raw/manual/b.png"] == _sha(
+        root / "raw/manual/b.png"
+    )
+    assert runner.invoke(app, ["lint"]).exit_code == 0
+    again = runner.invoke(app, ["ingest", "--yes"])
+    assert "nothing to do" in again.output

@@ -19,6 +19,7 @@ from llm_wiki.config import (
     dump_config,
     load_config,
     load_profile,
+    slug,
 )
 from llm_wiki.errors import GitError, WikiError
 from llm_wiki.index import build_indexes
@@ -45,10 +46,6 @@ class InitResult:
     # Enclosing repo the wiki lives in; None when init made its own repo or only
     # re-registered.
     host_repo: Path | None = None
-
-
-def slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 def _template(rel: str) -> str:
