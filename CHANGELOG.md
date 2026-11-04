@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-11-04)
+
+### Bug Fixes
+
+- Keep bundle images safe through failed runs and odd pages
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+- Reject an image locator with a mangled name
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+### Documentation
+
+- Close M7 with the real-run result ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+- Specify page bundles and plan M7 ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+### Features
+
+- Cite images by name in a page's plan and edit
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+- Find the local images a Markdown page links
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+- Ingest a page and its images as one source
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+- Record a page's images in its manifest entry
+  ([#7](https://github.com/leonardo-marziali/llm-wiki/pull/7),
+  [`4c360ef`](https://github.com/leonardo-marziali/llm-wiki/commit/4c360ef3faedf0a6f8411e244dff36f4d413d305))
+
+
 ## v0.2.0 (2026-11-03)
 
 ### Chores
