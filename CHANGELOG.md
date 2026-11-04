@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-11-04)
+
+### Features
+
+- Ask for a git identity in wiki init ([#8](https://github.com/leonardo-marziali/llm-wiki/pull/8),
+  [`1c367be`](https://github.com/leonardo-marziali/llm-wiki/commit/1c367bebdce07649b5a5b56b6f8154a1136aa97e))
+
+
 ## v0.3.0 (2026-11-04)
 
 ### Bug Fixes
