@@ -31,6 +31,12 @@ def init_repo(root: Path) -> None:
     git(root, "init", "-b", "main")
 
 
+def set_local_identity(root: Path, name: str, email: str) -> None:
+    """Save the author identity in the repo's own config, never the global one."""
+    git(root, "config", "--local", "user.name", name)
+    git(root, "config", "--local", "user.email", email)
+
+
 def has_commits(root: Path) -> bool:
     """True when HEAD points at a commit (False on an unborn branch)."""
     try:
