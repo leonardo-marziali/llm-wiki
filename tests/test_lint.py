@@ -13,6 +13,7 @@ from llm_wiki.lint import (
     CONSOLIDATE_HINT,
     Finding,
     LintReport,
+    citation_target,
     cited_footnotes,
     cited_paths,
     footnote_refs,
@@ -836,3 +837,56 @@ def test_footnote_naming_a_member_image_in_its_locator_passes(tmp_path, make_wik
     page.write_text(text, encoding="utf-8")
     report = lint(root, load_config(root))
     assert not [f for f in report.findings if f.severity == "error"]
+
+
+# --- citations of paths with spaces ---
+
+SPACED_REL = "raw/docs/SAM - Library (v. 1).md"
+SPACED_ENCODED = "raw/docs/SAM%20-%20Library%20(v.%201).md"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"[^1]: <{SPACED_REL}> — §2",
+        f"[^1]: <{SPACED_REL}> - §2",
+        f"[^1]: `{SPACED_REL}` — §2",
+        f"[^1]: {SPACED_ENCODED} — §2",
+    ],
+)
+def test_footnotes_read_a_path_with_spaces_whole(line):
+    page = note_page(f"Fact.[^1]\n\n{line}\n")
+    assert footnotes(page) == {("1", SPACED_REL, "§2")}
+    assert cited_paths(page) == {SPACED_REL}
+
+
+@pytest.mark.parametrize(
+    "target", [f"<{SPACED_REL}>", f"`{SPACED_REL}`", SPACED_ENCODED]
+)
+def test_citation_of_a_path_with_spaces_passes_lint(root, target):
+    (root / SPACED_REL).write_text("# SAM\n", encoding="utf-8")
+    edit(root, PAGE_REL, f"[^1]: {RAW_REL}", f"[^1]: {target}")
+    assert codes(root) == set()
+
+
+def test_bare_path_with_spaces_says_how_to_cite_it(root):
+    (root / SPACED_REL).write_text("# SAM\n", encoding="utf-8")
+    edit(root, PAGE_REL, f"[^1]: {RAW_REL}", f"[^1]: {SPACED_REL} — §2")
+    report = lint(root, load_config(root), today=TODAY)
+    [found] = [f for f in report.findings if f.severity == "error"]
+    assert found.code == "citation-missing"
+    assert "<raw/a b.md> — <locator>" in found.message
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["<raw/../wiki/over view.md>", "`raw/../wiki/overview.md`", "raw/%2e%2e/x.md"],
+)
+def test_wrapped_or_encoded_citation_escaping_raw_is_outside_raw(root, target):
+    edit(root, PAGE_REL, f"[^1]: {RAW_REL}", f"[^1]: {target}")
+    assert codes(root) == {("error", "citation-outside-raw")}
+
+
+def test_citation_target_wraps_only_a_path_with_spaces():
+    assert citation_target("raw/a.md") == "raw/a.md"
+    assert citation_target("raw/a b.md") == "<raw/a b.md>"

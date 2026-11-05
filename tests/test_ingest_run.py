@@ -1385,3 +1385,26 @@ def test_ingest_edit_denied_flagged_pages(wiki, fake_claude):
     for call in edits:
         assert f"Read(./{leaky})" in call["argv"]
         assert "Read(./.wiki/quarantine/**)" in call["argv"]
+
+
+def test_source_with_spaces_in_its_path_is_ingested(wiki, fake_claude, capsys):
+    rel = "raw/SAM - Guide (v. 1).md"
+    slug = "sam-guide-v-1-md"
+    bare, wrapped = f"[^1]: {rel} — §1", f"[^1]: <{rel}> — §1"
+    digest = sha(NEW_TEXT)
+    drop(wiki, rel, NEW_TEXT)  # the inbox would slug the name; raw/ keeps it
+    fake_claude.queue(
+        planned(plan(plan_page(rel))),
+        edit(
+            {
+                PAGE: page(rel, digest).replace(bare, wrapped),
+                f"wiki/sources/src-{slug}.md": src_page(rel, digest, slug).replace(
+                    bare, wrapped
+                ),
+            }
+        ),
+    )
+    report = ingest(wiki)
+    assert report.decision == "accept", capsys.readouterr().out
+    assert [o.status for o in report.outcomes] == ["ingested"]
+    assert f"cite it as `[^n]: <{rel}> — <locator>`" in fake_claude.calls()[1]["stdin"]

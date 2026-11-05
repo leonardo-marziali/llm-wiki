@@ -35,7 +35,12 @@ LOG_RE = r"^## \[\d{4}-\d{2}-\d{2}\] [a-z-]+ \| .+$"
 _LOG = re.compile(LOG_RE)
 _ID = re.compile(ID_RE)
 # a footnote definition: label, target, then the locator text after it
-_FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*+(\S++)(.*)$", re.MULTILINE)
+_FOOTNOTE = re.compile(
+    r"^\[\^([^\]]+)\]:\s*+(<[^>\n]++>|`[^`\n]++`|\S++)(.*)$", re.MULTILINE
+)
+_SPACED_HINT = (
+    "; a path with spaces goes in angle brackets: `[^n]: <raw/a b.md> — <locator>`"
+)
 _FOOTNOTE_REF = re.compile(r"\[\^([^\]]+)\]")
 _LOCATOR_LEAD = " \t—–-:,;"
 _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -150,6 +155,22 @@ def link_targets(base_dir: Path, text: str) -> set[Path]:
     ``base_dir``.
     """
     return {_resolve(base_dir, t) for t in _md_links(text)}
+
+
+def citation_target(rel: str) -> str:
+    """How a footnote spells raw path ``rel``: a path with spaces goes in angle
+    brackets, because a bare target ends at the first space.
+    """
+    return f"<{rel}>" if re.search(r"\s", rel) else rel
+
+
+def _note_target(spelled: str) -> str:
+    """The path a footnote names, without its angle brackets, backticks or
+    percent-encoding.
+    """
+    if spelled[0] + spelled[-1] in ("<>", "``"):
+        spelled = spelled[1:-1]
+    return unquote(spelled)
 
 
 def _in_raw(root: Path, target: str) -> Path | None:
@@ -308,7 +329,11 @@ def footnotes(page: Page) -> set[tuple[str, str, str]]:
     """
     body = "\n".join(_strip_code(page.body))
     return {
-        (m.group(1), m.group(2), " ".join(m.group(3).split()).lstrip(_LOCATOR_LEAD))
+        (
+            m.group(1),
+            _note_target(m.group(2)),
+            " ".join(m.group(3).split()).lstrip(_LOCATOR_LEAD),
+        )
         for m in _FOOTNOTE.finditer(body)
     }
 
@@ -494,13 +519,16 @@ def _footnote_issues(root: Path, page: Page, path: str) -> list[Finding]:
         for label in glued_footnotes(page)
     ]
     for m in _FOOTNOTE.finditer("\n".join(_strip_code(page.body))):
-        label, target = m.group(1), m.group(2)
+        label, target, rest = m.group(1), _note_target(m.group(2)), m.group(3).strip()
         p = _in_raw(root, target)
         if p is None:
             msg = f"footnote [^{label}] cites '{target}' outside raw/"
             out.append(Finding("error", "citation-outside-raw", path, msg))
         elif not p.is_file():
             msg = f"footnote [^{label}] cites missing '{target}'"
+            # text before the locator's dash: the path probably went on past a space
+            if rest and not rest.startswith(("—", "–")):
+                msg += _SPACED_HINT
             out.append(Finding("error", "citation-missing", path, msg))
     return out
 

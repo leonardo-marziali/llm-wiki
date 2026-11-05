@@ -294,6 +294,43 @@ def merge_pages(root):
     commit_pages(root, {"concepts.b1": b1, "concepts.b2": b2})
 
 
+def test_lost_citation_of_a_path_with_spaces_gives_its_wrapped_form(wiki, fake_claude):
+    spaced = "raw/docs/a b.md"
+    (wiki / spaced).write_text("# A\n", encoding="utf-8")
+    b1 = text(wiki, "concepts.b1", "Branching", body("Branching"))
+    b2 = text(
+        wiki,
+        "concepts.b2",
+        "Branching",
+        body("Branching", notes=(("1", f"<{spaced}>", "§2"),)),
+    )
+    commit_pages(wiki, {"concepts.b1": b1, "concepts.b2": b2})
+    plan = mplan(
+        mpage("concepts.b1", title="Branching", instructions="Keep both facts."),
+        mpage(
+            "concepts.b2",
+            title="Branching",
+            status="superseded",
+            superseded_by="concepts.b1",
+            instructions="Make it a stub.",
+        ),
+        summary="Merge the branching pages",
+    )
+    stub = text(
+        wiki,
+        "concepts.b2",
+        "Branching",
+        "# Branching\n\n**TL;DR** See [Branching](b1.md).\n",
+        status="superseded",
+        extra="superseded_by: concepts.b1\n",
+    )
+    writes = {"wiki/concepts/b1.md": b1, "wiki/concepts/b2.md": stub}
+    fake_claude.queue(planned(plan), edit(writes), edit(writes))
+    [out] = run(wiki, mode="consolidate").outcomes
+    assert "maint-lost-citation" in out.reason
+    assert f"`<{spaced}> — §2`" in out.reason
+
+
 def test_merge_dropping_citations_rolls_back(wiki, fake_claude):
     # Review Focus 1: both edits drop the survivor's second footnote
     merge_pages(wiki)

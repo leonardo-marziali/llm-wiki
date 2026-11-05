@@ -231,7 +231,8 @@ may raise them.
 ## Citations and linking
 
 - Write each footnote definition as `[^n]: raw/<path> — <locator>`, with the raw
-  path first and exactly as it appears in `sources`.
+  path first and exactly as it appears in `sources`. A path with spaces goes in
+  angle brackets: `[^n]: <raw/a b.md> — <locator>`.
 - Locators:
   - documents: `§<heading or number>` or `p. <n>`;
   - slides: `slide <n>` or `slide <n> notes`;
