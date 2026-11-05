@@ -18,7 +18,30 @@ env:
   TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
+  # A PyPI version can never be uploaded twice, so test before building
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Keep in step with the classifiers in pyproject.toml
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Test
+        run: |
+          python -m pip install --only-binary :all: -e '.[dev]'
+          python -m pytest -q
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,12 +60,6 @@ jobs:
             echo "::error::__version__ is $version but the tag is $TAG"
             exit 1
           fi
-
-      # A PyPI version can never be uploaded twice, so test before building
-      - name: Test
-        run: |
-          python -m pip install --only-binary :all: -e '.[dev]'
-          python -m pytest -q
 
       # Wheels only, so no setup script runs; build and twine are pinned
       - name: Build
