@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.5.1 (2026-11-05)
+
+### Bug Fixes
+
+- Test every supported Python version before publishing
+  ([#11](https://github.com/leonardo-marziali/llm-wiki/pull/11),
+  [`69b95fb`](https://github.com/leonardo-marziali/llm-wiki/commit/69b95fb17724089598e90fb59500226d2aaf12dc))
+
+### Chores
+
+- Add Python version classifiers ([#10](https://github.com/leonardo-marziali/llm-wiki/pull/10),
+  [`074a5f8`](https://github.com/leonardo-marziali/llm-wiki/commit/074a5f8f642773842a7ec25a0849eb91f3eeb34e))
+
+
 ## v0.5.0 (2026-11-05)
 
 ### Bug Fixes
