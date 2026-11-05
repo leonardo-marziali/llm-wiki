@@ -83,8 +83,9 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-# pytest puts tests/ on sys.path, so tests can `from conftest import ...`
-extraPaths = ["tests"]
+# pytest puts tests/ on sys.path, so tests can `from conftest import ...`.
+# src comes first so a worktree checks its own code, not the editable install's.
+extraPaths = ["src", "tests"]
 
 [tool.ruff]
 target-version = "py312"
