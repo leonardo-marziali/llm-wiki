@@ -12,6 +12,12 @@ readme = "README.md"
 authors = [{ name = "Leonardo Marziali" }]
 keywords = ["wiki", "llm", "claude", "knowledge-base", "coding-agents"]
 requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dependencies = [
     "typer~=0.27",
     "pydantic~=2.14",
