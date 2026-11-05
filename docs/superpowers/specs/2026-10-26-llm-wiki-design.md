@@ -303,11 +303,12 @@ supersedes: []  superseded_by: null  related: []  tags: []
   report. A plain link is only reported when it names an image type and its file
   is missing: links to other pages and to websites are normal text.
 - **Placing members:** each goes to `raw/<page path>/<slugged file name>`. Links
-  of one page that share a file name each get their folder's name in front. The
-  path depends only on the page's path and text, never on link order, so a raw
-  page finds its members again in any later run. A page dropped directly in
-  `raw/` keeps its images where its links point, as long as they stay inside
-  `raw/`.
+  of one page that share a file name each get their folder's name in front. An
+  embed's name depends only on the other embeds, so a plain link never renames
+  one: the plain link gets its folder's name instead. The path depends only on
+  the page's path and text, never on link order, so a raw page finds its members
+  again in any later run. A page dropped directly in `raw/` keeps its images
+  where its links point, as long as they stay inside `raw/`.
 - **No double count:** a file both linked and dropped alone is a member only. An
   image linked by two pages is a member of both, with one copy each. An image
   already ingested as its own source stays one until the user deletes it, and is
@@ -568,7 +569,7 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    `[login.png](attachments/login.png)`, counts as part of its page, so an
    export's attachment list no longer makes each image a source. A plain link to
    another type or to a website stays normal text and is not listed as ignored.
-   _Done 2026-11-05: 930 offline tests. In a scratch wiki with the fake claude,
+   _Done 2026-11-05: 949 offline tests. In a scratch wiki with the fake claude,
    a real export of 77 pages and 203 images counted 82 sources, down from 191.
    The real ingest is still open._
 
