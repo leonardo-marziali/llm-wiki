@@ -223,7 +223,8 @@ supersedes: []  superseded_by: null  related: []  tags: []
      (stream-json stdin; the plan call stays tool-less), and the resulting facts
      are `confidence: low`.
    - **Page bundles:** a Markdown source and the local images it links
-     (`![…](rel/path.png)`) are one source. See "Page bundles" below.
+     (`![…](rel/path.png)` or `[…](rel/path.png)`) are one source. See "Page
+     bundles" below.
    - Unknown types fail loudly.
 4. **Screen** (`screen.py`), on the converted text:
    - **Secrets:** the regex set (from kbpipe `secrets.py`, extended) plus
@@ -294,9 +295,13 @@ supersedes: []  superseded_by: null  related: []  tags: []
   and resolves to a file inside the ingested tree: the folder given, the file's
   own folder for a single file, `inbox/`, or `raw/`. The forms are
   `![alt](path)`, `![alt][label]` with its definition, `![label]`,
-  `<img src="path">` and `![[path]]`. URL-encoded names and `?query` or
-  `#fragment` suffixes are decoded. Links in code are ignored. Remote URLs,
-  missing files and other types are ignored and listed in the run report.
+  `<img src="path">` and `![[path]]`. Plain links count too, `[text](path)` and
+  `[text][label]` with its definition, wherever they sit in the page: a wiki or
+  Confluence export lists a page's attachments that way. URL-encoded names and
+  `?query` or `#fragment` suffixes are decoded. Links in code are ignored.
+  Remote URLs, missing files and other types are ignored and listed in the run
+  report. A plain link is only reported when it names an image type and its file
+  is missing: links to other pages and to websites are normal text.
 - **Placing members:** each goes to `raw/<page path>/<slugged file name>`. Links
   of one page that share a file name each get their folder's name in front. The
   path depends only on the page's path and text, never on link order, so a raw

@@ -19,13 +19,18 @@ from llm_wiki.convert import IMAGE_SUFFIXES, NEVER_INGEST_SUFFIXES, read_text
 
 PAGE_SUFFIX = ".md"  # lowercase; compare through is_page
 # ![[wiki embed]], ![alt](target), ![alt][label], ![label] and <img src=...>; the
-# target may hold one level of parentheses or sit in <angle brackets>
+# target may hold one level of parentheses or sit in <angle brackets>. The last
+# two alternatives are the closing half of a plain link, ](target) and ][label];
+# an embed matches first and so never reaches them, and a thumbnail's outer link
+# still does.
 _IMAGE_TOKEN = re.compile(
     r"!\[\[(?P<wiki>[^\]\n|]+)(?:\|[^\]\n]*)?\]\]"
     r"|!\[(?P<alt>(?:[^\[\]]|\[[^\[\]]*\]){0,1000})\]"
     r"(?:\(\s*(?P<target><[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
     r"|\[(?P<label>[^\]\n]*)\])?"
-    r"""|<img\b[^>]*?\bsrc\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)')""",
+    r"""|<img\b[^>]*?\bsrc\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)')"""
+    r"|\]\(\s*(?P<plain><[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
+    r"|\]\[(?P<ref>[^\]\n]*)\]",
     re.IGNORECASE,
 )
 _DEFINITION = re.compile(
@@ -97,6 +102,15 @@ def definitions(text: str) -> dict[str, str]:
 
 def _targets(text: str, defs: dict[str, str]) -> Iterator[str]:
     for m in _IMAGE_TOKEN.finditer(text):
+        if m["plain"] is not None or m["ref"] is not None:
+            if m["plain"] is not None:
+                target = _clean_target(m["plain"])
+            else:
+                target = defs.get(m["ref"].casefold(), "")
+            path = _local_path(target) if target else None
+            if path is not None and Path(path).suffix.lower() in IMAGE_SUFFIXES:
+                yield target
+            continue
         if m["wiki"]:
             target = m["wiki"].strip()
         elif m["target"] is not None:

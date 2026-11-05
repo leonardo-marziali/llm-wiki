@@ -262,3 +262,54 @@ def test_split_parts_honours_the_char_limit():
     parts = split_parts(body, set(), 2, 70)
     assert len(parts) == 2
     assert "".join(parts) == body
+
+
+def test_image_links_plain_links_to_images_count():
+    text = (
+        "- [Shot](a/one.png)\n- [t](two.JPG 'A title')\n- [r][ref]\n"
+        "[![thumb](thumb.png)](full.png)\n\n[ref]: three.png\n"
+    )
+    assert image_links(text) == [
+        "a/one.png",
+        "two.JPG",
+        "three.png",
+        "thumb.png",
+        "full.png",
+    ]
+
+
+def test_image_links_plain_links_to_anything_else_do_not_count():
+    text = (
+        "[page](other.md) [doc](d.pdf) [web](https://x.io/a.png) [abs](/a.png)\n"
+        "[up][pdf]\n[note] and a[0] and [](#anchor)\n\n[pdf]: d.pdf\n"
+    )
+    assert image_links(text) == []
+    assert local_links(text) == ([], [])
+
+
+def test_image_links_plain_links_in_code_do_not_count():
+    assert image_links("`[a](span.png)`\n```\n[b](fence.png)\n```\n") == []
+
+
+def test_local_links_embed_and_plain_link_of_one_image_are_one_link():
+    links, _ = local_links("![a](x%20y.png)\n\n- [x y.png](x%20y.png)\n")
+    assert [ln.path for ln in links] == ["x y.png"]
+
+
+def test_find_members_plain_links_missing_and_outside(tmp_path):
+    top = tmp_path / "top"
+    page = write(top / "p.md", "[a](a.png) [gone](gone.png) [out](../../secret.png)\n")
+    touch(top / "a.png")
+    touch(tmp_path / "secret.png")
+    found, ignored = find_members(page, top)
+    assert [link.path for link, _ in found] == ["a.png"]
+    assert ignored == ["missing: gone.png", "missing: ../../secret.png"]
+
+
+def test_split_parts_counts_plain_links():
+    body = "## Attachments\n\n" + "".join(f"- [{i}.png]({i}.png)\n" for i in range(25))
+    sent = {f"{i}.png" for i in range(25)}
+    parts = split_parts(body, sent, 20, 80_000)
+    assert len(parts) == 2
+    assert all(len(image_links(p)) <= 20 for p in parts)
+    assert sorted(lk for p in parts for lk in image_links(p)) == sorted(sent)
