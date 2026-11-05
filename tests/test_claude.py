@@ -882,8 +882,22 @@ def _alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     # a zombie still answers kill(0); count it as gone
-    stat_file = Path(f"/proc/{pid}/stat")
-    return not (stat_file.exists() and stat_file.read_text().split()[2] == "Z")
+    if not Path("/proc").exists():
+        return True
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
+    except (FileNotFoundError, ProcessLookupError):  # it exited just now
+        return False
+
+
+@pytest.mark.skipif(not Path("/proc").exists(), reason="needs /proc")
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
+def test_alive_counts_a_process_that_exits_during_the_check_as_gone(monkeypatch, error):
+    def vanished(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(Path, "read_text", vanished)
+    assert not _alive(os.getpid())
 
 
 def _gone_within(pid: int, seconds: float) -> bool:
