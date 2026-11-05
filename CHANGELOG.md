@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.5.2 (2026-11-05)
+
+### Bug Fixes
+
+- Accept citations of raw paths with spaces
+  ([#12](https://github.com/leonardo-marziali/llm-wiki/pull/12),
+  [`ce96116`](https://github.com/leonardo-marziali/llm-wiki/commit/ce961168da30906f95578f320814e93a192db2ac))
+
+### Chores
+
+- Make pyright check the worktree's own source
+  ([#12](https://github.com/leonardo-marziali/llm-wiki/pull/12),
+  [`ce96116`](https://github.com/leonardo-marziali/llm-wiki/commit/ce961168da30906f95578f320814e93a192db2ac))
+
+
 ## v0.5.1 (2026-11-05)
 
 ### Bug Fixes
