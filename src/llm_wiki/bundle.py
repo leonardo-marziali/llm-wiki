@@ -26,17 +26,17 @@ PAGE_SUFFIX = ".md"  # lowercase; compare through is_page
 _IMAGE_TOKEN = re.compile(
     r"!\[\[(?P<wiki>[^\]\n|]+)(?:\|[^\]\n]*)?\]\]"
     r"|!\[(?P<alt>(?:[^\[\]]|\[[^\[\]]*\]){0,1000})\]"
-    r"(?:\(\s*(?P<target><[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
+    r"(?:\(\s*+(?P<target><[^>\n]{1,4096}>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
     r"|\[(?P<label>[^\]\n]*)\])?"
     r"""|<img\b[^>]*?\bsrc\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)')"""
-    r"|\]\(\s*(?P<plain><[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
+    r"|\]\(\s*+(?P<plain><[^>\n]{1,4096}>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)"
     r"|\]\[(?P<ref>[^\]\n]*)\]",
     re.IGNORECASE,
 )
 _DEFINITION = re.compile(
     r"^ {0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?P<target><[^>\n]+>|\S+)", re.MULTILINE
 )
-_TITLE = re.compile(r"""\s+(?:"[^"\n]*"|'[^'\n]*')\s*$""")
+_TITLE = re.compile(r"""(?<!\s)\s++(?:"[^"\n]*"|'[^'\n]*')\s*$""")
 _REMOTE = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]+:|/)")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
@@ -100,7 +100,8 @@ def definitions(text: str) -> dict[str, str]:
     return out
 
 
-def _targets(text: str, defs: dict[str, str]) -> Iterator[str]:
+def _tagged_targets(text: str, defs: dict[str, str]) -> Iterator[tuple[str, bool]]:
+    """Each image link target, and whether the page embeds it."""
     for m in _IMAGE_TOKEN.finditer(text):
         if m["plain"] is not None or m["ref"] is not None:
             if m["plain"] is not None:
@@ -109,7 +110,7 @@ def _targets(text: str, defs: dict[str, str]) -> Iterator[str]:
                 target = defs.get(m["ref"].casefold(), "")
             path = _local_path(target) if target else None
             if path is not None and Path(path).suffix.lower() in IMAGE_SUFFIXES:
-                yield target
+                yield target, False
             continue
         if m["wiki"]:
             target = m["wiki"].strip()
@@ -120,7 +121,11 @@ def _targets(text: str, defs: dict[str, str]) -> Iterator[str]:
         else:
             target = html.unescape(m["dq"] if m["dq"] is not None else m["sq"])
         if target:
-            yield target
+            yield target, True
+
+
+def _targets(text: str, defs: dict[str, str]) -> Iterator[str]:
+    return (target for target, _ in _tagged_targets(text, defs))
 
 
 def image_links(text: str) -> list[str]:
@@ -151,11 +156,15 @@ def local_links(text: str) -> tuple[list[Link], list[str]]:
 
     A name follows from the link, not from its place in the page: links that share
     a file name each get their folder's name in front, so editing the page out of
-    one link can never hand the other one its picture.
+    one link can never hand the other one its picture. Embeds are named first and
+    only against each other, so a plain link can never rename an embed that a run
+    has already placed.
     """
     written: dict[str, str] = {}
+    embedded: dict[str, None] = {}  # in the order the page embeds them
     ignored: list[str] = []
-    for target in image_links(text):
+    readable = "\n".join(_outside_code(text))
+    for target, is_embed in _tagged_targets(readable, definitions(text)):
         path = _local_path(target)
         if path is None:
             ignored.append(f"remote: {target}")
@@ -163,16 +172,29 @@ def local_links(text: str) -> tuple[list[Link], list[str]]:
             ignored.append(f"not an image type: {target}")
         else:
             written.setdefault(path, target)
+            if is_embed:
+                embedded[path] = None
     plain = {path: file_name(Path(path).name) for path in written}
-    uses = Counter(plain.values())
+    alts = {path: _folder_name(path, plain[path]) for path in written}
+    uses = Counter(plain[path] for path in embedded)
     taken: set[str] = set()
-    links = []
-    for path, target in written.items():
-        folder = slug(Path(path).parent.as_posix())
-        alt = f"{folder}-{plain[path]}" if folder else plain[path]
-        name = plain[path] if uses[plain[path]] == 1 else alt
-        links.append(Link(target, path, _free_name(name, taken), alt))
-    return links, ignored
+    names: dict[str, str] = {}
+    for path in embedded:
+        name = plain[path] if uses[plain[path]] == 1 else alts[path]
+        names[path] = _free_name(name, taken)
+    linked = sorted(set(written) - set(embedded))  # sorted, so order never matters
+    uses = Counter(plain[path] for path in linked)
+    for path in linked:
+        free = uses[plain[path]] == 1 and plain[path] not in taken
+        names[path] = _free_name(plain[path] if free else alts[path], taken)
+    # an alt another link is named never finds that link's picture
+    alts = {p: names[p] if a in taken else a for p, a in alts.items()}
+    return [Link(t, p, names[p], alts[p]) for p, t in written.items()], ignored
+
+
+def _folder_name(path: str, name: str) -> str:
+    folder = slug(Path(path).parent.as_posix())
+    return f"{folder}-{name}" if folder else name
 
 
 def _free_name(name: str, taken: set[str]) -> str:
