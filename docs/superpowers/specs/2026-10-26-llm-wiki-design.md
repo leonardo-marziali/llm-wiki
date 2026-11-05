@@ -564,6 +564,14 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    `low`. Plans cite an image only when it adds a fact, so many screenshots
    leave no citation._
 
+8. **Linked images:** a plain link to a local image, like
+   `[login.png](attachments/login.png)`, counts as part of its page, so an
+   export's attachment list no longer makes each image a source. A plain link to
+   another type or to a website stays normal text and is not listed as ignored.
+   _Done 2026-11-05: 930 offline tests. In a scratch wiki with the fake claude,
+   a real export of 77 pages and 203 images counted 82 sources, down from 191.
+   The real ingest is still open._
+
 ## 12. Verification
 
 - **Offline `pytest` with the fake claude:**

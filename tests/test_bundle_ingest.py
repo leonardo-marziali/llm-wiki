@@ -361,6 +361,47 @@ def test_ingest_folder_again_with_one_changed_image(
     assert ingest(wiki, paths=[src]).decision == "noop"
 
 
+def test_ingest_folder_with_an_attachments_list_is_one_source_per_page(
+    wiki, fake_claude, shots, tmp_path
+):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "manual.md").write_text(
+        "# Manual\n\n![a](img/a.png)\n\n## Attachments\n\n"
+        "- [a.png](img/a.png)\n- [b.png](img/b.png)\n- [other](other.md)\n",
+        encoding="utf-8",
+    )
+    (src / "other.md").write_text("# Other\n\nNo images.\n", encoding="utf-8")
+    shots(src / "img", "ab")
+    other = "raw/src/other.md"
+    fake_claude.queue(
+        *turn("raw/src/manual.md", digest(src / "manual.md")),
+        {"stdout": ok(structured=plan(other, id_="concepts.other"), cost=0.05)},
+        {
+            "stdout": ok(cost=0.1),
+            "write": writes(other, digest(src / "other.md"), id_="concepts.other"),
+        },
+    )
+    report = ingest(wiki, paths=[src])
+    assert report.decision == "accept", report.summary
+    # the images are not sources: the guide the fixture holds and the two pages
+    assert Manifest.load(wiki).live() == 3
+    assert set(Manifest.load(wiki).entries) == {
+        "raw/docs/guide.md",
+        "raw/src/manual.md",
+        "raw/src/other.md",
+    }
+    members, _ = page_members(wiki, "raw/src/manual.md")
+    assert [m.name for m in members] == ["a.png", "b.png"]
+    assert (wiki / "raw/src/manual/a.png").is_file()
+    assert (wiki / "raw/src/manual/b.png").is_file()
+    plans = [c for c in fake_claude.calls() if c["stdin_message"]]
+    assert [len(image_blocks(c)) for c in plans] == [2]
+    assert "raw/src/manual.md" in text_of(plans[0])
+    assert "images not read" not in report.summary
+    assert "not an image type" not in report.summary
+
+
 def test_ingest_link_removed_removes_the_image_from_raw(wiki, fake_claude, shots):
     rel, _ = _ingested_bundle(wiki, fake_claude, shots)
     text = LINKS.replace("![c](img/c.png)\n", "")
