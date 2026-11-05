@@ -35,7 +35,7 @@ from llm_wiki.intake import (
     source_slug,
     src_id_for,
 )
-from llm_wiki.lint import Finding, cited_paths
+from llm_wiki.lint import Finding, citation_target, cited_paths
 from llm_wiki.manifest import MANIFEST, Manifest, SourceEntry, sha256_file
 from llm_wiki.pages import ID_RE, SOURCELESS_TYPES, read_page
 from llm_wiki.plan import plan_source, redact_plan, screen_plan
@@ -178,7 +178,7 @@ def build_edit_prompt(
                 "",
                 (
                     f"- raw path: {prepared.rel} "
-                    f"(cite it as `[^n]: {prepared.rel} — <locator>`)"
+                    f"(cite it as `[^n]: {citation_target(prepared.rel)} — <locator>`)"
                 ),
                 f"- sha256: {prepared.sha} (copy it exactly into `sources`)",
                 f"- part: {label}",

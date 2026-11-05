@@ -196,6 +196,9 @@ supersedes: []  superseded_by: null  related: []  tags: []
   → "Related" → footnotes `[^n]: raw/… — locator`.
 - Every claim carries a footnote that points to `raw/` only. Uncited claims sit
   inside `> [!unverified]`.
+- A raw path with spaces goes in angle brackets: `[^n]: <raw/a b.md> — locator`.
+  Files placed straight in `raw/` keep their names, so these paths occur. Lint
+  also reads backticks and percent-encoding.
 - **Contradictions:** never overwrite. Keep both claims with citations, lower
   the confidence and add an entry to `open-questions.md`. When the contradiction
   is resolved, strike the losing claim through with "superseded by … on date".

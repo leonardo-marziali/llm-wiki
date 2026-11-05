@@ -27,8 +27,9 @@ say.
 - Never drop a citation whose raw file exists. Keep every footnote definition
   `[^n]: raw/<path> — <locator>` on some allowed page, with the same path and
   locator, and keep its `[^n]` reference in that page's text: a definition whose
-  claim is gone cites nothing. You may renumber a footnote. A claim you retire
-  is struck through (`~~claim~~[^n]`) and keeps its footnote.
+  claim is gone cites nothing. A path with spaces goes in angle brackets:
+  `[^n]: <raw/a b.md> — <locator>`. You may renumber a footnote. A claim you
+  retire is struck through (`~~claim~~[^n]`) and keeps its footnote.
 - Keep one blank line between the text and the first footnote definition.
 - Keep `last_verified` and `review_after` exactly as the allowed list gives
   them. Nothing is re-checked against the sources, so nothing is re-verified.

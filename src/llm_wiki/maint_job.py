@@ -16,7 +16,13 @@ from llm_wiki.config import LlmSettings, WikiConfig
 from llm_wiki.errors import STOP, ClaudeError, WikiError
 from llm_wiki.gitops import stage_commit
 from llm_wiki.ingest import _with_repair, page_rel
-from llm_wiki.lint import Finding, _in_raw, cited_footnotes, cited_paths
+from llm_wiki.lint import (
+    Finding,
+    _in_raw,
+    citation_target,
+    cited_footnotes,
+    cited_paths,
+)
 from llm_wiki.maint import (
     PLAN_PROMPTS,
     Job,
@@ -251,7 +257,10 @@ class _JobEdit:
         kept = set().union(*(cited_footnotes(p) for p in now.values()))
         for target, loc in sorted(self.notes - kept):
             where = self._holder(target, loc)
-            msg = f"the footnote `{target} — {loc}` is on no page any more"
+            msg = (
+                f"the footnote `{citation_target(target)} — {loc}` "
+                "is on no page any more"
+            )
             out.append(Finding("error", "maint-lost-citation", where, msg))
         return out
 

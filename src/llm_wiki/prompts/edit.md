@@ -30,7 +30,8 @@ everything this section does not say.
 - `sources` lists every raw file the page cites. Copy each `sha256` exactly as
   given in the message or the existing page; never compute or change one.
 - Cite every claim with a footnote whose definition starts with the `raw/` path,
-  then the locator: `[^n]: raw/<path> — <locator>`. Never cite a wiki page or
+  then the locator: `[^n]: raw/<path> — <locator>`. A path with spaces goes in
+  angle brackets: `[^n]: <raw/a b.md> — <locator>`. Never cite a wiki page or
   `.wiki/converted/`. Keep each claim's own locator from the plan; never merge
   claims with different locators under one footnote. A fact read from an image
   in a page keeps the page as its source and names the image in the locator:
