@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-11-05)
+
+### Bug Fixes
+
+- Keep embeds' names when a plain link shares their file name
+  ([#9](https://github.com/leonardo-marziali/llm-wiki/pull/9),
+  [`073317b`](https://github.com/leonardo-marziali/llm-wiki/commit/073317be54fbd0028f29f84ffac28575405f3d36))
+
+### Documentation
+
+- Explain linked images in the manual and close M8
+  ([#9](https://github.com/leonardo-marziali/llm-wiki/pull/9),
+  [`073317b`](https://github.com/leonardo-marziali/llm-wiki/commit/073317be54fbd0028f29f84ffac28575405f3d36))
+
+- Explain what upgrading does to plain image links
+  ([#9](https://github.com/leonardo-marziali/llm-wiki/pull/9),
+  [`073317b`](https://github.com/leonardo-marziali/llm-wiki/commit/073317be54fbd0028f29f84ffac28575405f3d36))
+
+### Features
+
+- Count images a page only links as part of that page
+  ([#9](https://github.com/leonardo-marziali/llm-wiki/pull/9),
+  [`073317b`](https://github.com/leonardo-marziali/llm-wiki/commit/073317be54fbd0028f29f84ffac28575405f3d36))
+
+
 ## v0.4.0 (2026-11-04)
 
 ### Features
