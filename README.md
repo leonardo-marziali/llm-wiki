@@ -107,7 +107,10 @@ wiki ingest --wiki payments ./payments-docs # a folder of pages and attachments
 
 - Links count when they are relative, like `![login](attachments/login.png)`,
   and stay inside what you ingest: the folder, or a single file's own folder.
-  Reference links, `<img src="…">` and `![[…]]` count too. Remote URLs and
+  Reference links, `<img src="…">` and `![[…]]` count too. A plain link to an
+  image, like `[login.png](attachments/login.png)`, counts as well, so an
+  export's attachment list stays with its page. Plain links to pages and
+  websites are ordinary text and are not listed. Remote embedded images and
   missing files are listed in the run report and otherwise ignored.
 - Images go next to their page: `raw/user-manual.md` keeps its images in
   `raw/user-manual/`. An image two pages link is copied to both.
@@ -165,3 +168,15 @@ Wikis created before 0.1.1 also lack `.DS_Store`, `Thumbs.db` and `desktop.ini`
 in their `.gitignore`. Once Finder or Explorer drops one of these files outside
 `inbox/` and `raw/`, `wiki ingest` refuses to start ("the wiki has uncommitted
 changes"). Add the three lines and commit `.gitignore`.
+
+Plain links to local images now count as part of their page. After upgrading:
+
+- A page whose plain image links point at files already in `raw/` runs once more
+  on the next `wiki ingest`, even when nothing was edited. This costs about as
+  much as ingesting the page again: pages have cost $0.34–1.23 each in real
+  runs. Pages last ingested before 0.3.0 do not run until they change.
+- An upgraded wiki keeps its older images as separate sources, so a wiki at the
+  cap stays there. To get below it, ingest the source folder again first, then
+  delete the old image sources. Deleting first loses the picture from the page.
+- A link can show as `missing:` when its image sits in `raw/` as its own source
+  under a slugged name. Ingesting the folder again resolves it.

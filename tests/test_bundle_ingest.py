@@ -361,6 +361,254 @@ def test_ingest_folder_again_with_one_changed_image(
     assert ingest(wiki, paths=[src]).decision == "noop"
 
 
+def test_ingest_folder_with_an_attachments_list_is_one_source_per_page(
+    wiki, fake_claude, shots, tmp_path
+):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "manual.md").write_text(
+        "# Manual\n\n![a](img/a.png)\n\n## Attachments\n\n"
+        "- [a.png](img/a.png)\n- [b.png](img/b.png)\n- [other](other.md)\n",
+        encoding="utf-8",
+    )
+    (src / "other.md").write_text("# Other\n\nNo images.\n", encoding="utf-8")
+    shots(src / "img", "ab")
+    other = "raw/src/other.md"
+    fake_claude.queue(
+        *turn("raw/src/manual.md", digest(src / "manual.md")),
+        {"stdout": ok(structured=plan(other, id_="concepts.other"), cost=0.05)},
+        {
+            "stdout": ok(cost=0.1),
+            "write": writes(other, digest(src / "other.md"), id_="concepts.other"),
+        },
+    )
+    report = ingest(wiki, paths=[src])
+    assert report.decision == "accept", report.summary
+    # the images are not sources: the guide the fixture holds and the two pages
+    assert Manifest.load(wiki).live() == 3
+    assert set(Manifest.load(wiki).entries) == {
+        "raw/docs/guide.md",
+        "raw/src/manual.md",
+        "raw/src/other.md",
+    }
+    members, _ = page_members(wiki, "raw/src/manual.md")
+    assert [m.name for m in members] == ["a.png", "b.png"]
+    assert (wiki / "raw/src/manual/a.png").is_file()
+    assert (wiki / "raw/src/manual/b.png").is_file()
+    plans = [c for c in fake_claude.calls() if c["stdin_message"]]
+    assert [len(image_blocks(c)) for c in plans] == [2]
+    assert "raw/src/manual.md" in text_of(plans[0])
+    assert "images not read" not in report.summary
+    assert "not an image type" not in report.summary
+
+
+def _as_before_plain_links(root, rel):
+    """Rewrite ``rel``'s manifest entry as a version that ignored plain links did."""
+    manifest = Manifest.load(root)
+    entry = manifest.entries[rel]
+    embedded = [m for m in entry.members or [] if m.path.startswith(f"{rel[:-3]}/")]
+    update = {"members": embedded, "sha256": digest(root / rel)}
+    manifest.record(entry.model_copy(update=update))
+    manifest.save(root)
+    if gitops.changed_paths(root):
+        gitops.commit_all(root, "as before plain links")
+
+
+def _image_turn(rel, sha, *, id_="concepts.zed"):
+    return [
+        {"stdout": ok(structured=plan(rel, locator="region: all", id_=id_), cost=0.05)},
+        {"stdout": ok(cost=0.1), "write": writes(rel, sha, "region: all", id_=id_)},
+    ]
+
+
+def _page_turn(rel, sha, *, action="create"):
+    locator = "§Login"
+    return [
+        {"stdout": ok(structured=plan(rel, action=action, locator=locator), cost=0.05)},
+        {"stdout": ok(cost=0.1), "write": writes(rel, sha, locator)},
+    ]
+
+
+def _own_source_then_page(wiki, fake_claude, image, page_rel, text):
+    """An image ingested as its own source, then a page that links it."""
+    sha = digest(wiki / image)
+    fake_claude.queue(*_image_turn(image, sha))
+    assert ingest(wiki).decision == "accept"
+    page = wiki / page_rel
+    page.write_text(text, encoding="utf-8")
+    fake_claude.queue(*_page_turn(page_rel, digest(page)))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    _as_before_plain_links(wiki, page_rel)
+
+
+def test_upgrade_plain_link_never_renames_a_placed_embed(wiki, fake_claude, shots):
+    # before plain links counted, the embed was placed at p/a.png and other/a.png
+    # was its own source; the attachment list shares the embed's file name
+    rel = "raw/src/p.md"
+    page = wiki / rel
+    page.parent.mkdir(parents=True)
+    embed_only = "# Login\n\n![a](img/a.png)\n"
+    page.write_text(embed_only, encoding="utf-8")
+    shots(wiki / "raw/src/p", "a")
+    shots(wiki / "raw/src/other", "b")
+    (wiki / "raw/src/other/b.png").rename(wiki / "raw/src/other/a.png")
+    placed = wiki / "raw/src/p/a.png"
+    picture = digest(placed)
+    fake_claude.queue(
+        *_image_turn("raw/src/other/a.png", digest(wiki / "raw/src/other/a.png")),
+        *_page_turn(rel, digest(page)),
+    )
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    page.write_text(
+        f"{embed_only}\n## Attachments\n\n- [a.png](other/a.png)\n", encoding="utf-8"
+    )
+    _as_before_plain_links(wiki, rel)
+    recorded = Manifest.load(wiki).entries[rel].members or []
+    assert [m.path for m in recorded] == ["raw/src/p/a.png"]
+
+    members, ignored = page_members(wiki, rel)
+    assert {m.link: m.path for m in members} == {
+        "img/a.png": "raw/src/p/a.png",
+        "other/a.png": "raw/src/other/a.png",
+    }
+    assert ignored == []
+
+    fake_claude.queue(*_page_turn(rel, digest(page), action="update"))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert "missing" not in report.summary
+    assert digest(placed) == picture
+    assert "raw/src/p/a.png" in gitops.git(wiki, "ls-files", "raw/src/p")
+
+
+def test_upgrade_plain_link_to_a_file_in_raw_runs_the_page_once_more(
+    wiki, fake_claude, shots
+):
+    rel = "raw/src/p.md"
+    shots(wiki / "raw/src", "a")
+    _own_source_then_page(
+        wiki, fake_claude, "raw/src/a.png", rel, "# Login\n\n- [a.png](a.png)\n"
+    )
+    assert Manifest.load(wiki).scan(wiki).changed == [rel]
+    calls = len(fake_claude.calls())
+    fake_claude.queue(*_page_turn(rel, digest(wiki / rel), action="update"))
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert len(fake_claude.calls()) == calls + 2
+    assert Manifest.load(wiki).scan(wiki).changed == []
+    calls = len(fake_claude.calls())
+    ingest(wiki)
+    assert len(fake_claude.calls()) == calls
+
+
+def test_upgrade_page_from_before_bundles_does_not_run_again(wiki, fake_claude, shots):
+    rel = "raw/src/p.md"
+    shots(wiki / "raw/src", "a")
+    _own_source_then_page(
+        wiki, fake_claude, "raw/src/a.png", rel, "# Login\n\n- [a.png](a.png)\n"
+    )
+    manifest = Manifest.load(wiki)
+    manifest.record(manifest.entries[rel].model_copy(update={"members": None}))
+    manifest.save(wiki)
+    gitops.commit_all(wiki, "as before bundles")
+    assert Manifest.load(wiki).scan(wiki).changed == []
+
+
+def _source_folder(tmp_path, shots):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "p.md").write_text("# Login\n\n- [a.png](att/a.png)\n", encoding="utf-8")
+    shots(src / "att", "a")
+    return src
+
+
+def _upgraded_wiki(wiki, fake_claude, src):
+    """``src`` as an older version left it: the image is its own source."""
+    (wiki / "raw/src/att").mkdir(parents=True)
+    image = "raw/src/att/a.png"
+    (wiki / image).write_bytes((src / "att/a.png").read_bytes())
+    text = (src / "p.md").read_text(encoding="utf-8")
+    _own_source_then_page(wiki, fake_claude, image, "raw/src/p.md", text)
+
+
+def test_upgrade_ingest_folder_first_then_delete_keeps_the_picture(
+    wiki, fake_claude, shots, tmp_path
+):
+    src = _source_folder(tmp_path, shots)
+    _upgraded_wiki(wiki, fake_claude, src)
+    rel, image = "raw/src/p.md", "raw/src/att/a.png"
+    live = Manifest.load(wiki).live()
+    set_cap(wiki, "max_sources", live)  # at the cap, the folder still goes in
+
+    fake_claude.queue(*_page_turn(rel, digest(wiki / rel), action="update"))
+    report = ingest(wiki, paths=[src])
+    assert report.decision == "accept", report.summary
+    assert [m.path for m in page_members(wiki, rel)[0]] == ["raw/src/p/a.png"]
+    assert Manifest.load(wiki).live() == live  # the old source still counts
+
+    (wiki / image).unlink()
+    assert Manifest.load(wiki).scan(wiki).changed == []
+    gone = "# Login\n\n**TL;DR** Gone.\n\n> [!unverified]\n> The form.\n"
+    fake_claude.queue(
+        {
+            "stdout": ok(),
+            "write": {
+                "wiki/concepts/zed.md": page_text(
+                    "concepts.zed", "Login", gone, type_="concept", status="deprecated"
+                ),
+                "wiki/sources/src-src-att-a-png.md": page_text(
+                    "sources.src-src-att-a-png",
+                    "Login",
+                    gone,
+                    type_="source-summary",
+                    status="deprecated",
+                ),
+            },
+        }
+    )
+    report = ingest(wiki)
+    assert report.decision == "accept", report.summary
+    assert report.outcomes[0].status == "deleted", report.summary
+    assert Manifest.load(wiki).live() == live - 1
+    assert [m.path for m in page_members(wiki, rel)[0]] == ["raw/src/p/a.png"]
+
+
+def test_upgrade_delete_first_loses_the_picture(wiki, fake_claude, shots, tmp_path):
+    src = _source_folder(tmp_path, shots)
+    _upgraded_wiki(wiki, fake_claude, src)
+    rel = "raw/src/p.md"
+    (wiki / "raw/src/att/a.png").unlink()
+    members, ignored = page_members(wiki, rel)
+    assert members == []
+    assert ignored == ["missing: att/a.png"]
+
+
+def test_upgrade_folder_ingest_resolves_a_link_to_a_slugged_own_source(
+    wiki, fake_claude, shots, tmp_path
+):
+    src = tmp_path / "src"
+    src.mkdir()
+    text = "# Login\n\n- [My Shot.png](Att/My%20Shot.png)\n"
+    (src / "p.md").write_text(text, encoding="utf-8")
+    shots(src / "Att", "a")
+    (src / "Att/a.png").rename(src / "Att/My Shot.png")
+    (wiki / "raw/src/att").mkdir(parents=True)
+    image = "raw/src/att/my-shot.png"
+    (wiki / image).write_bytes((src / "Att/My Shot.png").read_bytes())
+    _own_source_then_page(wiki, fake_claude, image, "raw/src/p.md", text)
+    rel = "raw/src/p.md"
+    assert page_members(wiki, rel) == ([], ["missing: Att/My%20Shot.png"])
+
+    fake_claude.queue(*_page_turn(rel, digest(wiki / rel), action="update"))
+    report = ingest(wiki, paths=[src])
+    assert report.decision == "accept", report.summary
+    members, ignored = page_members(wiki, rel)
+    assert [m.path for m in members] == ["raw/src/p/my-shot.png"]
+    assert ignored == []
+
+
 def test_ingest_link_removed_removes_the_image_from_raw(wiki, fake_claude, shots):
     rel, _ = _ingested_bundle(wiki, fake_claude, shots)
     text = LINKS.replace("![c](img/c.png)\n", "")

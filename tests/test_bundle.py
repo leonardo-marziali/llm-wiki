@@ -1,3 +1,7 @@
+import time
+
+import pytest
+
 from llm_wiki.bundle import (
     find_members,
     image_links,
@@ -62,6 +66,82 @@ def test_local_links_clash_is_named_by_folder_not_by_order():
     assert [ln.name for ln in links] == ["a-x.png", "b-x.png", "c-x.png"]
 
 
+def names(text):
+    return {ln.path: ln.name for ln in local_links(text)[0]}
+
+
+def test_plain_link_never_renames_an_embed():
+    embed, link = "![a](img/a.png)\n", "- [a.png](other/a.png)\n"
+    expected = {"img/a.png": "a.png", "other/a.png": "other-a.png"}
+    assert names(embed + link) == expected
+    assert names(link + embed) == expected
+
+
+def test_two_embeds_clash_only_with_each_other():
+    embeds = "![](x/a.png)\n![](y/a.png)\n"
+    assert names(embeds + "[z](z/b.png)\n") == {
+        "x/a.png": "x-a.png",
+        "y/a.png": "y-a.png",
+        "z/b.png": "b.png",
+    }
+
+
+def test_plain_links_that_share_a_name_are_named_by_folder():
+    expected = {"x/a.png": "x-a.png", "y/a.png": "y-a.png"}
+    assert names("[1](x/a.png)\n[2](y/a.png)\n") == expected
+    assert names("[2](y/a.png)\n[1](x/a.png)\n") == expected
+
+
+def test_a_path_both_embedded_and_linked_is_an_embed_for_naming():
+    expected = {"img/a.png": "a.png", "other/a.png": "other-a.png"}
+    for text in (
+        "[a](img/a.png)\n[o](other/a.png)\n![a](img/a.png)\n",
+        "![a](img/a.png)\n[o](other/a.png)\n[a](img/a.png)\n",
+    ):
+        assert names(text) == expected
+
+
+def test_plain_link_to_an_embed_never_moves_it_ahead_of_another_embed():
+    # x/a.png and y/a.png clash, so x/a.png wants x-a.png, which x-a.png holds
+    embeds = "![](x-a.png)\n![](x/a.png)\n![](y/a.png)\n"
+    assert names("[l](x/a.png)\n" + embeds) == names(embeds)
+
+
+def test_plain_link_never_takes_the_name_an_embed_got_from_a_clash():
+    # the embeds are x-a.png and y-a.png, whichever way the page is ordered
+    embeds = "![](x/a.png)\n![](y/a.png)\n"
+    link = "[q](q/x-a.png)\n"
+    expected = {"x/a.png": "x-a.png", "y/a.png": "y-a.png", "q/x-a.png": "q-x-a.png"}
+    assert names(embeds + link) == expected
+    assert names(link + embeds) == expected
+
+
+def test_folderless_plain_link_with_an_embeds_name_gets_a_free_name():
+    embed, link = "![](img/a.png)\n", "[a](a.png)\n"
+    expected = {"img/a.png": "a.png", "a.png": "a-2.png"}
+    assert names(embed + link) == expected
+    assert names(link + embed) == expected
+
+
+def test_a_link_never_finds_the_picture_of_a_link_named_like_its_alt(tmp_path):
+    root = tmp_path
+    write(root / "raw/page.md", "![](img/a.png)\n[a](a.png)\n[b](img-a.png)\n")
+    touch(root / "raw/page/a.png")
+    touch(root / "raw/page/a-2.png")
+    touch(root / "raw/page/img-a.png")
+    members, _ = page_members(root, "raw/page.md")
+    assert {m.link: m.path for m in members} == {
+        "img/a.png": "raw/page/a.png",
+        "a.png": "raw/page/a-2.png",
+        "img-a.png": "raw/page/img-a.png",
+    }
+
+
+def test_links_stay_in_page_order_whatever_their_kind():
+    links, _ = local_links("[o](other/a.png)\n![a](img/a.png)\n")
+    assert [ln.path for ln in links] == ["other/a.png", "img/a.png"]
+
+
 def test_member_rel_is_next_to_the_page():
     assert member_rel("raw/docs/guide.md", "x.png") == "raw/docs/guide/x.png"
     assert member_rel("raw/guide.md", "x.png") == "raw/guide/x.png"
@@ -121,6 +201,29 @@ def test_removing_a_clashing_link_keeps_the_other_image(tmp_path):
     assert [m.path for m in members] == ["raw/page/b-login.png"]
     assert ignored == []
     assert b.is_file()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "](" + " " * 100_000,
+        "![](" + " " * 100_000,
+        "](a" + " " * 100_000 + "b)",
+    ],
+    ids=["plain", "embed", "spaces-in-target"],
+)
+def test_hostile_runs_of_spaces_stay_fast(text):
+    start = time.perf_counter()
+    image_links(text)
+    assert time.perf_counter() - start < 2
+
+
+def test_titles_are_still_stripped_with_any_spacing():
+    text = (
+        "![](a.png \"one\")\n[l](b.png   'two')\n"
+        '[l](<c d.png> "three"  )\n![]( e.png\t"four")\n'
+    )
+    assert image_links(text) == ["a.png", "b.png", "c d.png", "e.png"]
 
 
 def test_odd_links_are_reported_and_never_raise(tmp_path):
@@ -262,3 +365,54 @@ def test_split_parts_honours_the_char_limit():
     parts = split_parts(body, set(), 2, 70)
     assert len(parts) == 2
     assert "".join(parts) == body
+
+
+def test_image_links_plain_links_to_images_count():
+    text = (
+        "- [Shot](a/one.png)\n- [t](two.JPG 'A title')\n- [r][ref]\n"
+        "[![thumb](thumb.png)](full.png)\n\n[ref]: three.png\n"
+    )
+    assert image_links(text) == [
+        "a/one.png",
+        "two.JPG",
+        "three.png",
+        "thumb.png",
+        "full.png",
+    ]
+
+
+def test_image_links_plain_links_to_anything_else_do_not_count():
+    text = (
+        "[page](other.md) [doc](d.pdf) [web](https://x.io/a.png) [abs](/a.png)\n"
+        "[up][pdf]\n[note] and a[0] and [](#anchor)\n\n[pdf]: d.pdf\n"
+    )
+    assert image_links(text) == []
+    assert local_links(text) == ([], [])
+
+
+def test_image_links_plain_links_in_code_do_not_count():
+    assert image_links("`[a](span.png)`\n```\n[b](fence.png)\n```\n") == []
+
+
+def test_local_links_embed_and_plain_link_of_one_image_are_one_link():
+    links, _ = local_links("![a](x%20y.png)\n\n- [x y.png](x%20y.png)\n")
+    assert [ln.path for ln in links] == ["x y.png"]
+
+
+def test_find_members_plain_links_missing_and_outside(tmp_path):
+    top = tmp_path / "top"
+    page = write(top / "p.md", "[a](a.png) [gone](gone.png) [out](../../secret.png)\n")
+    touch(top / "a.png")
+    touch(tmp_path / "secret.png")
+    found, ignored = find_members(page, top)
+    assert [link.path for link, _ in found] == ["a.png"]
+    assert ignored == ["missing: gone.png", "missing: ../../secret.png"]
+
+
+def test_split_parts_counts_plain_links():
+    body = "## Attachments\n\n" + "".join(f"- [{i}.png]({i}.png)\n" for i in range(25))
+    sent = {f"{i}.png" for i in range(25)}
+    parts = split_parts(body, sent, 20, 80_000)
+    assert len(parts) == 2
+    assert all(len(image_links(p)) <= 20 for p in parts)
+    assert sorted(lk for p in parts for lk in image_links(p)) == sorted(sent)
