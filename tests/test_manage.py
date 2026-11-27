@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from llm_wiki import gitops
+from llm_wiki import gitops, registry
 from llm_wiki.config import load_config
 from llm_wiki.errors import WikiError
 from llm_wiki.init import init_wiki
 from llm_wiki.lint import lint
-from llm_wiki.manage import describe_wiki
+from llm_wiki.manage import describe_wiki, rename_wiki
 
 TODAY = date(2026, 11, 27)
 
@@ -118,3 +118,75 @@ def test_describe_replaces_fallback_description(tmp_path):
     )
     assert res.warnings == []
     _clean_lint(root)
+
+
+def test_rename_rewrites_every_name_site(tmp_path):
+    ref = _wiki(tmp_path, description="")
+    root = ref.path
+    res = rename_wiki(ref, "beta", today=TODAY)
+    assert res.ref.name == "beta"
+    assert load_config(root).name == "beta"
+    agents = _lines(root, "AGENTS.md")
+    assert agents[0] == "# beta: wiki rules"
+    assert agents[2] == "The beta wiki."
+    overview = _lines(root, "wiki/overview.md")
+    assert "summary: Entry point of the beta wiki." in overview
+    assert "**TL;DR** The beta wiki." in overview
+    glossary = _lines(root, "wiki/glossary.md")
+    assert "summary: Terms used in the beta wiki." in glossary
+    assert "**TL;DR** Terms used across the beta wiki." in glossary
+    index = (root / "wiki/index.md").read_text(encoding="utf-8")
+    assert index.startswith("# beta\n\n\n\n")
+    assert registry.registered_path("beta") == root
+    assert registry.registered_path("acme") is None
+    assert _lines(root, "wiki/log.md")[-1] == "## [2026-11-27] rename | acme → beta"
+    assert _git(root, "log", "-1", "--format=%s").strip() == (
+        "chore: rename wiki acme to beta"
+    )
+    assert gitops.changed_paths(root) == []
+    assert res.warnings == []
+    _clean_lint(root)
+
+
+def test_rename_keeps_custom_description(tmp_path):
+    ref = _wiki(tmp_path, description="Ours.")
+    root = ref.path
+    res = rename_wiki(ref, "beta", today=TODAY)
+    assert _lines(root, "AGENTS.md")[2] == "Ours."
+    assert "**TL;DR** Ours." in _lines(root, "wiki/overview.md")
+    assert (
+        (root / "wiki/index.md")
+        .read_text(encoding="utf-8")
+        .startswith("# beta\n\nOurs.\n\n")
+    )
+    assert res.warnings == []
+
+
+def test_rename_moves_default(tmp_path):
+    ref = _wiki(tmp_path)
+    rename_wiki(ref, "beta", today=TODAY)
+    found = registry.resolve(None, tmp_path)
+    assert (found.name, found.path) == ("beta", ref.path)
+
+
+def test_rename_refuses_bad_taken_or_same(tmp_path):
+    ref = _wiki(tmp_path)
+    init_wiki(tmp_path / "other", name="other")
+    before = (ref.path / "wiki.toml").read_text(encoding="utf-8")
+    for bad in ("Bad Name", "other", "acme"):
+        with pytest.raises(WikiError):
+            rename_wiki(ref, bad, today=TODAY)
+    assert (ref.path / "wiki.toml").read_text(encoding="utf-8") == before
+    assert gitops.changed_paths(ref.path) == []
+
+
+def test_rename_env_wiki_skips_registry(tmp_path, monkeypatch):
+    root = _wiki(tmp_path).path
+    registry.registry_file().unlink()
+    monkeypatch.setenv("LLM_WIKI_PATH", str(root))
+    ref = registry.resolve("acme", tmp_path)
+    assert ref.origin == "env"
+    res = rename_wiki(ref, "beta", today=TODAY)
+    assert res.ref.origin == "env"
+    assert load_config(root).name == "beta"
+    assert not registry.registry_file().exists()

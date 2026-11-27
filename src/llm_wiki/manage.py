@@ -9,11 +9,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from llm_wiki import gitops
+from llm_wiki import gitops, registry
 from llm_wiki.config import WIKI_FILE, WikiConfig, dump_config, load_config
 from llm_wiki.errors import WikiError
 from llm_wiki.gate import LOG, append_log
 from llm_wiki.index import GENERATED_MARK
+from llm_wiki.init import NAME_RE, check_name_free
 from llm_wiki.registry import WikiRef
 
 AGENTS = "AGENTS.md"
@@ -144,5 +145,70 @@ def describe_wiki(ref: WikiRef, text: str, today: date | None = None) -> ChangeR
         touched,
         f"## [{day}] describe | {text}",
         f"chore: describe wiki {new.name}",
+        warnings,
+    )
+
+
+def _rewrite_name(
+    root: Path, old: WikiConfig, new: WikiConfig, warnings: list[str]
+) -> list[str]:
+    """The name sites, plus the description ones (the fallback holds the name)."""
+    o, n = old.name, new.name
+    sites = [
+        (AGENTS, f"# {o}: wiki rules", f"# {n}: wiki rules", "heading"),
+        (
+            OVERVIEW,
+            f"summary: Entry point of the {o} wiki.",
+            f"summary: Entry point of the {n} wiki.",
+            "summary",
+        ),
+        (
+            GLOSSARY,
+            f"summary: Terms used in the {o} wiki.",
+            f"summary: Terms used in the {n} wiki.",
+            "summary",
+        ),
+        (
+            GLOSSARY,
+            f"**TL;DR** Terms used across the {o} wiki.",
+            f"**TL;DR** Terms used across the {n} wiki.",
+            "TL;DR",
+        ),
+    ]
+    touched = [
+        rel
+        for rel, before, after, what in sites
+        if _replace_line(root, rel, before, after, what, warnings)
+    ]
+    touched += _rewrite_description(root, old, new, warnings)
+    return list(dict.fromkeys(touched))
+
+
+def rename_wiki(ref: WikiRef, new_name: str, today: date | None = None) -> ChangeResult:
+    """Rename the wiki; its folder keeps its name."""
+    root = ref.path
+    old = load_config(root)
+    if new_name == old.name:
+        raise WikiError(f"the wiki is already named '{new_name}'")
+    if not NAME_RE.fullmatch(new_name):
+        raise WikiError(
+            f"invalid wiki name '{new_name}': "
+            "use lowercase letters, digits and single hyphens"
+        )
+    check_name_free(new_name, root)
+    _require_clean(root)
+    new = old.model_copy(update={"name": new_name})
+    _save_config(root, new)
+    warnings: list[str] = []
+    touched = _rewrite_name(root, old, new, warnings)
+    if ref.origin == "registry":
+        registry.rename(ref.name, new_name)
+    day = (today or date.today()).isoformat()
+    return _finish(
+        root,
+        WikiRef(new_name, root, ref.origin),
+        touched,
+        f"## [{day}] rename | {old.name} → {new_name}",
+        f"chore: rename wiki {old.name} to {new_name}",
         warnings,
     )
