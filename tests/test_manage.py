@@ -75,7 +75,7 @@ def test_describe_leaves_edited_overview_and_warns(tmp_path):
 def test_describe_refuses_dirty_wiki(tmp_path):
     ref = _wiki(tmp_path)
     root = ref.path
-    (root / "inbox" / "x.md").write_text("x", encoding="utf-8")
+    (root / "wiki" / "open-questions.md").write_text("# Q\n", encoding="utf-8")
     before = (root / "wiki.toml").read_text(encoding="utf-8")
     with pytest.raises(WikiError, match="uncommitted changes"):
         describe_wiki(ref, "New text.", today=TODAY)
@@ -250,3 +250,82 @@ def test_move_refuses_env_wiki(tmp_path, monkeypatch):
     with pytest.raises(WikiError, match="LLM_WIKI_PATH"):
         move_wiki(ref, tmp_path / "elsewhere")
     assert (root / "wiki.toml").is_file()
+
+
+def test_describe_allows_pending_inbox_and_leaves_it_out(tmp_path):
+    ref = _wiki(tmp_path)
+    root = ref.path
+    (root / "inbox" / "x.md").write_text("x", encoding="utf-8")
+    describe_wiki(ref, "New text.", today=TODAY)
+    assert gitops.changed_paths(root) == ["inbox/x.md"]
+
+
+def test_describe_refuses_leftover_op_branch(tmp_path):
+    ref = _wiki(tmp_path)
+    _git(ref.path, "switch", "-qc", "wiki/ingest-x")
+    with pytest.raises(WikiError, match="wiki/ingest-x"):
+        describe_wiki(ref, "New text.", today=TODAY)
+    assert load_config(ref.path).description == "Old text."
+
+
+def test_describe_leaves_duplicated_line_and_warns(tmp_path):
+    ref = _wiki(tmp_path)
+    root = ref.path
+    agents = root / "AGENTS.md"
+    agents.write_text(agents.read_text(encoding="utf-8") + "\nOld text.\n")
+    _git(root, "commit", "-qam", "docs: repeat")
+    before = agents.read_text(encoding="utf-8")
+    res = describe_wiki(ref, "New text.", today=TODAY)
+    assert agents.read_text(encoding="utf-8") == before
+    assert [w for w in res.warnings if w.startswith("AGENTS.md")] != []
+
+
+def test_rename_takes_over_stale_entry(tmp_path):
+    import shutil
+
+    ref = _wiki(tmp_path)
+    gone = init_wiki(tmp_path / "gone", name="beta").ref.path
+    shutil.rmtree(gone)
+    res = rename_wiki(ref, "beta", today=TODAY)
+    assert registry.registered_path("beta") == ref.path
+    assert registry.registered_path("acme") is None
+    assert res.ref.name == "beta"
+
+
+def test_rename_to_its_registry_key(tmp_path):
+    ref = _wiki(tmp_path)
+    registry.rename("acme", "foo")
+    ref = registry.resolve("foo", tmp_path)
+    res = rename_wiki(ref, "foo", today=TODAY)
+    assert load_config(ref.path).name == "foo"
+    assert registry.registered_path("foo") == ref.path
+    assert res.ref.name == "foo"
+
+
+def test_rename_commit_failure_rolls_back(tmp_path, monkeypatch):
+    from llm_wiki.errors import GitError
+
+    ref = _wiki(tmp_path)
+    root = ref.path
+
+    def boom(*a, **k):
+        raise GitError("hook refused")
+
+    monkeypatch.setattr(gitops, "stage_commit", boom)
+    with pytest.raises(GitError):
+        rename_wiki(ref, "beta", today=TODAY)
+    assert load_config(root).name == "acme"
+    assert gitops.changed_paths(root) == []
+    assert registry.registered_path("acme") == root
+    assert registry.registered_path("beta") is None
+
+
+def test_move_unregistered_wiki_leaves_registry_alone(tmp_path):
+    ref = _wiki(tmp_path)
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(ref.path), str(clone))
+    cref = registry.resolve(str(clone), tmp_path)
+    assert cref.origin == "path"
+    moved = move_wiki(cref, tmp_path / "d")
+    assert moved.origin == "path"
+    assert registry.registered_path("acme") == ref.path

@@ -79,8 +79,11 @@ marked block into `<repo>/CLAUDE.md`.
 - Both also rewrite the text `wiki init` wrote in `AGENTS.md`,
   `wiki/overview.md`, `wiki/glossary.md` and the `wiki/index.md` header. Text
   that was edited since is left alone, with a warning.
-- Both need a wiki with no uncommitted changes. They add a log line and commit
-  the files they touched. A wiki inside another repo is left for you to commit.
+- Both follow the git rules of `wiki ingest`: no leftover `wiki/*` branch,
+  `main` in a wiki's own repo, and no uncommitted changes outside `inbox/` and
+  `raw/`. They add a log line and commit only the files they touched. A wiki
+  inside another repo is left for you to commit. If a step fails, the files go
+  back to how they were.
 - After a rename, run `wiki skill install --project DIR --pointer` in each
   project whose `CLAUDE.md` points at the old name.
 - `wiki move NEWPATH` moves a wiki that is its own git repo, with its `.git`.

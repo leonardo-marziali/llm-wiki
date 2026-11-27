@@ -13,7 +13,7 @@ from pathlib import Path
 from llm_wiki import gitops, registry
 from llm_wiki.config import WIKI_FILE, WikiConfig, dump_config, load_config
 from llm_wiki.errors import WikiError
-from llm_wiki.gate import LOG, append_log
+from llm_wiki.gate import LOG, append_log, preflight_git
 from llm_wiki.index import GENERATED_MARK
 from llm_wiki.init import NAME_RE, check_name_free
 from llm_wiki.registry import WikiRef
@@ -42,9 +42,11 @@ def _index_header(cfg: WikiConfig) -> str:
     return f"# {cfg.name}\n\n{cfg.description}\n\n"
 
 
-def _require_clean(root: Path) -> None:
-    if gitops.changed_paths(root):
-        raise WikiError(f"{root} has uncommitted changes: commit or discard them first")
+def _preflight(root: Path, op: str) -> None:
+    """The git rules of the other mutating commands: no leftover op branch, main
+    in an own repo, nothing staged, no dirt outside inbox/ and raw/.
+    """
+    preflight_git(root, op=op)
 
 
 def _replace_line(
@@ -125,6 +127,13 @@ def _finish(
     return ChangeResult(ref, warnings, committed=True)
 
 
+def _rollback(root: Path) -> None:
+    """Put every file these commands write back to HEAD (preflight left them
+    clean).
+    """
+    gitops.restore(root, [WIKI_FILE, AGENTS, OVERVIEW, GLOSSARY, INDEX, LOG])
+
+
 def describe_wiki(ref: WikiRef, text: str, today: date | None = None) -> ChangeResult:
     """Set the wiki's one-line description."""
     root = ref.path
@@ -134,20 +143,24 @@ def describe_wiki(ref: WikiRef, text: str, today: date | None = None) -> ChangeR
     old = load_config(root)
     if text == old.description:
         raise WikiError(f"wiki '{old.name}' already has this description")
-    _require_clean(root)
+    _preflight(root, "describe")
     new = old.model_copy(update={"description": text})
-    _save_config(root, new)
-    warnings: list[str] = []
-    touched = _rewrite_description(root, old, new, warnings)
     day = (today or date.today()).isoformat()
-    return _finish(
-        root,
-        ref,
-        touched,
-        f"## [{day}] describe | {text}",
-        f"chore: describe wiki {new.name}",
-        warnings,
-    )
+    warnings: list[str] = []
+    try:
+        _save_config(root, new)
+        touched = _rewrite_description(root, old, new, warnings)
+        return _finish(
+            root,
+            ref,
+            touched,
+            f"## [{day}] describe | {text}",
+            f"chore: describe wiki {new.name}",
+            warnings,
+        )
+    except BaseException:
+        _rollback(root)
+        raise
 
 
 def _rewrite_name(
@@ -197,22 +210,28 @@ def rename_wiki(ref: WikiRef, new_name: str, today: date | None = None) -> Chang
             "use lowercase letters, digits and single hyphens"
         )
     check_name_free(new_name, root)
-    _require_clean(root)
+    _preflight(root, "rename")
     new = old.model_copy(update={"name": new_name})
-    _save_config(root, new)
+    day = (today or date.today()).isoformat()
     warnings: list[str] = []
-    touched = _rewrite_name(root, old, new, warnings)
+    try:
+        _save_config(root, new)
+        touched = _rewrite_name(root, old, new, warnings)
+        res = _finish(
+            root,
+            WikiRef(new_name, root, ref.origin),
+            touched,
+            f"## [{day}] rename | {old.name} → {new_name}",
+            f"chore: rename wiki {old.name} to {new_name}",
+            warnings,
+        )
+    except BaseException:
+        _rollback(root)
+        raise
+    # last: check_name_free above already cleared what registry.rename refuses
     if ref.origin == "registry":
         registry.rename(ref.name, new_name)
-    day = (today or date.today()).isoformat()
-    return _finish(
-        root,
-        WikiRef(new_name, root, ref.origin),
-        touched,
-        f"## [{day}] rename | {old.name} → {new_name}",
-        f"chore: rename wiki {old.name} to {new_name}",
-        warnings,
-    )
+    return res
 
 
 def _check_move(ref: WikiRef, root: Path, target: Path) -> None:
@@ -236,7 +255,9 @@ def _check_move(ref: WikiRef, root: Path, target: Path) -> None:
 
 
 def move_wiki(ref: WikiRef, new_path: Path) -> WikiRef:
-    """Move a wiki that is its own repo (with its .git) to ``new_path``."""
+    """Move a wiki that is its own repo (with its .git) to ``new_path``; a
+    registered wiki's entry follows it.
+    """
     root = ref.path.resolve()
     target = Path(new_path).resolve()
     _check_move(ref, root, target)
@@ -244,5 +265,6 @@ def move_wiki(ref: WikiRef, new_path: Path) -> WikiRef:
         target.rmdir()  # empty: checked above
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(root, target)
-    registry.set_path(ref.name, target)
-    return WikiRef(ref.name, target, "registry")
+    if ref.origin == "registry":  # an unregistered wiki stays unregistered
+        registry.set_path(ref.name, target)
+    return WikiRef(ref.name, target, ref.origin)
