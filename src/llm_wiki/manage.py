@@ -5,6 +5,7 @@ Rename and describe also rewrite the text `init` wrote from those values, but on
 where it is still verbatim; anything edited since is left alone with a warning.
 """
 
+import shutil
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -212,3 +213,36 @@ def rename_wiki(ref: WikiRef, new_name: str, today: date | None = None) -> Chang
         f"chore: rename wiki {old.name} to {new_name}",
         warnings,
     )
+
+
+def _check_move(ref: WikiRef, root: Path, target: Path) -> None:
+    if ref.origin == "env":
+        raise WikiError(
+            f"wiki '{ref.name}' comes from LLM_WIKI_PATH: "
+            "move it yourself and update LLM_WIKI_PATH"
+        )
+    host = gitops.enclosing_repo(root)
+    if host is not None and host != root:
+        raise WikiError(
+            f"wiki '{ref.name}' is inside the git repository {host}: "
+            f"move it there with `git mv`, then run `wiki init <new path>`"
+        )
+    if target == root or target.is_relative_to(root):
+        raise WikiError(f"cannot move wiki '{ref.name}' into itself: {target}")
+    if gitops.inside_git_dir(target):
+        raise WikiError(f"{target} is inside a .git directory")
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        raise WikiError(f"{target} is not empty")
+
+
+def move_wiki(ref: WikiRef, new_path: Path) -> WikiRef:
+    """Move a wiki that is its own repo (with its .git) to ``new_path``."""
+    root = ref.path.resolve()
+    target = Path(new_path).resolve()
+    _check_move(ref, root, target)
+    if target.exists():
+        target.rmdir()  # empty: checked above
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(root, target)
+    registry.set_path(ref.name, target)
+    return WikiRef(ref.name, target, "registry")

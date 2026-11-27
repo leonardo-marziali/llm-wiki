@@ -9,7 +9,7 @@ from llm_wiki.config import load_config
 from llm_wiki.errors import WikiError
 from llm_wiki.init import init_wiki
 from llm_wiki.lint import lint
-from llm_wiki.manage import describe_wiki, rename_wiki
+from llm_wiki.manage import describe_wiki, move_wiki, rename_wiki
 
 TODAY = date(2026, 11, 27)
 
@@ -190,3 +190,63 @@ def test_rename_env_wiki_skips_registry(tmp_path, monkeypatch):
     assert res.ref.origin == "env"
     assert load_config(root).name == "beta"
     assert not registry.registry_file().exists()
+
+
+def test_move_to_missing_path(tmp_path):
+    ref = _wiki(tmp_path)
+    target = tmp_path / "a" / "b"
+    moved = move_wiki(ref, target)
+    assert moved == registry.WikiRef("acme", target.resolve(), "registry")
+    assert not ref.path.exists()
+    assert (target / "wiki.toml").is_file()
+    assert registry.registered_path("acme") == target.resolve()
+    assert _git(target, "status", "--porcelain") == ""
+    assert registry.resolve("acme", tmp_path).path == target.resolve()
+
+
+def test_move_into_empty_dir(tmp_path):
+    ref = _wiki(tmp_path)
+    target = tmp_path / "empty"
+    target.mkdir()
+    move_wiki(ref, target)
+    assert (target / "wiki.toml").is_file()
+    assert registry.registered_path("acme") == target.resolve()
+
+
+def test_move_refuses_non_empty_target(tmp_path):
+    ref = _wiki(tmp_path)
+    target = tmp_path / "full"
+    target.mkdir()
+    (target / "x").write_text("x", encoding="utf-8")
+    with pytest.raises(WikiError, match="not empty"):
+        move_wiki(ref, target)
+    assert (ref.path / "wiki.toml").is_file()
+
+
+@pytest.mark.parametrize("sub", ["sub", "sub/deeper", "."])
+def test_move_refuses_inside_itself_or_same(tmp_path, sub):
+    ref = _wiki(tmp_path)
+    with pytest.raises(WikiError):
+        move_wiki(ref, ref.path / sub)
+    assert (ref.path / "wiki.toml").is_file()
+    assert not (ref.path / "sub").exists()
+
+
+def test_move_refuses_host_repo_wiki(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    _git(host, "init", "-q")
+    ref = init_wiki(host / "w", name="acme").ref
+    with pytest.raises(WikiError, match=r"git mv.*wiki init"):
+        move_wiki(ref, tmp_path / "elsewhere")
+    assert (ref.path / "wiki.toml").is_file()
+
+
+def test_move_refuses_env_wiki(tmp_path, monkeypatch):
+    root = _wiki(tmp_path).path
+    registry.registry_file().unlink()
+    monkeypatch.setenv("LLM_WIKI_PATH", str(root))
+    ref = registry.resolve("acme", tmp_path)
+    with pytest.raises(WikiError, match="LLM_WIKI_PATH"):
+        move_wiki(ref, tmp_path / "elsewhere")
+    assert (root / "wiki.toml").is_file()
