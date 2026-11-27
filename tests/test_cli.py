@@ -88,3 +88,72 @@ def test_cli_ingest_yes_exit_codes(tmp_path, make_wiki, fake_claude):
     assert "rejected" in r.stdout
     assert (root / "inbox" / "new.md").is_file()
     assert gitops.current_branch(root) == "main"
+
+
+def _init(tmp_path, name="acme"):
+    from llm_wiki.init import init_wiki
+
+    return init_wiki(tmp_path / name, name=name, description="Old.").ref
+
+
+def test_describe_command(tmp_path):
+    _init(tmp_path)
+    r = CliRunner().invoke(app, ["describe", "New text.", "--wiki", "acme"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.strip() == "described wiki acme"
+
+
+def test_rename_command_prints_pointer_hint(tmp_path):
+    _init(tmp_path)
+    r = CliRunner().invoke(app, ["rename", "beta", "--wiki", "acme"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.splitlines() == [
+        "renamed wiki acme to beta",
+        "update project pointers with: wiki skill install --project DIR --pointer",
+    ]
+
+
+def test_rename_command_bad_name_exits_2(tmp_path):
+    _init(tmp_path)
+    r = CliRunner().invoke(app, ["rename", "Bad Name", "--wiki", "acme"])
+    assert r.exit_code == 2
+    assert r.stderr.startswith("error: invalid wiki name")
+
+
+def test_move_command(tmp_path):
+    _init(tmp_path)
+    target = tmp_path / "moved"
+    r = CliRunner().invoke(app, ["move", str(target), "--wiki", "acme"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.strip() == f"moved wiki acme to {target.resolve()}"
+
+
+def test_move_command_non_empty_target_exits_2(tmp_path):
+    _init(tmp_path)
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "x").write_text("x")
+    r = CliRunner().invoke(app, ["move", str(tmp_path / "full"), "--wiki", "acme"])
+    assert r.exit_code == 2
+    assert "is not empty" in r.stderr
+
+
+def test_describe_command_warns_on_stderr_and_host_repo(tmp_path):
+    import subprocess
+
+    from llm_wiki.init import init_wiki
+
+    host = tmp_path / "host"
+    host.mkdir()
+    subprocess.run(["git", "-C", str(host), "init", "-q"], check=True)
+    root = init_wiki(host / "w", name="acme", description="Old.").ref.path
+    ov = root / "wiki" / "overview.md"
+    ov.write_text(ov.read_text().replace("**TL;DR** Old.", "**TL;DR** Mine."))
+    subprocess.run(["git", "-C", str(host), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(host), "commit", "-qm", "chore: wiki"], check=True)
+    r = CliRunner().invoke(app, ["describe", "New.", "--wiki", "acme"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.strip() == (
+        "described wiki acme (not committed — review and commit it in "
+        f"{host.resolve()})"
+    )
+    assert r.stderr.strip() == "warning: wiki/overview.md: TL;DR was edited; left as is"

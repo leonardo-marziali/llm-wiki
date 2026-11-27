@@ -156,3 +156,55 @@ def test_registered_wiki_by_cwd_returns_registry_origin(tmp_path):
 
 def test_env_var_unset_by_fixture():
     assert "LLM_WIKI_PATH" not in os.environ
+
+
+def _default() -> str | None:
+    from llm_wiki.registry import _read
+
+    return _read()[0]
+
+
+def test_rename_moves_entry_and_default(tmp_path):
+    from llm_wiki.registry import registered_path, rename
+
+    a = make_wiki(tmp_path / "a", "a")
+    b = make_wiki(tmp_path / "b", "b")
+    register("a", a)
+    register("b", b)
+    rename("a", "c")
+    assert registered_path("c") == a.resolve()
+    assert registered_path("a") is None
+    assert registered_path("b") == b.resolve()
+    assert _default() == "c"
+
+
+def test_rename_keeps_other_default(tmp_path):
+    from llm_wiki.registry import rename
+
+    register("a", make_wiki(tmp_path / "a", "a"))
+    register("b", make_wiki(tmp_path / "b", "b"))
+    rename("b", "c")
+    assert _default() == "a"
+
+
+def test_rename_unknown_or_taken_raises(tmp_path):
+    from llm_wiki.errors import WikiError
+    from llm_wiki.registry import rename
+
+    register("a", make_wiki(tmp_path / "a", "a"))
+    register("b", make_wiki(tmp_path / "b", "b"))
+    with pytest.raises(WikiError, match="not registered"):
+        rename("x", "y")
+    with pytest.raises(WikiError, match="already registered"):
+        rename("a", "b")
+
+
+def test_set_path_repoints(tmp_path):
+    from llm_wiki.registry import registered_path, set_path
+
+    register("a", make_wiki(tmp_path / "a", "a"))
+    register("b", make_wiki(tmp_path / "b", "b"))
+    p2 = tmp_path / "x" / ".." / "b2"
+    set_path("b", p2)
+    assert registered_path("b") == p2.resolve()
+    assert _default() == "a"

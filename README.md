@@ -65,8 +65,33 @@ marked block into `<repo>/CLAUDE.md`.
 | `wiki lint --deep`   | Also a sampled LLM pass; writes `.wiki/reports/lint-<date>.md`   |
 | `wiki lint --fix`    | Repair the findings on a branch, then one gate (`--yes`)         |
 | `wiki consolidate`   | Split, merge, promote and archive pages, then one gate (`--yes`) |
+| `wiki describe`      | Set the one-line description and commit                          |
+| `wiki rename`        | Rename the wiki and its registry entry, and commit               |
+| `wiki move`          | Move a wiki that is its own repo and update the registry         |
 | `wiki skill install` | Install the read-only `wiki-lookup` skill                        |
 | `wiki doctor`        | Check `claude`, its flags, login, isolation and read denial      |
+
+## Renaming, moving and describing a wiki
+
+- `wiki describe "TEXT"` sets the description in `wiki.toml`.
+- `wiki rename NEWNAME` sets the name in `wiki.toml` and the registry. The
+  default wiki follows the rename. The folder keeps its name.
+- Both also rewrite the text `wiki init` wrote in `AGENTS.md`,
+  `wiki/overview.md`, `wiki/glossary.md` and the `wiki/index.md` header. Text
+  that was edited since is left alone, with a warning.
+- Both follow the git rules of `wiki ingest`: no leftover `wiki/*` branch,
+  `main` in a wiki's own repo, and no uncommitted changes outside `inbox/` and
+  `raw/`. They add a log line and commit only the files they touched. A wiki
+  inside another repo is left for you to commit. If a step fails, the files go
+  back to how they were.
+- After a rename, run `wiki skill install --project DIR --pointer` in each
+  project whose `CLAUDE.md` points at the old name.
+- `wiki move NEWPATH` moves a wiki that is its own git repo, with its `.git`.
+  `NEWPATH` must be missing or an empty directory.
+- `wiki move` refuses:
+  - a wiki inside another repo: use `git mv` there, then `wiki init NEWPATH`;
+  - a wiki found through `LLM_WIKI_PATH`: move it and update the variable.
+- A wiki's profile cannot be changed after `wiki init`.
 
 ## Caps and consolidate
 

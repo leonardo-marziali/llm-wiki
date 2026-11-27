@@ -128,6 +128,20 @@ The daily loop is `wiki ingest`; everything else is occasional.
 | `wiki skill install [--user\|--project DIR] [--pointer]`         | no                    | Installs the read-only `wiki-lookup` skill, by default to the user-level skills dir. `--pointer` also writes a marked block of ≤ 15 lines into `DIR/CLAUDE.md`. Idempotent; prints the installed version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `wiki doctor`                                                    | tiny probe            | Checks the `claude` version and flags, login, model ids, settings isolation (no user memory leaking in), and the optional tools (Docling, gitleaks, ripgrep).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
+- **Wiki admin (no LLM):**
+  - `wiki move NEWPATH [--wiki W]` moves a wiki that is its own git repo, with
+    its `.git`, to `NEWPATH`. The target must be missing or an empty dir. It
+    updates the registry, with no log line and no commit. It refuses a wiki
+    inside a host repo (use `git mv` there, then `wiki init NEWPATH`) and a wiki
+    found through `LLM_WIKI_PATH`.
+  - `wiki rename NEWNAME [--wiki W]` renames the wiki in `wiki.toml` and the
+    registry; the default follows. It rewrites the old name in `AGENTS.md`,
+    `overview.md`, `glossary.md` and the `index.md` header only where the text
+    is still what `init` wrote, and warns elsewhere. It logs, and commits the
+    touched files when the wiki is its own repo. The folder keeps its name.
+  - `wiki describe TEXT [--wiki W]` sets the one-line description the same way:
+    `wiki.toml`, then the init-written text in `AGENTS.md`, `overview.md` and
+    the `index.md` header. It logs and commits like `rename`.
 - **Wiki resolution order:** `--wiki` (a name or a path) → the current directory
   is inside a wiki → the registry default.
 - **Registry:**
@@ -575,6 +589,12 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
    _Done 2026-11-05: 949 offline tests. In a scratch wiki with the fake claude,
    a real export of 77 pages and 203 images counted 82 sources, down from 191.
    The real ingest is still open._
+
+9. **Wiki admin:** `wiki move`, `wiki rename` and `wiki describe` change a
+   wiki's path, name and description without hand edits. Changing the profile is
+   out of scope: it would strand pages in dropped sections. _Done 2026-11-27:
+   1004 offline tests. No real run: the commands make no LLM call, so the cost
+   was $0._
 
 ## 12. Verification
 

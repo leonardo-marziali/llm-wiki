@@ -473,6 +473,58 @@ def consolidate(
         raise typer.Exit(report.exit_code)
 
 
+def _echo_change(msg: str, res) -> None:
+    if res.host_repo is not None:
+        msg += f" (not committed — review and commit it in {res.host_repo})"
+    typer.echo(msg)
+    for w in res.warnings:
+        typer.echo(f"warning: {w}", err=True)
+
+
+@app.command()
+def describe(
+    text: str = typer.Argument(..., help="One line: what belongs in this wiki."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+) -> None:
+    """Set the wiki's description, where init wrote it, and commit."""
+    from llm_wiki import manage, registry
+
+    res = manage.describe_wiki(registry.resolve(wiki, Path.cwd()), text)
+    _echo_change(f"described wiki {res.ref.name}", res)
+
+
+@app.command()
+def rename(
+    new_name: str = typer.Argument(..., help="The new wiki name (kebab-case)."),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+) -> None:
+    """Rename the wiki, where init wrote its name, and commit. The folder keeps
+    its name.
+    """
+    from llm_wiki import manage, registry
+
+    ref = registry.resolve(wiki, Path.cwd())
+    res = manage.rename_wiki(ref, new_name)
+    _echo_change(f"renamed wiki {ref.name} to {res.ref.name}", res)
+    typer.echo(
+        "update project pointers with: wiki skill install --project DIR --pointer"
+    )
+
+
+@app.command()
+def move(
+    new_path: Path = typer.Argument(
+        ..., help="The new wiki directory: missing or empty."
+    ),
+    wiki: str | None = typer.Option(None, "--wiki", help=_WIKI_HELP),
+) -> None:
+    """Move a wiki that is its own git repo to NEW_PATH and update the registry."""
+    from llm_wiki import manage, registry
+
+    ref = manage.move_wiki(registry.resolve(wiki, Path.cwd()), new_path)
+    typer.echo(f"moved wiki {ref.name} to {ref.path}")
+
+
 skill_app = typer.Typer(no_args_is_help=True, help="Manage the wiki-lookup skill.")
 app.add_typer(skill_app, name="skill")
 

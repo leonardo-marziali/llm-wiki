@@ -68,3 +68,38 @@ def test_e2e_m1(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     assert "sources 1/100" in res.output
     assert "pages 3/500" in res.output
+
+
+def test_e2e_m9_describe_rename_move(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["init", "demo"]).exit_code == 0
+    res = runner.invoke(app, ["describe", "Team notes.", "--wiki", "demo"])
+    assert res.exit_code == 0, res.output
+    res = runner.invoke(app, ["rename", "notes", "--wiki", "demo"])
+    assert res.exit_code == 0, res.output
+    res = runner.invoke(app, ["move", "moved/notes", "--wiki", "notes"])
+    assert res.exit_code == 0, res.output
+    root = tmp_path / "moved" / "notes"
+    assert not (tmp_path / "demo").exists()
+
+    res = runner.invoke(app, ["status", "--wiki", "notes"])
+    assert res.exit_code == 0, res.output
+    assert "Team notes." in res.output
+    res = runner.invoke(app, ["lint", "--wiki", "notes"])
+    assert res.exit_code == 0, res.output
+    cfg = load_config(root)
+    assert (cfg.name, cfg.description) == ("notes", "Team notes.")
+    log = subprocess.run(
+        ["git", "-C", str(root), "log", "--format=%s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert log[:2] == ["chore: rename wiki demo to notes", "chore: describe wiki demo"]
+    assert (
+        (root / "AGENTS.md")
+        .read_text(encoding="utf-8")
+        .startswith("# notes: wiki rules\n\nTeam notes.\n")
+    )

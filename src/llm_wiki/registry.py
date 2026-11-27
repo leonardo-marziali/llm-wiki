@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from llm_wiki.config import WIKI_FILE, home_dir, load_config
-from llm_wiki.errors import ConfigError, WikiNotFound
+from llm_wiki.errors import ConfigError, WikiError, WikiNotFound
 
 NOT_FOUND = "no wiki found: pass --wiki NAME|PATH or run `wiki init <path>`"
 
@@ -58,6 +58,28 @@ def register(name: str, path: Path, make_default: bool = False) -> None:
     if make_default or default is None:
         default = name
     _write(default, wikis)
+
+
+def set_path(name: str, path: Path) -> None:
+    """Register ``name`` at ``path``, or point it there; the default is kept."""
+    register(name, path)
+
+
+def rename(old: str, new: str) -> None:
+    """Move the entry ``old`` to ``new``; a default of ``old`` follows it.
+
+    A stale ``new`` entry (no wiki at its path) is taken over, as `wiki init` does.
+    """
+    default, wikis = _read()
+    if old not in wikis:
+        raise WikiError(f"wiki '{old}' is not registered")
+    if old == new:
+        return
+    taken = wikis.get(new)
+    if taken is not None and (Path(taken) / WIKI_FILE).is_file():
+        raise WikiError(f"wiki name '{new}' is already registered at {taken}")
+    wikis[new] = wikis.pop(old)  # a stale entry for ``new`` is taken over
+    _write(new if default == old else default, wikis)
 
 
 def registered_path(name: str) -> Path | None:

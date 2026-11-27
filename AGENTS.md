@@ -15,6 +15,7 @@ manual is [README.md](README.md).
     `session.py`, `gate.py`: the ingest flow.
   - `maint.py`, `maint_job.py`, `maint_run.py`, `deep.py`, `archive.py`:
     `lint --fix`, `lint --deep` and `consolidate`.
+  - `manage.py`: `describe`, `rename` and `move`.
   - `prompts/*.md`: the system prompts of the LLM calls.
   - `templates/`: what `wiki init` and `wiki skill install` write.
 - `tests/`: offline pytest suite. `tests/fake_claude/claude` is a scripted
