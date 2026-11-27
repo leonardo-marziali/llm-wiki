@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-11-27)
+
+### Bug Fixes
+
+- Make wiki rename and describe safe to fail and move keep the registry honest
+  ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+### Documentation
+
+- Plan wiki move, rename and describe (M9)
+  ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+- Record the M9 test count after the review fixes
+  ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+### Features
+
+- Add manage.describe_wiki ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+- Add manage.move_wiki ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+- Add manage.rename_wiki ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+- Add wiki move, rename and describe commands
+  ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+- Let the registry rename and re-point a wiki
+  ([#13](https://github.com/leonardo-marziali/llm-wiki/pull/13),
+  [`4bab06e`](https://github.com/leonardo-marziali/llm-wiki/commit/4bab06e15ad03df4f912cdd96fdb087ce6d909ab))
+
+
 ## v0.5.2 (2026-11-05)
 
 ### Bug Fixes
