@@ -184,7 +184,7 @@ def _clean(root: Path, created_top: Path | None, keep_git: bool) -> None:
             child.unlink(missing_ok=True)
 
 
-def _check_name_free(name: str, root: Path) -> None:
+def check_name_free(name: str, root: Path) -> None:
     """Refuse a name another live wiki is registered under (a stale entry may be taken
     over).
     """
@@ -203,7 +203,7 @@ def _reregister(root: Path, name: str | None) -> InitResult:
             f"{root} is already the wiki '{cfg.name}'; "
             f"drop --name or pass --name {cfg.name}"
         )
-    _check_name_free(cfg.name, root)
+    check_name_free(cfg.name, root)
     register(cfg.name, root)
     return InitResult(WikiRef(cfg.name, root, "registry"), created=False)
 
@@ -284,7 +284,7 @@ def init_wiki(
     if root.exists() and not empty_clone and (not root.is_dir() or any(root.iterdir())):
         raise WikiError(f"{root} is not empty and not a wiki")
     name = _new_name(root, name)
-    _check_name_free(name, root)
+    check_name_free(name, root)
     cfg = WikiConfig(
         name=name,
         description=" ".join(description.split()),
