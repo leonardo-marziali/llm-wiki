@@ -592,7 +592,9 @@ docs/superpowers/specs/2026-10-26-llm-wiki-design.md   (this design, committed)
 
 9. **Wiki admin:** `wiki move`, `wiki rename` and `wiki describe` change a
    wiki's path, name and description without hand edits. Changing the profile is
-   out of scope: it would strand pages in dropped sections.
+   out of scope: it would strand pages in dropped sections. _Done 2026-11-27:
+   997 offline tests. No real run: the commands make no LLM call, so the cost
+   was $0._
 
 ## 12. Verification
 
